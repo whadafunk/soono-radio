@@ -2,10 +2,9 @@ FROM alpine:latest
 
 RUN apk add --no-cache icecast
 
-# Icecast package creates icecast user automatically
-# Just ensure log directory is writable
-RUN mkdir -p /var/log/icecast && \
-    chown -R icecast:icecast /var/log/icecast
+# Create both standard log directories and ensure they're writable by icecast
+RUN mkdir -p /var/log/icecast /usr/local/icecast/logs && \
+    chown -R icecast:icecast /var/log/icecast /usr/local/icecast/logs
 
 USER icecast
 

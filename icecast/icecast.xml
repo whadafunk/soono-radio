@@ -27,6 +27,6 @@
   </mount>
 
   <loglevel>info</loglevel>
-  <accesslog>/var/log/icecast/access.log</accesslog>
-  <errorlog>/var/log/icecast/error.log</errorlog>
+  <accesslog>/usr/local/icecast/logs/access.log</accesslog>
+  <errorlog>/usr/local/icecast/logs/error.log</errorlog>
 </icecast>
