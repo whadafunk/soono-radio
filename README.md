@@ -6,7 +6,7 @@ A modern, containerized radio automation and streaming server with a responsive 
 
 - **Frontend**: React + TypeScript, Vite, Tailwind CSS, React Router
 - **Backend**: Node.js + TypeScript, Fastify, Zod
-- **Infrastructure**: Docker Compose
+- **Package Manager**: pnpm (monorepo with workspaces)
 - **Streaming**: Icecast, LiquidSoap (coming soon)
 
 ## Getting Started
@@ -14,35 +14,31 @@ A modern, containerized radio automation and streaming server with a responsive 
 ### Prerequisites
 
 - Node.js 20+
-- pnpm (or npm)
-- Docker & Docker Compose
+- pnpm (`npm install -g pnpm`)
+- Docker (for running Icecast)
 
 ### Development
 
-Install dependencies:
+**Terminal 1 — Start Icecast:**
 ```bash
-pnpm install
+./start-icecast.sh
 ```
 
-Start all services (API, web dev server, Icecast):
+**Terminal 2 — Start API + Web (both with hot-reload):**
 ```bash
-docker compose up -d
+pnpm install  # one time only
 pnpm dev
 ```
 
-The app will be available at `http://localhost:5173` and the API at `http://localhost:3000`.
+The app will be available at `http://localhost:5173` (with instant Vite hot-reload)  
+API at `http://localhost:3000`  
+Icecast at `http://localhost:8000`
 
 ### Building for Production
 
 ```bash
-docker compose build
-docker compose up -d
-```
-
-Or with Docker only:
-```bash
 pnpm build
-docker compose -f docker-compose.yml up --build
+# Creates dist/ in both apps/web and apps/api, ready to deploy
 ```
 
 ## Features
@@ -73,7 +69,7 @@ radio/
 ├── packages/
 │   └── shared/   # Zod schemas (shared types)
 ├── icecast/      # Icecast config
-└── docker-compose.yml
+└── start-icecast.sh  # Start Icecast container for dev
 ```
 
 Shared Zod schemas (`packages/shared`) ensure type safety between frontend and backend.

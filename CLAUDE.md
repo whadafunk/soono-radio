@@ -5,26 +5,24 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Quick Start for Development
 
 ```bash
-# Install dependencies
+# Install dependencies (one time)
 pnpm install
 
-# Start everything (API, Icecast, Web dev server)
-docker compose up -d
+# Terminal 1: Start Icecast (streaming server)
+./start-icecast.sh
+
+# Terminal 2: Start API + Web dev servers (both together)
 pnpm dev
 
-# In another terminal, check TypeScript types
+# Terminal 3 (optional): Check TypeScript for errors
 pnpm type-check
-
-# Build all packages
-pnpm build
-
-# Stop services
-docker compose down
 ```
 
-**Web**: http://localhost:5173  
-**API**: http://localhost:3000  
+**Web dev server**: http://localhost:5173 (hot-reload enabled)  
+**API server**: http://localhost:3000  
 **Icecast**: http://localhost:8000  
+
+That's it! The frontend and backend both auto-reload on file changes.
 
 **First task?** Use `/plan` for non-trivial changes. Refer to "Development Workflow & SDLC" below.
 
@@ -195,11 +193,11 @@ Start with implementing LiquidSoap settings control panel, then expand to player
 - Use `useQuery` for reads with automatic caching and refetch strategies
 - No N+1 queries; batch requests when possible
 
-**Docker & Containers**
-- Check `docker compose logs api` and `docker compose logs icecast` for errors
-- Mount volumes properly so config changes persist
-- Use health checks to detect when services are ready
-- Keep container images lean; multi-stage builds for production
+**Icecast Container**
+- Start with `./start-icecast.sh` — runs the official Icecast image with your config mounted
+- Check logs with `docker logs radio-icecast` for errors
+- Volume mount ensures XML config persists and API can read/write it from localhost
+- Run `docker stop radio-icecast` to shut it down
 
 ### Documentation & Knowledge
 
