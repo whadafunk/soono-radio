@@ -7,7 +7,7 @@
 set -e
 
 echo "Building Icecast image..."
-docker build -t radio-icecast:latest icecast/
+docker buildx build -t radio-icecast:latest --load icecast/
 
 echo "Starting Icecast container..."
 docker run \
