@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+* {
+  @apply box-border;
+}
+
+html, body, #root {
+  @apply h-full;
+}
+
+body {
+  @apply bg-zinc-950 text-white font-sans;
+}

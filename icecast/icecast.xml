@@ -1,0 +1,32 @@
+<?xml version="1.0"?>
+<icecast>
+  <server>
+    <location>Studio A</location>
+    <admin>admin@localhost</admin>
+    <hostname>localhost</hostname>
+  </server>
+
+  <port>8000</port>
+  <bind_address>0.0.0.0</bind_address>
+
+  <source_password>hackme</source_password>
+  <relay_password>hackme</relay_password>
+  <admin_user>admin</admin_user>
+  <admin_password>hackme</admin_password>
+
+  <limits>
+    <sources>10</sources>
+    <clients>500</clients>
+    <queue_size>524288</queue_size>
+    <burst_size>65536</burst_size>
+  </limits>
+
+  <mount>
+    <name>/stream</name>
+    <max_listeners>-1</max_listeners>
+  </mount>
+
+  <loglevel>info</loglevel>
+  <accesslog>/var/log/icecast/access.log</accesslog>
+  <errorlog>/var/log/icecast/error.log</errorlog>
+</icecast>
