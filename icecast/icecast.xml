@@ -1,18 +1,18 @@
 <?xml version="1.0"?>
 <icecast>
   <server>
+    <hostname>radio.local</hostname>
     <location>Local Studio</location>
     <admin>admin@radio.local</admin>
-    <hostname>radio.local</hostname>
   </server>
 
   <port>8000</port>
   <bind_address>0.0.0.0</bind_address>
 
-  <source_password>hackme</source_password>
-  <relay_password>hackme</relay_password>
   <admin_user>admin</admin_user>
   <admin_password>hackme</admin_password>
+
+  <relay_password>hackme</relay_password>
 
   <limits>
     <sources>10</sources>
@@ -24,6 +24,7 @@
   <mount>
     <name>/stream</name>
     <max_listeners>-1</max_listeners>
+    <source_password>hackme</source_password>
   </mount>
 
   <loglevel>info</loglevel>

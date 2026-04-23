@@ -1,20 +1,31 @@
 import { z } from 'zod';
 
+export const MountPointSchema = z.object({
+  name: z.string().min(1),
+  max_listeners: z.number().int().min(-1).default(-1),
+  source_password: z.string().min(1),
+  fallback_mount: z.string().optional(),
+});
+
+export type MountPoint = z.infer<typeof MountPointSchema>;
+
 export const IcecastConfigSchema = z.object({
   server: z.object({
+    hostname: z.string().min(1),
     location: z.string().default(''),
-    admin: z.string().email().default('admin@localhost'),
-    hostname: z.string().default('localhost'),
+    admin: z.string().email(),
   }),
   network: z.object({
-    port: z.number().int().min(1).max(65535).default(8000),
+    port: z.number().int().min(1).max(65535),
     bind_address: z.string().default('0.0.0.0'),
   }),
   authentication: z.object({
-    source_password: z.string().min(1),
-    relay_password: z.string().min(1),
-    admin_user: z.string().default('admin'),
+    admin_user: z.string().min(1),
     admin_password: z.string().min(1),
+  }),
+  relay: z.object({
+    relay_password: z.string().min(1),
+    relay_servers: z.string().optional(),
   }),
   limits: z.object({
     max_sources: z.number().int().min(1).default(10),
@@ -22,15 +33,12 @@ export const IcecastConfigSchema = z.object({
     max_queue_size: z.number().int().default(524288),
     burst_size: z.number().int().default(65536),
   }),
-  mount_default: z.object({
-    name: z.string().default('/stream'),
-    max_listeners: z.number().int().min(-1).default(-1),
-    fallback_mount: z.string().optional(),
-  }),
+  mounts: z.array(MountPointSchema).min(1),
   logging: z.object({
-    loglevel: z.enum(['debug', 'info', 'warn', 'error']).default('info'),
-    access_log: z.string().default('/var/log/icecast/access.log'),
-    error_log: z.string().default('/var/log/icecast/error.log'),
+    loglevel: z.enum(['debug', 'info', 'warn', 'error']),
+    logsize: z.number().int().optional(),
+    access_log: z.string(),
+    error_log: z.string(),
   }),
 });
 
