@@ -2,13 +2,10 @@ FROM alpine:latest
 
 RUN apk add --no-cache icecast
 
-# Create icecast user to avoid running as root
-RUN addgroup -g 1000 icecast && \
-    adduser -D -u 1000 -G icecast icecast && \
-    mkdir -p /var/log/icecast && \
+# Icecast package creates icecast user automatically
+# Just ensure log directory is writable
+RUN mkdir -p /var/log/icecast && \
     chown -R icecast:icecast /var/log/icecast
-
-USER icecast
 
 EXPOSE 8000
 
