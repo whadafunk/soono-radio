@@ -1,8 +1,10 @@
 import { parseStringPromise, Builder } from 'xml2js';
 import { readFile, writeFile } from 'fs/promises';
+import { join } from 'path';
 import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
 
-const CONFIG_PATH = '/etc/icecast.xml';
+// Use environment variable for production (Docker), or relative path from apps/api to root
+const CONFIG_PATH = process.env.ICECAST_CONFIG || join(process.cwd(), '..', '..', 'icecast', 'icecast.xml');
 
 export async function readIcecastConfig(): Promise<IcecastConfig> {
   const xml = await readFile(CONFIG_PATH, 'utf-8');

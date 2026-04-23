@@ -13,6 +13,7 @@
     "type-check": "pnpm -r run type-check"
   },
   "devDependencies": {
+    "@playwright/test": "^1.59.1",
     "@types/xml2js": "^0.4.14"
   }
 }
