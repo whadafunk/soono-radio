@@ -7,6 +7,8 @@ RUN apk add --no-cache icecast
 RUN mkdir -p /var/log/icecast && \
     chown -R icecast:icecast /var/log/icecast
 
+USER icecast
+
 EXPOSE 8000
 
 CMD ["icecast", "-c", "/etc/icecast.xml"]

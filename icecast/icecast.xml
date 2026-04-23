@@ -1,9 +1,9 @@
 <?xml version="1.0"?>
 <icecast>
   <server>
-    <location>Studio A</location>
-    <admin>admin@localhost</admin>
-    <hostname>localhost</hostname>
+    <location>Local Studio</location>
+    <admin>admin@radio.local</admin>
+    <hostname>radio.local</hostname>
   </server>
 
   <port>8000</port>
