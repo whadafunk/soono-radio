@@ -22,9 +22,9 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
 
   const config: IcecastConfig = {
     server: {
-      hostname: icecast.server?.[0]?.hostname?.[0] || 'localhost',
-      location: icecast.server?.[0]?.location?.[0] || '',
-      admin: icecast.server?.[0]?.admin?.[0] || 'admin@localhost',
+      hostname: icecast.hostname?.[0] || 'localhost',
+      location: icecast.location?.[0] || '',
+      admin: icecast.admin?.[0] || 'admin@localhost',
     },
     network: {
       port: parseInt(icecast.port?.[0] || '8000', 10),
@@ -59,13 +59,9 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
 export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
   const xmlObj = {
     icecast: {
-      server: [
-        {
-          location: [config.server.location],
-          admin: [config.server.admin],
-          hostname: [config.server.hostname],
-        },
-      ],
+      hostname: [config.server.hostname],
+      location: [config.server.location],
+      admin: [config.server.admin],
       port: [config.network.port.toString()],
       bind_address: [config.network.bind_address],
       admin_user: [config.authentication.admin_user],
