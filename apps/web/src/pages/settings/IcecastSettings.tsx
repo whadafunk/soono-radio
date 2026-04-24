@@ -1,17 +1,19 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useForm, useFieldArray } from 'react-hook-form';
+import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
-import { fetchIcecastConfig, updateIcecastConfig, saveRawXml } from '../../api';
+import { fetchIcecastConfig, updateIcecastConfig, saveRawXml, restartIcecast } from '../../api';
 import { Loader, Check, AlertCircle, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { RawXmlEditor } from '../../components/RawXmlEditor';
+import { PasswordInput } from '../../components/PasswordInput';
 import { useState } from 'react';
 
 export function IcecastSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showRawXml, setShowRawXml] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['icecast-config'],
@@ -29,13 +31,22 @@ export function IcecastSettings() {
   });
 
   const mutation = useMutation({
-    mutationFn: updateIcecastConfig,
-    onSuccess: () => {
-      setToast({ type: 'success', message: 'Settings saved successfully!' });
-      setTimeout(() => setToast(null), 3000);
+    mutationFn: async (data: IcecastConfig) => {
+      await updateIcecastConfig(data);
+      setIsRestarting(true);
+      setToast({ type: 'success', message: 'Settings saved. Restarting Icecast...' });
+      const result = await restartIcecast();
+      setIsRestarting(false);
+      setToast({
+        type: 'success',
+        message: `✓ Icecast restarted successfully! Uptime: ${result.uptime}s`
+      });
+      setTimeout(() => setToast(null), 5000);
     },
     onError: (err) => {
-      setToast({ type: 'error', message: `Error: ${(err as Error).message}` });
+      setIsRestarting(false);
+      setToast({ type: 'error', message: `✗ Error: ${(err as Error).message}` });
+      setTimeout(() => setToast(null), 5000);
     },
   });
 
@@ -154,7 +165,7 @@ export function IcecastSettings() {
             </h2>
             <button
               type="button"
-              onClick={() => append({ name: '/new', max_listeners: -1, source_password: 'hackme' })}
+              onClick={() => append({ name: '/new', max_listeners: -1 })}
               className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -177,30 +188,17 @@ export function IcecastSettings() {
                         placeholder="/stream"
                       />
                     </div>
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-                          Max Listeners
-                          <HelpTooltip text="-1 means unlimited. Set a limit based on your bandwidth." />
-                        </label>
-                        <input
-                          {...register(`mounts.${idx}.max_listeners`, { valueAsNumber: true })}
-                          type="number"
-                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
-                          placeholder="-1 (unlimited)"
-                        />
-                      </div>
-                      <div>
-                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-                          Source Password
-                          <HelpTooltip text="Password broadcasters use to stream to this mount point." />
-                        </label>
-                        <input
-                          {...register(`mounts.${idx}.source_password`)}
-                          type="password"
-                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
-                        />
-                      </div>
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                        Max Listeners
+                        <HelpTooltip text="-1 means unlimited. Set a limit based on your bandwidth." />
+                      </label>
+                      <input
+                        {...register(`mounts.${idx}.max_listeners`, { valueAsNumber: true })}
+                        type="number"
+                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                        placeholder="-1 (unlimited)"
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
@@ -229,24 +227,53 @@ export function IcecastSettings() {
           </div>
         </section>
 
-        {/* Icecast Web */}
+        {/* Authentication */}
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
-          <h2 className="text-lg font-semibold text-white mb-4">Icecast Web</h2>
-          <div className="grid grid-cols-2 gap-4">
+          <h2 className="text-lg font-semibold text-white mb-4">Authentication</h2>
+          <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Admin Username</label>
-              <input
-                {...register('authentication.admin_user')}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Source Password
+                <HelpTooltip text="Password broadcasters (e.g., BUTT client) use to stream audio to Icecast. This is the authentication for source connections." />
+              </label>
+              <Controller
+                name="authentication.source_password"
+                control={control}
+                render={({ field }) => (
+                  <PasswordInput
+                    value={field.value}
+                    onChange={field.onChange}
+                  />
+                )}
               />
             </div>
-            <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Admin Password</label>
-              <input
-                {...register('authentication.admin_password')}
-                type="password"
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                  Admin Username
+                  <HelpTooltip text="Username for accessing the Icecast web admin panel." />
+                </label>
+                <input
+                  {...register('authentication.admin_user')}
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                  Admin Password
+                  <HelpTooltip text="Password for accessing the Icecast web admin panel." />
+                </label>
+                <Controller
+                  name="authentication.admin_password"
+                  control={control}
+                  render={({ field }) => (
+                    <PasswordInput
+                      value={field.value}
+                      onChange={field.onChange}
+                    />
+                  )}
+                />
+              </div>
             </div>
           </div>
         </section>
@@ -308,10 +335,15 @@ export function IcecastSettings() {
           <div className="space-y-4">
             <div>
               <label className="block text-sm font-medium text-zinc-300 mb-2">Relay Password</label>
-              <input
-                {...register('relay.relay_password')}
-                type="password"
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+              <Controller
+                name="relay.relay_password"
+                control={control}
+                render={({ field }) => (
+                  <PasswordInput
+                    value={field.value}
+                    onChange={field.onChange}
+                  />
+                )}
               />
             </div>
             <div>
@@ -406,16 +438,23 @@ export function IcecastSettings() {
         <div className="flex gap-4">
           <button
             type="submit"
-            disabled={mutation.isPending}
+            disabled={mutation.isPending || isRestarting}
             className="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {mutation.isPending && <Loader className="w-4 h-4 animate-spin" />}
-            Save & Restart
+            {mutation.isPending || isRestarting ? (
+              <>
+                <Loader className="w-4 h-4 animate-spin" />
+                {isRestarting ? 'Restarting...' : 'Saving...'}
+              </>
+            ) : (
+              'Save & Restart'
+            )}
           </button>
           <button
             type="button"
             onClick={() => reset()}
-            className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-lg transition-colors"
+            disabled={mutation.isPending || isRestarting}
+            className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Reset
           </button>

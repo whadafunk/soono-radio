@@ -1,6 +1,6 @@
 const ICECAST_BASE = process.env.ICECAST_URL || 'http://localhost:8000';
 const ICECAST_ADMIN_USER = process.env.ICECAST_ADMIN_USER || 'admin';
-const ICECAST_ADMIN_PASS = process.env.ICECAST_ADMIN_PASS || 'hackme';
+const ICECAST_ADMIN_PASS = process.env.ICECAST_ADMIN_PASS || 'adminadmin';
 
 interface IcecastStatsResponse {
   listener: number;
@@ -60,7 +60,8 @@ export async function fetchAllMountStats() {
     });
 
     if (!response.ok) {
-      return { listener: 0, bitrate: 0, uptime: 0 };
+      const uptime = await getDockerContainerUptime();
+      return { listener: 0, bitrate: 0, uptime };
     }
 
     const text = await response.text();
@@ -81,6 +82,26 @@ export async function fetchAllMountStats() {
     return { listener, bitrate, uptime };
   } catch (error) {
     console.error('Failed to fetch global Icecast stats:', error);
-    return { listener: 0, bitrate: 0, uptime: 0 };
+    const uptime = await getDockerContainerUptime();
+    return { listener: 0, bitrate: 0, uptime };
+  }
+}
+
+async function getDockerContainerUptime(): Promise<number> {
+  try {
+    const { exec } = await import('child_process');
+    const { promisify } = await import('util');
+    const execPromise = promisify(exec);
+
+    const { stdout } = await execPromise(
+      'docker inspect -f "{{.State.StartedAt}}" radio-icecast'
+    );
+
+    const startTime = new Date(stdout.trim()).getTime();
+    const uptime = Math.floor((Date.now() - startTime) / 1000);
+    return Math.max(0, uptime);
+  } catch (error) {
+    console.error('Failed to get Docker container uptime:', error);
+    return 0;
   }
 }

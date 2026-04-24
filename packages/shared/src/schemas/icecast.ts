@@ -3,7 +3,6 @@ import { z } from 'zod';
 export const MountPointSchema = z.object({
   name: z.string().min(1),
   max_listeners: z.number().int().min(-1).default(-1),
-  source_password: z.string().min(1),
   fallback_mount: z.string().optional(),
 });
 
@@ -20,6 +19,7 @@ export const IcecastConfigSchema = z.object({
     bind_address: z.string().default('0.0.0.0'),
   }),
   authentication: z.object({
+    source_password: z.string().min(1),
     admin_user: z.string().min(1),
     admin_password: z.string().min(1),
   }),

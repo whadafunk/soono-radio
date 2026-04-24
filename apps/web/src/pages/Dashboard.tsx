@@ -1,8 +1,11 @@
-import { useQuery } from '@tanstack/react-query';
-import { Activity, Users, Gauge, Radio } from 'lucide-react';
-import { fetchIcecastStats, fetchIcecastConfig } from '../api';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { Activity, Users, Gauge, Radio, Power, Loader } from 'lucide-react';
+import { fetchIcecastStats, fetchIcecastConfig, restartIcecast } from '../api';
+import { useState } from 'react';
 
 export function Dashboard() {
+  const [restartToast, setRestartToast] = useState<string | null>(null);
+
   const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
     queryKey: ['icecast-stats'],
     queryFn: fetchIcecastStats,
@@ -12,6 +15,18 @@ export function Dashboard() {
   const { data: config, isLoading: configLoading } = useQuery({
     queryKey: ['icecast-config'],
     queryFn: fetchIcecastConfig,
+  });
+
+  const restartMutation = useMutation({
+    mutationFn: restartIcecast,
+    onSuccess: (data) => {
+      setRestartToast(`✓ Icecast restarted successfully! Uptime: ${data.uptime}s`);
+      setTimeout(() => setRestartToast(null), 5000);
+    },
+    onError: (err) => {
+      setRestartToast(`✗ Error: ${(err as Error).message}`);
+      setTimeout(() => setRestartToast(null), 5000);
+    },
   });
 
   const formatUptime = (seconds: number): string => {
@@ -27,12 +42,38 @@ export function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-white">Dashboard</h1>
-        <p className="text-zinc-400 mt-2">
-          {isOnline ? '✓ Icecast is running' : '✗ Icecast is not responding'}
-        </p>
+      <div className="flex items-start justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-white">Dashboard</h1>
+          <p className="text-zinc-400 mt-2">
+            {isOnline ? '✓ Icecast is running' : '✗ Icecast is not responding'}
+          </p>
+        </div>
+        <button
+          onClick={() => restartMutation.mutate()}
+          disabled={restartMutation.isPending}
+          title="Restart Icecast server"
+          className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {restartMutation.isPending ? (
+            <>
+              <Loader className="w-4 h-4 animate-spin" />
+              Restarting...
+            </>
+          ) : (
+            <>
+              <Power className="w-4 h-4" />
+              Restart Icecast
+            </>
+          )}
+        </button>
       </div>
+
+      {restartToast && (
+        <div className="bg-amber-900/20 border border-amber-800 rounded-lg p-3 text-amber-300 text-sm">
+          {restartToast}
+        </div>
+      )}
 
       {/* Live Stream Stats */}
       <section>

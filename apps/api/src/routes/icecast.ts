@@ -63,4 +63,19 @@ export async function icecastRoutes(fastify: FastifyInstance) {
       return reply.send(stats);
     },
   );
+
+  fastify.post<{ Reply: any }>('/icecast/restart', async (request, reply) => {
+    try {
+      const { exec } = await import('child_process');
+      const { promisify } = await import('util');
+      const execPromise = promisify(exec);
+
+      await execPromise('docker restart radio-icecast');
+      return reply.status(200).send({ success: true, message: 'Icecast restarting...' });
+    } catch (error) {
+      return reply
+        .status(500)
+        .send({ error: `Failed to restart Icecast: ${(error as Error).message}` });
+    }
+  });
 }

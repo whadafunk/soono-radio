@@ -5,20 +5,57 @@ import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
 
 const CONFIG_PATH = process.env.ICECAST_CONFIG || join(process.cwd(), '..', '..', 'icecast', 'icecast.xml');
 
+const LOGLEVEL_TO_NUMBER: Record<string, number> = {
+  'error': 1,
+  'warn': 2,
+  'info': 3,
+  'debug': 4,
+};
+
+const NUMBER_TO_LOGLEVEL: Record<number, 'error' | 'warn' | 'info' | 'debug'> = {
+  1: 'error',
+  2: 'warn',
+  3: 'info',
+  4: 'debug',
+};
+
 export async function readIcecastConfig(): Promise<IcecastConfig> {
   const xml = await readFile(CONFIG_PATH, 'utf-8');
   const parsed = await parseStringPromise(xml);
 
   const icecast = parsed.icecast;
 
+  // Parse listen-socket block
+  const listenSocket = icecast['listen-socket']?.[0];
+  const port = listenSocket?.port?.[0] ? parseInt(listenSocket.port[0], 10) : 8000;
+  const bindAddress = listenSocket?.['bind-address']?.[0] || '0.0.0.0';
+
+  // Parse authentication block
+  const auth = icecast.authentication?.[0];
+  const sourcePassword = auth?.['source-password']?.[0] || 'default';
+  const adminUser = auth?.['admin-user']?.[0] || 'admin';
+  const adminPassword = auth?.['admin-password']?.[0] || 'hackme';
+  const relayPassword = auth?.['relay-password']?.[0] || 'hackme';
+
   // Parse all mount points
   const mountsRaw = Array.isArray(icecast.mount) ? icecast.mount : [icecast.mount?.[0]];
-  const mounts = (mountsRaw || []).map((mount: any) => ({
-    name: mount.name?.[0] || '/stream',
-    max_listeners: parseInt(mount.max_listeners?.[0] || '-1', 10),
-    source_password: mount.source_password?.[0] || 'hackme',
-    fallback_mount: mount.fallback_mount?.[0],
-  }));
+  const mounts = (mountsRaw || [])
+    .filter(Boolean)
+    .map((mount: any) => ({
+      name: mount['mount-name']?.[0] || '/stream',
+      max_listeners: parseInt(mount['max-listeners']?.[0] || '-1', 10),
+      fallback_mount: mount['fallback-mount']?.[0],
+    }));
+
+  // Parse logging block
+  const logging = icecast.logging?.[0];
+  const loglevelRaw = logging?.loglevel?.[0];
+  const logLevel = typeof loglevelRaw === 'string'
+    ? (loglevelRaw as 'error' | 'warn' | 'info' | 'debug')
+    : NUMBER_TO_LOGLEVEL[parseInt(loglevelRaw || '3', 10)] || 'info';
+
+  // Parse limits block
+  const limits = icecast.limits?.[0];
 
   const config: IcecastConfig = {
     server: {
@@ -27,29 +64,30 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
       admin: icecast.admin?.[0] || 'admin@localhost',
     },
     network: {
-      port: parseInt(icecast.port?.[0] || '8000', 10),
-      bind_address: icecast.bind_address?.[0] || '0.0.0.0',
+      port,
+      bind_address: bindAddress,
     },
     authentication: {
-      admin_user: icecast.admin_user?.[0] || 'admin',
-      admin_password: icecast.admin_password?.[0] || 'hackme',
+      source_password: sourcePassword,
+      admin_user: adminUser,
+      admin_password: adminPassword,
     },
     relay: {
-      relay_password: icecast.relay_password?.[0] || 'hackme',
-      relay_servers: icecast.relay_servers?.[0],
+      relay_password: relayPassword,
+      relay_servers: icecast['relay-servers']?.[0],
     },
     limits: {
-      max_sources: parseInt(icecast.limits?.[0]?.sources?.[0] || '10', 10),
-      max_clients: parseInt(icecast.limits?.[0]?.clients?.[0] || '500', 10),
-      max_queue_size: parseInt(icecast.limits?.[0]?.queue_size?.[0] || '524288', 10),
-      burst_size: parseInt(icecast.limits?.[0]?.burst_size?.[0] || '65536', 10),
+      max_sources: parseInt(limits?.sources?.[0] || '10', 10),
+      max_clients: parseInt(limits?.clients?.[0] || '500', 10),
+      max_queue_size: parseInt(limits?.['queue-size']?.[0] || '524288', 10),
+      burst_size: parseInt(limits?.['burst-size']?.[0] || '65536', 10),
     },
-    mounts: mounts.length > 0 ? mounts : [{ name: '/stream', max_listeners: -1, source_password: 'hackme' }],
+    mounts: mounts.length > 0 ? mounts : [{ name: '/stream', max_listeners: -1 }],
     logging: {
-      loglevel: (icecast.loglevel?.[0] || 'info') as 'debug' | 'info' | 'warn' | 'error',
-      logsize: icecast.logsize?.[0] ? parseInt(icecast.logsize[0], 10) : undefined,
-      access_log: icecast.accesslog?.[0] || '/usr/local/icecast/logs/access.log',
-      error_log: icecast.errorlog?.[0] || '/usr/local/icecast/logs/error.log',
+      loglevel: logLevel,
+      logsize: logging?.logsize?.[0] ? parseInt(logging.logsize[0], 10) : undefined,
+      access_log: logging?.accesslog?.[0] || '/usr/local/icecast/logs/access.log',
+      error_log: logging?.errorlog?.[0] || '/usr/local/icecast/logs/error.log',
     },
   };
 
@@ -62,30 +100,49 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
       hostname: [config.server.hostname],
       location: [config.server.location],
       admin: [config.server.admin],
-      port: [config.network.port.toString()],
-      bind_address: [config.network.bind_address],
-      admin_user: [config.authentication.admin_user],
-      admin_password: [config.authentication.admin_password],
-      relay_password: [config.relay.relay_password],
-      ...(config.relay.relay_servers && { relay_servers: [config.relay.relay_servers] }),
       limits: [
         {
           sources: [config.limits.max_sources.toString()],
           clients: [config.limits.max_clients.toString()],
-          queue_size: [config.limits.max_queue_size.toString()],
-          burst_size: [config.limits.burst_size.toString()],
+          'queue-size': [config.limits.max_queue_size.toString()],
+          'burst-size': [config.limits.burst_size.toString()],
+        },
+      ],
+      authentication: [
+        {
+          'source-password': [config.authentication.source_password],
+          'relay-password': [config.relay.relay_password],
+          'admin-user': [config.authentication.admin_user],
+          'admin-password': [config.authentication.admin_password],
+        },
+      ],
+      'listen-socket': [
+        {
+          port: [config.network.port.toString()],
+          'bind-address': [config.network.bind_address],
         },
       ],
       mount: config.mounts.map((mount) => ({
-        name: [mount.name],
-        max_listeners: [mount.max_listeners.toString()],
-        source_password: [mount.source_password],
-        ...(mount.fallback_mount && { fallback_mount: [mount.fallback_mount] }),
+        'mount-name': [mount.name],
+        'max-listeners': [mount.max_listeners.toString()],
+        ...(mount.fallback_mount && { 'fallback-mount': [mount.fallback_mount] }),
       })),
-      loglevel: [config.logging.loglevel],
-      ...(config.logging.logsize && { logsize: [config.logging.logsize.toString()] }),
-      accesslog: [config.logging.access_log],
-      errorlog: [config.logging.error_log],
+      paths: [
+        {
+          basedir: ['/usr/local/icecast'],
+          logdir: ['/usr/local/icecast/logs'],
+          webroot: ['/usr/local/icecast/share/icecast/web'],
+          adminroot: ['/usr/local/icecast/share/icecast/admin'],
+        },
+      ],
+      logging: [
+        {
+          accesslog: [config.logging.access_log],
+          errorlog: [config.logging.error_log],
+          loglevel: [LOGLEVEL_TO_NUMBER[config.logging.loglevel].toString()],
+          ...(config.logging.logsize && { logsize: [config.logging.logsize.toString()] }),
+        },
+      ],
     },
   };
 
