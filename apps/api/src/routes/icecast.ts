@@ -19,6 +19,37 @@ export async function icecastRoutes(fastify: FastifyInstance) {
     return reply.status(200).send({ success: true });
   });
 
+  fastify.get<{ Reply: any }>('/icecast/config/raw', async (request, reply) => {
+    const { readFile } = await import('fs/promises');
+    const { join } = await import('path');
+    const CONFIG_PATH = process.env.ICECAST_CONFIG || join(process.cwd(), '..', '..', 'icecast', 'icecast.xml');
+    const xml = await readFile(CONFIG_PATH, 'utf-8');
+    return reply.send({ xml });
+  });
+
+  fastify.post<{ Body: any; Reply: any }>('/icecast/config/raw', async (request, reply) => {
+    const { xml } = request.body as { xml?: string };
+    if (!xml) {
+      return reply.status(400).send({ error: 'XML content is required' });
+    }
+
+    try {
+      const { parseStringPromise } = await import('xml2js');
+      // Validate XML is parseable
+      await parseStringPromise(xml);
+
+      // Write the raw XML
+      const { writeFile } = await import('fs/promises');
+      const { join } = await import('path');
+      const CONFIG_PATH = process.env.ICECAST_CONFIG || join(process.cwd(), '..', '..', 'icecast', 'icecast.xml');
+      await writeFile(CONFIG_PATH, xml, 'utf-8');
+
+      return reply.status(200).send({ success: true });
+    } catch (error) {
+      return reply.status(400).send({ error: `Invalid XML: ${(error as Error).message}` });
+    }
+  });
+
   fastify.get<{ Reply: any }>('/icecast/stats', async (request, reply) => {
     const stats = await fetchAllMountStats();
     return reply.send(stats);

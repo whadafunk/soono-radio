@@ -33,3 +33,22 @@ export async function fetchIcecastStats(): Promise<IcecastStats> {
   if (!res.ok) throw new Error(`Failed to fetch Icecast stats: ${res.statusText}`);
   return res.json();
 }
+
+export async function fetchRawXml(): Promise<string> {
+  const res = await fetch(`${API_BASE}/icecast/config/raw`);
+  if (!res.ok) throw new Error(`Failed to fetch raw XML: ${res.statusText}`);
+  const data = await res.json();
+  return data.xml;
+}
+
+export async function saveRawXml(xml: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/icecast/config/raw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ xml }),
+  });
+  if (!res.ok) {
+    const error = await res.json();
+    throw new Error(error.error || 'Failed to save XML');
+  }
+}

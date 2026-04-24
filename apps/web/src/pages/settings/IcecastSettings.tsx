@@ -2,13 +2,16 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { useForm, useFieldArray } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
-import { fetchIcecastConfig, updateIcecastConfig } from '../../api';
-import { Loader, Check, AlertCircle, Plus, Trash2 } from 'lucide-react';
+import { fetchIcecastConfig, updateIcecastConfig, saveRawXml } from '../../api';
+import { Loader, Check, AlertCircle, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { HelpTooltip } from '../../components/HelpTooltip';
+import { RawXmlEditor } from '../../components/RawXmlEditor';
 import { useState } from 'react';
 
 export function IcecastSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showRawXml, setShowRawXml] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['icecast-config'],
@@ -370,6 +373,35 @@ export function IcecastSettings() {
           </div>
         </section>
 
+        {/* Advanced Section */}
+        <section className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setShowAdvanced(!showAdvanced)}
+            className="w-full px-6 py-4 flex items-center justify-between hover:bg-zinc-800 transition-colors"
+          >
+            <h2 className="text-lg font-semibold text-white">Advanced</h2>
+            <ChevronDown
+              className={`w-5 h-5 text-zinc-400 transition-transform ${showAdvanced ? 'rotate-180' : ''}`}
+            />
+          </button>
+
+          {showAdvanced && (
+            <div className="border-t border-zinc-800 p-6 space-y-4">
+              <p className="text-sm text-zinc-400">
+                Edit the raw Icecast XML configuration file directly. Use this for advanced configuration options not covered by the form above.
+              </p>
+              <button
+                type="button"
+                onClick={() => setShowRawXml(true)}
+                className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors"
+              >
+                Edit Raw XML
+              </button>
+            </div>
+          )}
+        </section>
+
         {/* Submit Button */}
         <div className="flex gap-4">
           <button
@@ -389,6 +421,18 @@ export function IcecastSettings() {
           </button>
         </div>
       </form>
+
+      {/* Raw XML Editor Modal */}
+      <RawXmlEditor
+        isOpen={showRawXml}
+        onClose={() => setShowRawXml(false)}
+        onSave={async (xml) => {
+          await saveRawXml(xml);
+          // Refresh the config
+          const newConfig = await fetchIcecastConfig();
+          reset(newConfig);
+        }}
+      />
     </div>
   );
 }
