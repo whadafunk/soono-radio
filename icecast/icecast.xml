@@ -1,21 +1,23 @@
-<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<?xml version="1.0"?>
 <icecast>
-  <server>
-    <location>Slobozia</location>
-    <admin>admin@campus.ro</admin>
-    <hostname>radio.campus.ro</hostname>
-  </server>
+  <hostname>localhost</hostname>
+  <location>Slobozia</location>
+  <admin>admin@campus.ro</admin>
+
   <port>8000</port>
   <bind_address>0.0.0.0</bind_address>
+
   <admin_user>admin</admin_user>
   <admin_password>adminadmin</admin_password>
   <relay_password>hackme</relay_password>
+
   <limits>
     <sources>10</sources>
     <clients>500</clients>
     <queue_size>524288</queue_size>
     <burst_size>65536</burst_size>
   </limits>
+
   <mount>
     <name>/stream</name>
     <max_listeners>-1</max_listeners>
@@ -27,6 +29,7 @@
     <source_password>cmonica</source_password>
     <fallback_mount>/stream</fallback_mount>
   </mount>
+
   <loglevel>info</loglevel>
   <accesslog>/usr/local/icecast/logs/access.log</accesslog>
   <errorlog>/usr/local/icecast/logs/error.log</errorlog>
