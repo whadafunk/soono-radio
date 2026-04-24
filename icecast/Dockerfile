@@ -1,14 +1,12 @@
-FROM alpine:latest
+FROM ubuntu:24.04
 
-RUN apk add --no-cache icecast
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    icecast2 \
+    && rm -rf /var/lib/apt/lists/*
 
-# icecast package already creates icecast user and log directories
-# Just ensure they exist and have correct permissions
-RUN mkdir -p /var/log/icecast && \
-    chown -R icecast:icecast /var/log/icecast
-
-USER icecast
+USER icecast2
 
 EXPOSE 8000
 
-CMD ["icecast", "-c", "/etc/icecast.xml"]
+CMD ["icecast2", "-c", "/etc/icecast2/icecast.xml"]
+

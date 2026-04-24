@@ -35,15 +35,15 @@
   </mount>
 
   <paths>
-    <basedir>/usr/local/icecast</basedir>
+    <basedir>/usr/local/icecast/</basedir>
     <logdir>/usr/local/icecast/logs</logdir>
-    <webroot>/usr/local/icecast/share/icecast/web</webroot>
+    <webroot>/usr/local/icecast/web</webroot>
     <adminroot>/usr/local/icecast/share/icecast/admin</adminroot>
   </paths>
 
   <logging>
-    <accesslog>/usr/local/icecast/logs/access.log</accesslog>
-    <errorlog>/usr/local/icecast/logs/error.log</errorlog>
+    <accesslog>access.log</accesslog>
+    <errorlog>error.log</errorlog>
     <loglevel>3</loglevel>
   </logging>
 </icecast>

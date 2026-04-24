@@ -50,9 +50,17 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
   // Parse logging block
   const logging = icecast.logging?.[0];
   const loglevelRaw = logging?.loglevel?.[0];
-  const logLevel = typeof loglevelRaw === 'string'
-    ? (loglevelRaw as 'error' | 'warn' | 'info' | 'debug')
-    : NUMBER_TO_LOGLEVEL[parseInt(loglevelRaw || '3', 10)] || 'info';
+  // Icecast uses numeric log levels in XML: 1=error, 2=warn, 3=info, 4=debug
+  // But also accept string values for backwards compatibility
+  let logLevel: 'error' | 'warn' | 'info' | 'debug' = 'info';
+  if (loglevelRaw) {
+    const asNumber = parseInt(loglevelRaw, 10);
+    if (!isNaN(asNumber) && NUMBER_TO_LOGLEVEL[asNumber]) {
+      logLevel = NUMBER_TO_LOGLEVEL[asNumber];
+    } else if (['error', 'warn', 'info', 'debug'].includes(loglevelRaw)) {
+      logLevel = loglevelRaw as 'error' | 'warn' | 'info' | 'debug';
+    }
+  }
 
   // Parse limits block
   const limits = icecast.limits?.[0];

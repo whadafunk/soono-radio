@@ -6,3 +6,5 @@ build/
 .env
 .env.local
 pnpm-lock.yaml
+.playwright-mcp/
+icecast/logs/

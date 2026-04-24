@@ -11,10 +11,13 @@ docker buildx build -t radio-icecast:latest --load icecast/
 
 echo "Starting Icecast container..."
 docker run \
+  -it \
   --name radio-icecast \
   --rm \
+  --user "$(id -u):$(id -g)" \
   -p 8000:8000 \
-  -v "$(pwd)/icecast/icecast.xml:/etc/icecast.xml" \
+  -v "$(pwd)/icecast/icecast.xml:/etc/icecast2/icecast.xml" \
+  -v "$(pwd)/icecast/logs:/usr/local/icecast/logs" \
   radio-icecast:latest
 
 # To stop: Ctrl+C or `docker stop radio-icecast`
