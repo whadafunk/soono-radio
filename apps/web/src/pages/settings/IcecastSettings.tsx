@@ -4,6 +4,7 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
 import { fetchIcecastConfig, updateIcecastConfig } from '../../api';
 import { Loader, Check, AlertCircle, Plus, Trash2 } from 'lucide-react';
+import { HelpTooltip } from '../../components/HelpTooltip';
 import { useState } from 'react';
 
 export function IcecastSettings() {
@@ -81,7 +82,10 @@ export function IcecastSettings() {
           <h2 className="text-lg font-semibold text-white mb-4">Basic Settings</h2>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Hostname</label>
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Hostname
+                <HelpTooltip text="The domain or IP address where listeners connect. Used for YP directory and stream information." />
+              </label>
               <input
                 {...register('server.hostname')}
                 className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
@@ -90,7 +94,10 @@ export function IcecastSettings() {
               {errors.server?.hostname && <p className="text-red-400 text-xs mt-1">{errors.server.hostname.message}</p>}
             </div>
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Location</label>
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Location
+                <HelpTooltip text="Geographic location of your server. Published in stream metadata and YP directory." />
+              </label>
               <input
                 {...register('server.location')}
                 className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
@@ -98,7 +105,10 @@ export function IcecastSettings() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Admin Email</label>
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Admin Email
+                <HelpTooltip text="Contact email for server notifications and administrative purposes." />
+              </label>
               <input
                 {...register('server.admin')}
                 type="email"
@@ -108,7 +118,10 @@ export function IcecastSettings() {
             </div>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-2">Port</label>
+                <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                  Port
+                  <HelpTooltip text="Port number Icecast listens on (default 8000). Must be open in your firewall." />
+                </label>
                 <input
                   {...register('network.port', { valueAsNumber: true })}
                   type="number"
@@ -116,7 +129,10 @@ export function IcecastSettings() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-2">Bind Address</label>
+                <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                  Bind Address
+                  <HelpTooltip text="0.0.0.0 listens on all interfaces. Use specific IP to limit access." />
+                </label>
                 <input
                   {...register('network.bind_address')}
                   className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
@@ -129,7 +145,10 @@ export function IcecastSettings() {
         {/* Mount Points */}
         <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
           <div className="flex items-center justify-between mb-4">
-            <h2 className="text-lg font-semibold text-white">Mount Points</h2>
+            <h2 className="text-lg font-semibold text-white flex items-center">
+              Mount Points
+              <HelpTooltip text="Stream paths that broadcasters connect to. Each mount can have its own password and listener limit." />
+            </h2>
             <button
               type="button"
               onClick={() => append({ name: '/new', max_listeners: -1, source_password: 'hackme' })}
@@ -145,7 +164,10 @@ export function IcecastSettings() {
                 <div className="flex items-start justify-between">
                   <div className="flex-1 space-y-3">
                     <div>
-                      <label className="block text-sm font-medium text-zinc-300 mb-1">Mount Name</label>
+                      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                        Mount Name
+                        <HelpTooltip text="URL path for this stream, e.g., /stream, /dj-alice, /mobile" />
+                      </label>
                       <input
                         {...register(`mounts.${idx}.name`)}
                         className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
@@ -154,7 +176,10 @@ export function IcecastSettings() {
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div>
-                        <label className="block text-sm font-medium text-zinc-300 mb-1">Max Listeners</label>
+                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                          Max Listeners
+                          <HelpTooltip text="-1 means unlimited. Set a limit based on your bandwidth." />
+                        </label>
                         <input
                           {...register(`mounts.${idx}.max_listeners`, { valueAsNumber: true })}
                           type="number"
@@ -163,7 +188,10 @@ export function IcecastSettings() {
                         />
                       </div>
                       <div>
-                        <label className="block text-sm font-medium text-zinc-300 mb-1">Source Password</label>
+                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                          Source Password
+                          <HelpTooltip text="Password broadcasters use to stream to this mount point." />
+                        </label>
                         <input
                           {...register(`mounts.${idx}.source_password`)}
                           type="password"
@@ -172,7 +200,10 @@ export function IcecastSettings() {
                       </div>
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-zinc-300 mb-1">Fallback Mount</label>
+                      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                        Fallback Mount
+                        <HelpTooltip text="If this mount is unavailable, redirect listeners to this fallback mount." />
+                      </label>
                       <input
                         {...register(`mounts.${idx}.fallback_mount`)}
                         className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
@@ -222,7 +253,10 @@ export function IcecastSettings() {
           <h2 className="text-lg font-semibold text-white mb-4">Limits</h2>
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Max Sources</label>
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Max Sources
+                <HelpTooltip text="Maximum number of broadcasters that can stream simultaneously. Set to 1-2 for solo shows, higher for multi-host setups." />
+              </label>
               <input
                 {...register('limits.max_sources', { valueAsNumber: true })}
                 type="number"
@@ -230,7 +264,10 @@ export function IcecastSettings() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Max Clients</label>
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Max Clients
+                <HelpTooltip text="Maximum number of listeners across all mounts. Depends on your bandwidth." />
+              </label>
               <input
                 {...register('limits.max_clients', { valueAsNumber: true })}
                 type="number"
@@ -238,7 +275,10 @@ export function IcecastSettings() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Queue Size (bytes)</label>
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Queue Size (bytes)
+                <HelpTooltip text="Audio buffer size. Increase if experiencing audio dropouts, decrease to reduce memory usage." />
+              </label>
               <input
                 {...register('limits.max_queue_size', { valueAsNumber: true })}
                 type="number"
@@ -246,7 +286,10 @@ export function IcecastSettings() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2">Burst Size (bytes)</label>
+              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+                Burst Size (bytes)
+                <HelpTooltip text="Initial burst of data sent to new listeners for faster startup." />
+              </label>
               <input
                 {...register('limits.burst_size', { valueAsNumber: true })}
                 type="number"
