@@ -80,3 +80,39 @@ export async function restartIcecast(): Promise<{ success: boolean; uptime: numb
 
   throw new Error('Icecast did not come back online after restart');
 }
+
+export interface CertificateInfo {
+  name: string;
+  size: number;
+  modified: string;
+}
+
+export async function fetchCertificates(): Promise<{ certificates: CertificateInfo[]; dir: string }> {
+  const res = await fetch(`${API_BASE}/certificates`);
+  if (!res.ok) throw new Error(`Failed to list certificates: ${res.statusText}`);
+  return res.json();
+}
+
+export async function uploadCertificate(file: File): Promise<{ success: boolean; name: string }> {
+  const form = new FormData();
+  form.append('file', file);
+  const res = await fetch(`${API_BASE}/certificates/upload`, {
+    method: 'POST',
+    body: form,
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Upload failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function deleteCertificate(name: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/certificates/${encodeURIComponent(name)}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Delete failed: ${res.statusText}`);
+  }
+}
