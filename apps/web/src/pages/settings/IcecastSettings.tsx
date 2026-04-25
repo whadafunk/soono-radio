@@ -165,7 +165,7 @@ export function IcecastSettings() {
             </h2>
             <button
               type="button"
-              onClick={() => append({ name: '/new', max_listeners: -1 })}
+              onClick={() => append({ name: '/new', max_listeners: -1, public: false })}
               className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded transition-colors"
             >
               <Plus className="w-4 h-4" />
@@ -220,16 +220,118 @@ export function IcecastSettings() {
                         />
                       </div>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-                        Fallback Mount
-                        <HelpTooltip text="If this mount is unavailable, redirect listeners to this fallback mount." />
-                      </label>
-                      <input
-                        {...register(`mounts.${idx}.fallback_mount`)}
-                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
-                        placeholder="(optional)"
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                          Fallback Mount
+                          <HelpTooltip text="If this mount is unavailable, redirect listeners to this fallback mount." />
+                        </label>
+                        <input
+                          {...register(`mounts.${idx}.fallback_mount`)}
+                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                          placeholder="(optional)"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                          SHOUTcast Mount Alias
+                          <HelpTooltip text="Alias for SHOUTcast clients. Lets older SHOUTcast broadcasters connect on the SHOUTcast source port and route to this mount." />
+                        </label>
+                        <input
+                          {...register(`mounts.${idx}.shoutcast_mount`)}
+                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                          placeholder="(optional)"
+                        />
+                      </div>
+                    </div>
+
+                    <div className="pt-3 border-t border-zinc-700">
+                      <h3 className="text-sm font-semibold text-zinc-200 mb-3 flex items-center">
+                        Public Metadata
+                        <HelpTooltip text="Stream info shown to listeners and YP directories. All optional." />
+                      </h3>
+                      <div className="space-y-3">
+                        <div>
+                          <label className="block text-sm font-medium text-zinc-300 mb-1">Stream Name</label>
+                          <input
+                            {...register(`mounts.${idx}.stream_name`)}
+                            className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                            placeholder="My Awesome Radio"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-sm font-medium text-zinc-300 mb-1">Description</label>
+                          <textarea
+                            {...register(`mounts.${idx}.stream_description`)}
+                            rows={2}
+                            className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                            placeholder="What plays on this stream"
+                          />
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-1">Genre</label>
+                            <input
+                              {...register(`mounts.${idx}.genre`)}
+                              className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                              placeholder="Various"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-1">Stream URL</label>
+                            <input
+                              {...register(`mounts.${idx}.stream_url`)}
+                              className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                              placeholder="https://your-station.example.com"
+                            />
+                          </div>
+                        </div>
+                        <div className="grid grid-cols-3 gap-3">
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                              Bitrate
+                              <HelpTooltip text="Stream bitrate in kbps. Hint for listeners; doesn't enforce." />
+                            </label>
+                            <input
+                              {...register(`mounts.${idx}.bitrate`, { valueAsNumber: true, setValueAs: (v) => (v === '' || isNaN(v) ? undefined : Number(v)) })}
+                              type="number"
+                              className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                              placeholder="128"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                              Type
+                              <HelpTooltip text="Content type, e.g., audio/mpeg, application/ogg" />
+                            </label>
+                            <input
+                              {...register(`mounts.${idx}.type`)}
+                              className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                              placeholder="audio/mpeg"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                              Subtype
+                              <HelpTooltip text="Codec subtype, e.g., mp3, ogg" />
+                            </label>
+                            <input
+                              {...register(`mounts.${idx}.subtype`)}
+                              className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                              placeholder="mp3"
+                            />
+                          </div>
+                        </div>
+                        <label className="flex items-center gap-2 text-sm text-zinc-300">
+                          <input
+                            {...register(`mounts.${idx}.public`)}
+                            type="checkbox"
+                            className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0"
+                          />
+                          List on public Icecast directories (YP)
+                          <HelpTooltip text="If enabled, this stream is announced to Icecast Yellow Pages directories like dir.xiph.org." />
+                        </label>
+                      </div>
                     </div>
                   </div>
                   {mountFields.length > 1 && (

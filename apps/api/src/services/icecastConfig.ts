@@ -41,12 +41,25 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
   const mountsRaw = Array.isArray(icecast.mount) ? icecast.mount : [icecast.mount?.[0]];
   const mounts = (mountsRaw || [])
     .filter(Boolean)
-    .map((mount: any) => ({
-      name: mount['mount-name']?.[0] || '/stream',
-      max_listeners: parseInt(mount['max-listeners']?.[0] || '-1', 10),
-      password: mount.password?.[0],
-      fallback_mount: mount['fallback-mount']?.[0],
-    }));
+    .map((mount: any) => {
+      const bitrateRaw = mount.bitrate?.[0];
+      const publicRaw = mount.public?.[0];
+      return {
+        name: mount['mount-name']?.[0] || '/stream',
+        max_listeners: parseInt(mount['max-listeners']?.[0] || '-1', 10),
+        password: mount.password?.[0],
+        fallback_mount: mount['fallback-mount']?.[0],
+        shoutcast_mount: mount['shoutcast-mount']?.[0],
+        stream_name: mount['stream-name']?.[0],
+        stream_description: mount['stream-description']?.[0],
+        stream_url: mount['stream-url']?.[0],
+        genre: mount.genre?.[0],
+        bitrate: bitrateRaw ? parseInt(bitrateRaw, 10) : undefined,
+        type: mount.type?.[0],
+        subtype: mount.subtype?.[0],
+        public: publicRaw !== undefined ? publicRaw === '1' || publicRaw === 'true' : undefined,
+      };
+    });
 
   // Parse logging block
   const logging = icecast.logging?.[0];
@@ -136,6 +149,15 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
         'max-listeners': [mount.max_listeners.toString()],
         ...(mount.password && { password: [mount.password] }),
         ...(mount.fallback_mount && { 'fallback-mount': [mount.fallback_mount] }),
+        ...(mount.shoutcast_mount && { 'shoutcast-mount': [mount.shoutcast_mount] }),
+        ...(mount.stream_name && { 'stream-name': [mount.stream_name] }),
+        ...(mount.stream_description && { 'stream-description': [mount.stream_description] }),
+        ...(mount.stream_url && { 'stream-url': [mount.stream_url] }),
+        ...(mount.genre && { genre: [mount.genre] }),
+        ...(mount.bitrate !== undefined && { bitrate: [mount.bitrate.toString()] }),
+        ...(mount.type && { type: [mount.type] }),
+        ...(mount.subtype && { subtype: [mount.subtype] }),
+        ...(mount.public !== undefined && { public: [mount.public ? '1' : '0'] }),
       })),
       paths: [
         {

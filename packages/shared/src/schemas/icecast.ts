@@ -5,6 +5,15 @@ export const MountPointSchema = z.object({
   max_listeners: z.number().int().min(-1).default(-1),
   password: z.string().optional(),
   fallback_mount: z.string().optional(),
+  shoutcast_mount: z.string().optional(),
+  stream_name: z.string().optional(),
+  stream_description: z.string().optional(),
+  stream_url: z.string().optional(),
+  genre: z.string().optional(),
+  bitrate: z.number().int().nonnegative().optional(),
+  type: z.string().optional(),
+  subtype: z.string().optional(),
+  public: z.boolean().optional(),
 });
 
 export type MountPoint = z.infer<typeof MountPointSchema>;
