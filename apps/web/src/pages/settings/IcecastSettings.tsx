@@ -152,7 +152,7 @@ export function IcecastSettings() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-lg font-semibold text-white flex items-center">
               Listen Sockets
-              <HelpTooltip text="Ports Icecast listens on. Add multiple to serve HTTP and HTTPS, or to bind to different interfaces." />
+              <HelpTooltip text="Ports Icecast listens on. Each socket serves everything — listener streams, the web admin (/admin/*), and the webroot — over the same port. To separate admin from streams, put a reverse proxy in front of Icecast. Add multiple sockets to serve HTTP + HTTPS, or to bind to different interfaces." />
             </h2>
             <button
               type="button"
