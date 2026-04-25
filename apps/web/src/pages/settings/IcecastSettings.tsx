@@ -207,7 +207,7 @@ export function IcecastSettings() {
                         className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0"
                       />
                       SHOUTcast compatible
-                      <HelpTooltip text="Accept SHOUTcast clients on this port. Older broadcasters connect on port + 1 for sources." />
+                      <HelpTooltip text="Marks this listen-socket so it accepts the legacy SHOUTcast source handshake." />
                     </label>
                   </div>
                   {socketFields.length > 1 && (
