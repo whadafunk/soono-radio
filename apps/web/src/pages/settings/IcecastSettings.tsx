@@ -2,7 +2,7 @@ import { useQuery, useMutation } from '@tanstack/react-query';
 import { useForm, useFieldArray, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
-import { fetchIcecastConfig, updateIcecastConfig, saveRawXml, restartIcecast } from '../../api';
+import { fetchIcecastConfig, updateIcecastConfig, saveRawXml, restartIcecast, fetchCertificates } from '../../api';
 import { Loader, Check, AlertCircle, Plus, Trash2, ChevronDown } from 'lucide-react';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { RawXmlEditor } from '../../components/RawXmlEditor';
@@ -18,6 +18,11 @@ export function IcecastSettings() {
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['icecast-config'],
     queryFn: fetchIcecastConfig,
+  });
+
+  const { data: certsData } = useQuery({
+    queryKey: ['certificates'],
+    queryFn: fetchCertificates,
   });
 
   const { register, handleSubmit, control, formState: { errors }, reset } = useForm<IcecastConfig>({
@@ -217,6 +222,53 @@ export function IcecastSettings() {
                 </div>
               </div>
             ))}
+          </div>
+        </section>
+
+        {/* SSL Certificate */}
+        <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+          <h2 className="text-lg font-semibold text-white mb-4 flex items-center">
+            SSL Certificate
+            <HelpTooltip text="Pick an uploaded certificate to use for SSL listen sockets. Manage certificates in the Certificates tab." />
+          </h2>
+          <div>
+            <label className="block text-sm font-medium text-zinc-300 mb-2">Certificate</label>
+            <Controller
+              name="ssl.certificate_path"
+              control={control}
+              render={({ field }) => {
+                const currentName = field.value
+                  ? field.value.split('/').pop() || ''
+                  : '';
+                return (
+                  <select
+                    value={currentName}
+                    onChange={(e) => {
+                      const name = e.target.value;
+                      field.onChange(name ? `/etc/icecast2/certs/${name}` : null);
+                    }}
+                    className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="">— None (SSL sockets will fail) —</option>
+                    {certsData?.certificates.map((cert) => (
+                      <option key={cert.name} value={cert.name}>
+                        {cert.name}
+                      </option>
+                    ))}
+                  </select>
+                );
+              }}
+            />
+            {certsData && certsData.certificates.length === 0 && (
+              <p className="text-xs text-zinc-500 mt-2">
+                No certificates uploaded yet. Go to the Certificates tab to upload one.
+              </p>
+            )}
+            <p className="text-xs text-zinc-500 mt-2">
+              The selected file's container path is written to{' '}
+              <code className="bg-zinc-800 px-1.5 py-0.5 rounded text-xs">&lt;ssl-certificate&gt;</code>{' '}
+              in the Icecast config.
+            </p>
           </div>
         </section>
 

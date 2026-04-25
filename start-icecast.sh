@@ -18,6 +18,7 @@ docker run \
   -p 8000:8000 \
   -v "$(pwd)/icecast/icecast.xml:/etc/icecast2/icecast.xml" \
   -v "$(pwd)/icecast/logs:/usr/local/icecast/logs" \
+  -v "$(pwd)/icecast/certs:/etc/icecast2/certs:ro" \
   radio-icecast:latest
 
 # To stop: Ctrl+C or `docker stop radio-icecast`

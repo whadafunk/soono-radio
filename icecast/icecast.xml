@@ -15,42 +15,14 @@
     <admin-user>admin</admin-user>
     <admin-password>adminadmin</admin-password>
   </authentication>
+  <ssl-certificate>/etc/icecast2/certs/server.pem</ssl-certificate>
   <listen-socket>
     <port>8000</port>
     <bind-address>0.0.0.0</bind-address>
   </listen-socket>
-  <listen-socket>
-    <port>8001</port>
-    <bind-address>0.0.0.0</bind-address>
-    <ssl>1</ssl>
-    <shoutcast-compat>1</shoutcast-compat>
-  </listen-socket>
   <mount>
     <mount-name>/stream</mount-name>
     <max-listeners>-1</max-listeners>
-    <stream-name>My default awesome radio</stream-name>
-    <stream-description>all kinds of crap</stream-description>
-    <stream-url>https://la-placinte.ro:8000</stream-url>
-    <genre>the best genre</genre>
-    <bitrate>256</bitrate>
-    <type>audio/mpeg</type>
-    <subtype>mp3</subtype>
-    <public>1</public>
-  </mount>
-  <mount>
-    <mount-name>/dj-skije</mount-name>
-    <max-listeners>-1</max-listeners>
-    <password>giginet</password>
-    <fallback-mount>/stream</fallback-mount>
-    <shoutcast-mount>/dj-skije.shout</shoutcast-mount>
-    <stream-name>the best in town</stream-name>
-    <stream-description>mostly crap</stream-description>
-    <stream-url>https://unu-doi.com</stream-url>
-    <genre>vaious variated</genre>
-    <bitrate>128</bitrate>
-    <type>audio/mpeg</type>
-    <subtype>mp5</subtype>
-    <public>1</public>
   </mount>
   <paths>
     <basedir>/usr/local/icecast</basedir>
