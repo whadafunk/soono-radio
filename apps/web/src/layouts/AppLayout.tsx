@@ -4,7 +4,7 @@ import { Menu, X, Radio } from 'lucide-react';
 
 const navItems = [
   { label: 'Dashboard', path: '/' },
-  { label: 'Settings', path: '/settings/icecast' },
+  { label: 'Settings', path: '/settings' },
   { label: 'LiquidSoap', path: '/liquidsoup' },
   { label: 'Playlists', path: '/playlists' },
   { label: 'Jingles', path: '/jingles' },
@@ -31,7 +31,10 @@ export function AppLayout() {
         {/* Navigation */}
         <nav className="flex-1 p-4 space-y-2">
           {navItems.map((item) => {
-            const isActive = location.pathname === item.path;
+            const isActive =
+              item.path === '/'
+                ? location.pathname === '/'
+                : location.pathname.startsWith(item.path);
             return (
               <Link
                 key={item.path}
