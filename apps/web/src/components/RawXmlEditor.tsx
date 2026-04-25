@@ -24,7 +24,7 @@ export function RawXmlEditor({ isOpen, onClose, onSave }: RawXmlEditorProps) {
       setLoading(true);
       const res = await fetch('/api/icecast/config/raw');
       const data = await res.json();
-      setXml(formatXml(data.xml));
+      setXml(data.xml);
       setError('');
       setSuccess(false);
     } catch (err) {

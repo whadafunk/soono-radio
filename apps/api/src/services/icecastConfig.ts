@@ -21,7 +21,7 @@ const NUMBER_TO_LOGLEVEL: Record<number, 'error' | 'warn' | 'info' | 'debug'> = 
 
 export async function readIcecastConfig(): Promise<IcecastConfig> {
   const xml = await readFile(CONFIG_PATH, 'utf-8');
-  const parsed = await parseStringPromise(xml);
+  const parsed = await parseStringPromise(xml, { trim: true });
 
   const icecast = parsed.icecast;
 
@@ -154,8 +154,15 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
     },
   };
 
-  const builder = new Builder();
-  const xml = builder.buildObject(xmlObj);
+  const builder = new Builder({
+    renderOpts: { pretty: true, indent: '  ', newline: '\n' },
+    xmldec: { version: '1.0', encoding: 'UTF-8', standalone: true },
+  });
+  let xml = builder.buildObject(xmlObj);
+
+  // xml2js Builder wraps text values like <tag>value\n    </tag>.
+  // Icecast reads the literal whitespace as part of the value. Strip it.
+  xml = xml.replace(/<([\w-]+)>([^<]+?)\s*\n\s*<\/\1>/g, '<$1>$2</$1>');
 
   await writeFile(CONFIG_PATH, xml, 'utf-8');
 }
