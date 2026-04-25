@@ -1,6 +1,11 @@
 import { FastifyInstance } from 'fastify';
-import { readdir, readFile, writeFile, unlink, mkdir, stat } from 'fs/promises';
+import { readdir, readFile, writeFile, unlink, mkdir, mkdtemp, rm, stat } from 'fs/promises';
 import { join, basename } from 'path';
+import { tmpdir } from 'os';
+import { execFile as execFileCb } from 'child_process';
+import { promisify } from 'util';
+
+const execFile = promisify(execFileCb);
 
 const CERTS_DIR =
   process.env.ICECAST_CERTS_DIR ||
@@ -93,6 +98,135 @@ export async function certificateRoutes(fastify: FastifyInstance) {
     },
   );
 
+  fastify.post<{
+    Body: {
+      commonName?: string;
+      validityDays?: number;
+      altNames?: string[];
+      filename?: string;
+      city?: string;
+      country?: string;
+    };
+  }>('/certificates/generate', async (request, reply) => {
+    await ensureCertsDir();
+
+    const { commonName, validityDays = 365, altNames, filename, city, country } = request.body || {};
+
+    if (!commonName || typeof commonName !== 'string' || !commonName.trim()) {
+      return reply.status(400).send({ error: 'commonName is required' });
+    }
+    const cn = commonName.trim();
+    if (cn.length > 253 || /[\r\n\0\/=]/.test(cn)) {
+      return reply.status(400).send({ error: 'commonName is invalid (cannot contain / or =)' });
+    }
+
+    let sanitizedCity: string | undefined;
+    if (city !== undefined && city !== null) {
+      if (typeof city !== 'string') {
+        return reply.status(400).send({ error: 'city must be a string' });
+      }
+      const c = city.trim();
+      if (c.length > 64 || /[\r\n\0\/=]/.test(c)) {
+        return reply.status(400).send({ error: 'city is invalid (max 64 chars, no / or =)' });
+      }
+      if (c) sanitizedCity = c;
+    }
+
+    let sanitizedCountry: string | undefined;
+    if (country !== undefined && country !== null) {
+      if (typeof country !== 'string') {
+        return reply.status(400).send({ error: 'country must be a string' });
+      }
+      const co = country.trim().toUpperCase();
+      if (co && !/^[A-Z]{2}$/.test(co)) {
+        return reply.status(400).send({ error: 'country must be a 2-letter ISO 3166 code' });
+      }
+      if (co) sanitizedCountry = co;
+    }
+    if (
+      typeof validityDays !== 'number' ||
+      !Number.isInteger(validityDays) ||
+      validityDays < 1 ||
+      validityDays > 36500
+    ) {
+      return reply
+        .status(400)
+        .send({ error: 'validityDays must be an integer between 1 and 36500' });
+    }
+    if (altNames !== undefined && !Array.isArray(altNames)) {
+      return reply.status(400).send({ error: 'altNames must be an array of strings' });
+    }
+    const sanitizedAltNames: string[] = [];
+    if (Array.isArray(altNames)) {
+      for (const an of altNames) {
+        if (typeof an !== 'string' || !an.trim()) continue;
+        const t = an.trim();
+        if (t.length > 253 || /[\r\n\0,]/.test(t)) {
+          return reply.status(400).send({ error: `altName invalid: ${t}` });
+        }
+        sanitizedAltNames.push(t);
+      }
+    }
+
+    // Derive filename from CN if not supplied
+    const baseName = (filename && filename.trim()) || cn;
+    const cleaned = safeFilename(baseName);
+    const finalName = cleaned.endsWith('.pem') ? cleaned : `${cleaned}.pem`;
+    const targetPath = join(CERTS_DIR, finalName);
+
+    const tmp = await mkdtemp(join(tmpdir(), 'radio-cert-'));
+    try {
+      const keyPath = join(tmp, 'key.pem');
+      const certPath = join(tmp, 'cert.pem');
+
+      let subj = '';
+      if (sanitizedCountry) subj += `/C=${sanitizedCountry}`;
+      if (sanitizedCity) subj += `/L=${sanitizedCity}`;
+      subj += `/CN=${cn}`;
+
+      const args = [
+        'req',
+        '-x509',
+        '-newkey',
+        'rsa:2048',
+        '-keyout',
+        keyPath,
+        '-out',
+        certPath,
+        '-days',
+        String(validityDays),
+        '-nodes',
+        '-subj',
+        subj,
+      ];
+
+      if (sanitizedAltNames.length > 0) {
+        const sans = sanitizedAltNames
+          .map((a) => (/^\d{1,3}(\.\d{1,3}){3}$/.test(a) ? `IP:${a}` : `DNS:${a}`))
+          .join(',');
+        args.push('-addext', `subjectAltName=${sans}`);
+      }
+
+      try {
+        await execFile('openssl', args);
+      } catch (err) {
+        return reply
+          .status(500)
+          .send({ error: `openssl failed: ${(err as Error).message}` });
+      }
+
+      const cert = await readFile(certPath, 'utf-8');
+      const key = await readFile(keyPath, 'utf-8');
+      const combined = cert.endsWith('\n') ? cert + key : cert + '\n' + key;
+
+      await writeFile(targetPath, combined, { encoding: 'utf-8', mode: 0o600 });
+
+      return reply.send({ success: true, name: finalName });
+    } finally {
+      await rm(tmp, { recursive: true, force: true });
+    }
+  });
+
   fastify.get<{ Params: { name: string } }>(
     '/certificates/:name/info',
     async (request, reply) => {
@@ -103,6 +237,21 @@ export async function certificateRoutes(fastify: FastifyInstance) {
         const content = await readFile(path, 'utf-8');
         const hasCert = PEM_CERT_RE.test(content);
         const hasKey = PEM_KEY_RE.test(content);
+
+        let text = '';
+        try {
+          const { stdout } = await execFile('openssl', [
+            'x509',
+            '-in',
+            path,
+            '-noout',
+            '-text',
+          ]);
+          text = stdout;
+        } catch (err) {
+          text = `(unable to parse certificate: ${(err as Error).message})`;
+        }
+
         return reply.send({
           name,
           path,
@@ -110,6 +259,7 @@ export async function certificateRoutes(fastify: FastifyInstance) {
           modified: stats.mtime.toISOString(),
           has_certificate: hasCert,
           has_private_key: hasKey,
+          text,
         });
       } catch {
         return reply.status(404).send({ error: 'Certificate not found' });

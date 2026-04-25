@@ -107,6 +107,42 @@ export async function uploadCertificate(file: File): Promise<{ success: boolean;
   return res.json();
 }
 
+export interface CertificateDetails extends CertificateInfo {
+  path: string;
+  has_certificate: boolean;
+  has_private_key: boolean;
+  text: string;
+}
+
+export async function fetchCertificateDetails(name: string): Promise<CertificateDetails> {
+  const res = await fetch(`${API_BASE}/certificates/${encodeURIComponent(name)}/info`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to load certificate: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function generateCertificate(params: {
+  commonName: string;
+  validityDays?: number;
+  altNames?: string[];
+  filename?: string;
+  city?: string;
+  country?: string;
+}): Promise<{ success: boolean; name: string }> {
+  const res = await fetch(`${API_BASE}/certificates/generate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Generation failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function deleteCertificate(name: string): Promise<void> {
   const res = await fetch(`${API_BASE}/certificates/${encodeURIComponent(name)}`, {
     method: 'DELETE',
