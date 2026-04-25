@@ -124,6 +124,9 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
       relay_password: relayPassword,
       relay_servers: icecast['relay-servers']?.[0],
     },
+    ssl: {
+      certificate_path: icecast['ssl-certificate']?.[0] || null,
+    },
     limits: {
       max_sources: parseInt(limits?.sources?.[0] || '10', 10),
       max_clients: parseInt(limits?.clients?.[0] || '500', 10),
@@ -164,6 +167,9 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
           'admin-password': [config.authentication.admin_password],
         },
       ],
+      ...(config.ssl?.certificate_path && {
+        'ssl-certificate': [config.ssl.certificate_path],
+      }),
       'listen-socket': config.network.listen_sockets.map((sock) => ({
         port: [sock.port.toString()],
         'bind-address': [sock.bind_address],

@@ -36,6 +36,11 @@ export const IcecastConfigSchema = z.object({
   network: z.object({
     listen_sockets: z.array(ListenSocketSchema).min(1),
   }),
+  ssl: z
+    .object({
+      certificate_path: z.string().nullable().optional(),
+    })
+    .optional(),
   authentication: z.object({
     source_password: z.string().min(1),
     admin_user: z.string().min(1),
