@@ -8,3 +8,4 @@ build/
 pnpm-lock.yaml
 .playwright-mcp/
 icecast/logs/
+icecast/certs/*.pem
