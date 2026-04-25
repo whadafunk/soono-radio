@@ -1,5 +1,14 @@
 import { z } from 'zod';
 
+export const ListenSocketSchema = z.object({
+  port: z.number().int().min(1).max(65535),
+  bind_address: z.string().default('0.0.0.0'),
+  ssl: z.boolean().optional(),
+  shoutcast_compat: z.boolean().optional(),
+});
+
+export type ListenSocket = z.infer<typeof ListenSocketSchema>;
+
 export const MountPointSchema = z.object({
   name: z.string().min(1),
   max_listeners: z.number().int().min(-1).default(-1),
@@ -25,8 +34,7 @@ export const IcecastConfigSchema = z.object({
     admin: z.string().email(),
   }),
   network: z.object({
-    port: z.number().int().min(1).max(65535),
-    bind_address: z.string().default('0.0.0.0'),
+    listen_sockets: z.array(ListenSocketSchema).min(1),
   }),
   authentication: z.object({
     source_password: z.string().min(1),

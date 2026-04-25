@@ -30,6 +30,15 @@ export function IcecastSettings() {
     name: 'mounts',
   });
 
+  const {
+    fields: socketFields,
+    append: appendSocket,
+    remove: removeSocket,
+  } = useFieldArray({
+    control,
+    name: 'network.listen_sockets',
+  });
+
   const mutation = useMutation({
     mutationFn: async (data: IcecastConfig) => {
       await updateIcecastConfig(data);
@@ -130,29 +139,84 @@ export function IcecastSettings() {
               />
               {errors.server?.admin && <p className="text-red-400 text-xs mt-1">{errors.server.admin.message}</p>}
             </div>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-                  Port
-                  <HelpTooltip text="Port number Icecast listens on (default 8000). Must be open in your firewall." />
-                </label>
-                <input
-                  {...register('network.port', { valueAsNumber: true })}
-                  type="number"
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-                />
+          </div>
+        </section>
+
+        {/* Listen Sockets */}
+        <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+          <div className="flex items-center justify-between mb-4">
+            <h2 className="text-lg font-semibold text-white flex items-center">
+              Listen Sockets
+              <HelpTooltip text="Ports Icecast listens on. Add multiple to serve HTTP and HTTPS, or to bind to different interfaces." />
+            </h2>
+            <button
+              type="button"
+              onClick={() => appendSocket({ port: 8000, bind_address: '0.0.0.0' })}
+              className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              Add Socket
+            </button>
+          </div>
+          <div className="space-y-4">
+            {socketFields.map((field, idx) => (
+              <div key={field.id} className="bg-zinc-800 rounded-lg p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                        Port
+                        <HelpTooltip text="TCP port to listen on. Defaults: 8000 HTTP, 8443 HTTPS." />
+                      </label>
+                      <input
+                        {...register(`network.listen_sockets.${idx}.port`, { valueAsNumber: true })}
+                        type="number"
+                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                        Bind Address
+                        <HelpTooltip text="0.0.0.0 listens on all interfaces. Auto-detection of host IPs is coming later." />
+                      </label>
+                      <select
+                        {...register(`network.listen_sockets.${idx}.bind_address`)}
+                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
+                      </select>
+                    </div>
+                    <label className="flex items-center gap-2 text-sm text-zinc-300">
+                      <input
+                        {...register(`network.listen_sockets.${idx}.ssl`)}
+                        type="checkbox"
+                        className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0"
+                      />
+                      SSL/TLS (HTTPS)
+                      <HelpTooltip text="Serve HTTPS on this port. Requires a certificate configured in the Certificates tab." />
+                    </label>
+                    <label className="flex items-center gap-2 text-sm text-zinc-300">
+                      <input
+                        {...register(`network.listen_sockets.${idx}.shoutcast_compat`)}
+                        type="checkbox"
+                        className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0"
+                      />
+                      SHOUTcast compatible
+                      <HelpTooltip text="Accept SHOUTcast clients on this port. Older broadcasters connect on port + 1 for sources." />
+                    </label>
+                  </div>
+                  {socketFields.length > 1 && (
+                    <button
+                      type="button"
+                      onClick={() => removeSocket(idx)}
+                      className="p-2 text-red-400 hover:text-red-300 hover:bg-red-900/20 rounded transition-colors"
+                    >
+                      <Trash2 className="w-5 h-5" />
+                    </button>
+                  )}
+                </div>
               </div>
-              <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-                  Bind Address
-                  <HelpTooltip text="0.0.0.0 listens on all interfaces. Use specific IP to limit access." />
-                </label>
-                <input
-                  {...register('network.bind_address')}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-                />
-              </div>
-            </div>
+            ))}
           </div>
         </section>
 

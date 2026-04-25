@@ -155,14 +155,14 @@ export function Dashboard() {
           </div>
 
           <a
-            href={`http://${config?.server.hostname || 'localhost'}:${config?.network.port || 8000}/admin/`}
+            href={`http://${config?.server.hostname || 'localhost'}:${config?.network.listen_sockets?.[0]?.port || 8000}/admin/`}
             target="_blank"
             rel="noopener noreferrer"
             className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 hover:border-indigo-600 transition-colors cursor-pointer"
           >
             <p className="text-zinc-400 text-sm font-medium">Server (Admin)</p>
             <p className="text-sm text-indigo-400 mt-2 font-mono underline">
-              {config?.server.hostname || 'localhost'}:{config?.network.port || 8000}/admin
+              {config?.server.hostname || 'localhost'}:{config?.network.listen_sockets?.[0]?.port || 8000}/admin
             </p>
             <p className="text-xs text-zinc-500 mt-2">{config?.server.location || 'no location'}</p>
           </a>

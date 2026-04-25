@@ -25,10 +25,37 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
 
   const icecast = parsed.icecast;
 
-  // Parse listen-socket block
-  const listenSocket = icecast['listen-socket']?.[0];
-  const port = listenSocket?.port?.[0] ? parseInt(listenSocket.port[0], 10) : 8000;
-  const bindAddress = listenSocket?.['bind-address']?.[0] || '0.0.0.0';
+  // Parse all listen-socket blocks (Icecast supports multiple for HTTP+HTTPS, etc.)
+  const listenSocketsRaw = Array.isArray(icecast['listen-socket'])
+    ? icecast['listen-socket']
+    : icecast['listen-socket']
+      ? [icecast['listen-socket']]
+      : [];
+  const listenSockets = listenSocketsRaw
+    .filter(Boolean)
+    .map((sock: any) => {
+      const sslRaw = sock.ssl?.[0];
+      const shoutcastCompatRaw = sock['shoutcast-compat']?.[0];
+      return {
+        port: sock.port?.[0] ? parseInt(sock.port[0], 10) : 8000,
+        bind_address: sock['bind-address']?.[0] || '0.0.0.0',
+        ssl: sslRaw !== undefined ? sslRaw === '1' || sslRaw === 'true' : undefined,
+        shoutcast_compat:
+          shoutcastCompatRaw !== undefined
+            ? shoutcastCompatRaw === '1' || shoutcastCompatRaw === 'true'
+            : undefined,
+      };
+    });
+
+  // Migrate / ensure at least one socket exists
+  if (listenSockets.length === 0) {
+    listenSockets.push({
+      port: 8000,
+      bind_address: '0.0.0.0',
+      ssl: undefined,
+      shoutcast_compat: undefined,
+    });
+  }
 
   // Parse authentication block
   const auth = icecast.authentication?.[0];
@@ -86,8 +113,7 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
       admin: icecast.admin?.[0] || 'admin@localhost',
     },
     network: {
-      port,
-      bind_address: bindAddress,
+      listen_sockets: listenSockets,
     },
     authentication: {
       source_password: sourcePassword,
@@ -138,12 +164,12 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
           'admin-password': [config.authentication.admin_password],
         },
       ],
-      'listen-socket': [
-        {
-          port: [config.network.port.toString()],
-          'bind-address': [config.network.bind_address],
-        },
-      ],
+      'listen-socket': config.network.listen_sockets.map((sock) => ({
+        port: [sock.port.toString()],
+        'bind-address': [sock.bind_address],
+        ...(sock.ssl && { ssl: ['1'] }),
+        ...(sock.shoutcast_compat && { 'shoutcast-compat': ['1'] }),
+      })),
       mount: config.mounts.map((mount) => ({
         'mount-name': [mount.name],
         'max-listeners': [mount.max_listeners.toString()],

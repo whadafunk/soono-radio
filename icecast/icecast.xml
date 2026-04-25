@@ -19,6 +19,12 @@
     <port>8000</port>
     <bind-address>0.0.0.0</bind-address>
   </listen-socket>
+  <listen-socket>
+    <port>8001</port>
+    <bind-address>0.0.0.0</bind-address>
+    <ssl>1</ssl>
+    <shoutcast-compat>1</shoutcast-compat>
+  </listen-socket>
   <mount>
     <mount-name>/stream</mount-name>
     <max-listeners>-1</max-listeners>
