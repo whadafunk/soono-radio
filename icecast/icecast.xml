@@ -26,6 +26,7 @@
   <mount>
     <mount-name>/dj-skije</mount-name>
     <max-listeners>-1</max-listeners>
+    <password>giginet</password>
     <fallback-mount>/stream</fallback-mount>
   </mount>
   <paths>

@@ -3,6 +3,7 @@ import { z } from 'zod';
 export const MountPointSchema = z.object({
   name: z.string().min(1),
   max_listeners: z.number().int().min(-1).default(-1),
+  password: z.string().optional(),
   fallback_mount: z.string().optional(),
 });
 

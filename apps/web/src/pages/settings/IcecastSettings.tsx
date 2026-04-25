@@ -188,17 +188,37 @@ export function IcecastSettings() {
                         placeholder="/stream"
                       />
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-                        Max Listeners
-                        <HelpTooltip text="-1 means unlimited. Set a limit based on your bandwidth." />
-                      </label>
-                      <input
-                        {...register(`mounts.${idx}.max_listeners`, { valueAsNumber: true })}
-                        type="number"
-                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
-                        placeholder="-1 (unlimited)"
-                      />
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                          Max Listeners
+                          <HelpTooltip text="-1 means unlimited. Set a limit based on your bandwidth." />
+                        </label>
+                        <input
+                          {...register(`mounts.${idx}.max_listeners`, { valueAsNumber: true })}
+                          type="number"
+                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                          placeholder="-1 (unlimited)"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
+                          Source Password
+                          <HelpTooltip text="Optional. If set, broadcasters must use this password to stream to this mount (overrides the global source password)." />
+                        </label>
+                        <Controller
+                          name={`mounts.${idx}.password`}
+                          control={control}
+                          render={({ field }) => (
+                            <PasswordInput
+                              value={field.value || ''}
+                              onChange={field.onChange}
+                              className="bg-zinc-700 border-zinc-600"
+                              placeholder="(uses global password)"
+                            />
+                          )}
+                        />
+                      </div>
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">

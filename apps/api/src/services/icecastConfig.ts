@@ -44,6 +44,7 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
     .map((mount: any) => ({
       name: mount['mount-name']?.[0] || '/stream',
       max_listeners: parseInt(mount['max-listeners']?.[0] || '-1', 10),
+      password: mount.password?.[0],
       fallback_mount: mount['fallback-mount']?.[0],
     }));
 
@@ -133,6 +134,7 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
       mount: config.mounts.map((mount) => ({
         'mount-name': [mount.name],
         'max-listeners': [mount.max_listeners.toString()],
+        ...(mount.password && { password: [mount.password] }),
         ...(mount.fallback_mount && { 'fallback-mount': [mount.fallback_mount] }),
       })),
       paths: [
