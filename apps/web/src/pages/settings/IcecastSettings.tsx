@@ -402,40 +402,47 @@ export function IcecastSettings() {
                             />
                           </div>
                         </div>
-                        <div className="grid grid-cols-3 gap-3">
-                          <div>
-                            <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-                              Bitrate
-                              <HelpTooltip text="Stream bitrate in kbps. Hint for listeners; doesn't enforce." />
-                            </label>
-                            <input
-                              {...register(`mounts.${idx}.bitrate`, { valueAsNumber: true, setValueAs: (v) => (v === '' || isNaN(v) ? undefined : Number(v)) })}
-                              type="number"
-                              className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
-                              placeholder="128"
-                            />
-                          </div>
+                        <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
                               Type
-                              <HelpTooltip text="Content type, e.g., audio/mpeg, application/ogg" />
+                              <HelpTooltip text="Content-type announced to listeners. Leave (none) to skip the metadata; players will still work, they just won't know the codec until they read the stream." />
                             </label>
-                            <input
+                            <select
                               {...register(`mounts.${idx}.type`)}
                               className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
-                              placeholder="audio/mpeg"
-                            />
+                            >
+                              <option value="">(none)</option>
+                              <option value="audio/mpeg">audio/mpeg (MP3)</option>
+                              <option value="audio/aac">audio/aac</option>
+                              <option value="audio/aacp">audio/aacp (AAC+)</option>
+                              <option value="application/ogg">application/ogg</option>
+                              <option value="audio/ogg">audio/ogg</option>
+                              <option value="audio/opus">audio/opus</option>
+                              <option value="audio/flac">audio/flac</option>
+                            </select>
                           </div>
                           <div>
                             <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-                              Subtype
-                              <HelpTooltip text="Codec subtype, e.g., mp3, ogg" />
+                              Bitrate
+                              <HelpTooltip text="Stream bitrate in kbps. Pure metadata for listeners — doesn't enforce anything." />
                             </label>
-                            <input
-                              {...register(`mounts.${idx}.subtype`)}
+                            <select
+                              {...register(`mounts.${idx}.bitrate`, {
+                                setValueAs: (v) => (v === '' || v == null ? undefined : Number(v)),
+                              })}
                               className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
-                              placeholder="mp3"
-                            />
+                            >
+                              <option value="">(none)</option>
+                              <option value="32">32 kbps</option>
+                              <option value="64">64 kbps</option>
+                              <option value="96">96 kbps</option>
+                              <option value="128">128 kbps</option>
+                              <option value="160">160 kbps</option>
+                              <option value="192">192 kbps</option>
+                              <option value="256">256 kbps</option>
+                              <option value="320">320 kbps</option>
+                            </select>
                           </div>
                         </div>
                         <label className="flex items-center gap-2 text-sm text-zinc-300">

@@ -83,7 +83,6 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
         genre: mount.genre?.[0],
         bitrate: bitrateRaw ? parseInt(bitrateRaw, 10) : undefined,
         type: mount.type?.[0],
-        subtype: mount.subtype?.[0],
         public: publicRaw !== undefined ? publicRaw === '1' || publicRaw === 'true' : undefined,
       };
     });
@@ -190,7 +189,6 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
         ...(mount.genre && { genre: [mount.genre] }),
         ...(mount.bitrate !== undefined && { bitrate: [mount.bitrate.toString()] }),
         ...(mount.type && { type: [mount.type] }),
-        ...(mount.subtype && { subtype: [mount.subtype] }),
         ...(mount.public !== undefined && { public: [mount.public ? '1' : '0'] }),
       })),
       paths: [

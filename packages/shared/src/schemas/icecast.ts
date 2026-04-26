@@ -21,7 +21,6 @@ export const MountPointSchema = z.object({
   genre: z.string().optional(),
   bitrate: z.number().int().nonnegative().optional(),
   type: z.string().optional(),
-  subtype: z.string().optional(),
   public: z.boolean().optional(),
 });
 
