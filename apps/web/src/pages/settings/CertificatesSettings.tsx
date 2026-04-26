@@ -1,6 +1,6 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader, Upload, Trash2, FileLock, AlertCircle, Check, ChevronDown, Wand2, Eye, X } from 'lucide-react';
+import { Loader, Trash2, FileLock, AlertCircle, Check, ChevronDown, Wand2, Eye, X } from 'lucide-react';
 import {
   fetchCertificates,
   fetchCertificateDetails,
@@ -356,23 +356,17 @@ export function CertificatesSettings() {
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-2">Using a Certificate</h2>
         <ol className="text-sm text-zinc-400 space-y-2 list-decimal list-inside">
-          <li>Upload a combined PEM file above.</li>
+          <li>Upload or generate a combined PEM file above.</li>
           <li>
-            Go to the <span className="text-zinc-200 font-medium">Icecast</span> tab → Listen Sockets,
-            and check <span className="text-zinc-200 font-medium">SSL/TLS</span> on a socket (e.g., port 8443).
+            Go to <span className="text-zinc-200 font-medium">Settings → Icecast → Listen Sockets</span>,
+            check <span className="text-zinc-200 font-medium">SSL/TLS</span> on a socket (e.g., port 8443).
           </li>
           <li>
-            Set the certificate path in your Icecast config (the path to your uploaded cert in{' '}
-            <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">/etc/icecast2/certs/</code>{' '}
-            inside the container). UI for this is coming next.
+            In <span className="text-zinc-200 font-medium">Global Security</span>, pick this certificate
+            from the SSL Certificate dropdown.
           </li>
-          <li>Save & Restart Icecast.</li>
+          <li>Save &amp; Restart Icecast.</li>
         </ol>
-        <p className="text-xs text-zinc-500 mt-4 flex items-start gap-2">
-          <Upload className="w-3.5 h-3.5 mt-0.5 flex-shrink-0" />
-          For now, certificates are uploaded but not yet wired into the Icecast config from the UI —
-          that's the last piece of this phase.
-        </p>
       </section>
 
       {viewingCert && (

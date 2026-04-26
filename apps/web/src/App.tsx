@@ -18,10 +18,10 @@ export function App() {
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/" element={<Dashboard />} />
+            <Route path="/certificates" element={<CertificatesSettings />} />
             <Route path="/settings" element={<SettingsLayout />}>
               <Route index element={<Navigate to="icecast" replace />} />
               <Route path="icecast" element={<IcecastSettings />} />
-              <Route path="certificates" element={<CertificatesSettings />} />
               <Route path="users" element={<UsersSettings />} />
               <Route path="liquidsoap" element={<LiquidSoapSettings />} />
             </Route>

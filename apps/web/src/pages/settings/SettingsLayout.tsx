@@ -2,7 +2,6 @@ import { NavLink, Outlet } from 'react-router-dom';
 
 const tabs = [
   { label: 'Icecast', path: '/settings/icecast' },
-  { label: 'Certificates', path: '/settings/certificates' },
   { label: 'Users', path: '/settings/users' },
   { label: 'LiquidSoap', path: '/settings/liquidsoap' },
 ];

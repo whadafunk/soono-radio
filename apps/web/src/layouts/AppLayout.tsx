@@ -5,6 +5,7 @@ import { Menu, X, Radio } from 'lucide-react';
 const navItems = [
   { label: 'Dashboard', path: '/' },
   { label: 'Settings', path: '/settings' },
+  { label: 'Certificates', path: '/certificates' },
   { label: 'LiquidSoap', path: '/liquidsoup' },
   { label: 'Playlists', path: '/playlists' },
   { label: 'Jingles', path: '/jingles' },
