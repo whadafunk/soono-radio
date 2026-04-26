@@ -125,7 +125,12 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
       relay_servers: icecast['relay-servers']?.[0],
     },
     ssl: {
-      certificate_path: icecast['ssl-certificate']?.[0] || null,
+      // Debian/Ubuntu icecast2 expects <ssl-certificate> inside <paths>; upstream/older
+      // configs put it at root. Read from paths first, fall back to root for compat.
+      certificate_path:
+        icecast.paths?.[0]?.['ssl-certificate']?.[0] ||
+        icecast['ssl-certificate']?.[0] ||
+        null,
     },
     limits: {
       max_sources: parseInt(limits?.sources?.[0] || '10', 10),
@@ -167,9 +172,6 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
           'admin-password': [config.authentication.admin_password],
         },
       ],
-      ...(config.ssl?.certificate_path && {
-        'ssl-certificate': [config.ssl.certificate_path],
-      }),
       'listen-socket': config.network.listen_sockets.map((sock) => ({
         port: [sock.port.toString()],
         'bind-address': [sock.bind_address],
@@ -197,6 +199,10 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
           logdir: ['/usr/local/icecast/logs'],
           webroot: ['/usr/local/icecast/share/icecast/web'],
           adminroot: ['/usr/local/icecast/share/icecast/admin'],
+          // Debian/Ubuntu icecast2 expects <ssl-certificate> inside <paths>
+          ...(config.ssl?.certificate_path && {
+            'ssl-certificate': [config.ssl.certificate_path],
+          }),
         },
       ],
       logging: [
