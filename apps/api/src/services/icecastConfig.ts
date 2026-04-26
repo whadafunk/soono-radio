@@ -195,10 +195,12 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
       })),
       paths: [
         {
-          basedir: ['/usr/local/icecast'],
+          // Paths the Ubuntu/Debian icecast2 package expects. Hardcoded because
+          // they're properties of the package install, not user-configurable.
+          basedir: ['/usr/share/icecast2'],
           logdir: ['/usr/local/icecast/logs'],
-          webroot: ['/usr/local/icecast/share/icecast/web'],
-          adminroot: ['/usr/local/icecast/share/icecast/admin'],
+          webroot: ['/etc/icecast2/web'],
+          adminroot: ['/etc/icecast2/admin'],
           // Debian/Ubuntu icecast2 expects <ssl-certificate> inside <paths>
           ...(config.ssl?.certificate_path && {
             'ssl-certificate': [config.ssl.certificate_path],
