@@ -16,6 +16,7 @@ docker run \
   --rm \
   --user "$(id -u):$(id -g)" \
   -p 8000:8000 \
+  -p 8001:8001 \
   -v "$(pwd)/icecast/icecast.xml:/etc/icecast2/icecast.xml" \
   -v "$(pwd)/icecast/logs:/usr/local/icecast/logs" \
   -v "$(pwd)/icecast/certs:/etc/icecast2/certs:ro" \

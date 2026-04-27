@@ -1,4 +1,11 @@
-import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
+import {
+  IcecastConfig,
+  IcecastConfigSchema,
+  LiquidsoapConfig,
+  LiquidsoapConfigSchema,
+  LiquidsoapStatus,
+  LiquidsoapStatusSchema,
+} from '@radio/shared';
 
 const API_BASE = '/api';
 
@@ -50,6 +57,18 @@ export async function saveRawXml(xml: string): Promise<void> {
   if (!res.ok) {
     const error = await res.json();
     throw new Error(error.error || 'Failed to save XML');
+  }
+}
+
+export async function kickIcecastSource(mount: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/icecast/mounts/kick`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ mount }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to kick source: ${res.statusText}`);
   }
 }
 
@@ -151,4 +170,75 @@ export async function deleteCertificate(name: string): Promise<void> {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Delete failed: ${res.statusText}`);
   }
+}
+
+export async function fetchLiquidsoapConfig(): Promise<LiquidsoapConfig> {
+  const res = await fetch(`${API_BASE}/liquidsoap/config`);
+  if (!res.ok) throw new Error(`Failed to fetch Liquidsoap config: ${res.statusText}`);
+  const data = await res.json();
+  return LiquidsoapConfigSchema.parse(data);
+}
+
+export async function updateLiquidsoapConfig(config: LiquidsoapConfig): Promise<void> {
+  const res = await fetch(`${API_BASE}/liquidsoap/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(`Failed to update Liquidsoap config: ${JSON.stringify(error)}`);
+  }
+}
+
+export async function fetchLiquidsoapRawScript(): Promise<string> {
+  const res = await fetch(`${API_BASE}/liquidsoap/script/raw`);
+  if (!res.ok) throw new Error(`Failed to fetch radio.liq: ${res.statusText}`);
+  const data = await res.json();
+  return data.script;
+}
+
+export async function saveLiquidsoapRawScript(script: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/liquidsoap/script/raw`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ script }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to save radio.liq: ${res.statusText}`);
+  }
+}
+
+export async function fetchLiquidsoapStatus(): Promise<LiquidsoapStatus> {
+  const res = await fetch(`${API_BASE}/liquidsoap/status`);
+  if (!res.ok) throw new Error(`Failed to fetch Liquidsoap status: ${res.statusText}`);
+  const data = await res.json();
+  return LiquidsoapStatusSchema.parse(data);
+}
+
+export async function restartLiquidsoap(): Promise<{ success: boolean }> {
+  const res = await fetch(`${API_BASE}/liquidsoap/restart`, { method: 'POST' });
+  if (!res.ok) {
+    const error = await res.json().catch(() => ({}));
+    throw new Error(error.error || 'Failed to restart Liquidsoap');
+  }
+
+  // Poll status until reachable, similar to the Icecast restart flow.
+  const maxAttempts = 20;
+  for (let i = 0; i < maxAttempts; i++) {
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    try {
+      const statusRes = await fetch(`${API_BASE}/liquidsoap/status`);
+      if (statusRes.ok) {
+        const status = await statusRes.json();
+        if (status.reachable) return { success: true };
+      }
+    } catch {
+      // keep polling
+    }
+  }
+
+  // Liquidsoap may take a few seconds to bind telnet. Treat this as soft success.
+  return { success: true };
 }

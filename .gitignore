@@ -9,3 +9,7 @@ pnpm-lock.yaml
 .playwright-mcp/
 icecast/logs/
 icecast/certs/*.pem
+liquidsoap/config.json
+liquidsoap/radio.liq
+liquidsoap/audio/*
+!liquidsoap/audio/.gitkeep

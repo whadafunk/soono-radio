@@ -25,7 +25,6 @@ export function App() {
               <Route path="users" element={<UsersSettings />} />
               <Route path="liquidsoap" element={<LiquidSoapSettings />} />
             </Route>
-            <Route path="/liquidsoup" element={<ComingSoon page="LiquidSoap" />} />
             <Route path="/playlists" element={<ComingSoon page="Playlists" />} />
             <Route path="/jingles" element={<ComingSoon page="Jingles" />} />
           </Route>

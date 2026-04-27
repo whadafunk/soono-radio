@@ -4,6 +4,7 @@ import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
 import { icecastRoutes } from './routes/icecast.js';
 import { certificateRoutes } from './routes/certificates.js';
+import { liquidsoapRoutes } from './routes/liquidsoap.js';
 
 const fastify = Fastify({
   logger: true,
@@ -21,6 +22,7 @@ fastify.register(multipart, {
 
 fastify.register(icecastRoutes);
 fastify.register(certificateRoutes);
+fastify.register(liquidsoapRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Radio API Server' };

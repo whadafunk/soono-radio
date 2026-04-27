@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { IcecastConfigSchema } from '@radio/shared';
 import { readIcecastConfig, writeIcecastConfig } from '../services/icecastConfig.js';
-import { fetchAllMountStats, fetchIcecastStats } from '../services/icecastStats.js';
+import { fetchAllMountStats, fetchIcecastStats, killIcecastSource } from '../services/icecastStats.js';
 
 export async function icecastRoutes(fastify: FastifyInstance) {
   fastify.get<{ Reply: any }>('/icecast/config', async (request, reply) => {
@@ -61,6 +61,22 @@ export async function icecastRoutes(fastify: FastifyInstance) {
       const mount = (request.params as any).mount || '/stream';
       const stats = await fetchIcecastStats(mount);
       return reply.send(stats);
+    },
+  );
+
+  fastify.post<{ Body: { mount?: string }; Reply: any }>(
+    '/icecast/mounts/kick',
+    async (request, reply) => {
+      const mount = request.body?.mount;
+      if (!mount || typeof mount !== 'string' || !mount.startsWith('/')) {
+        return reply.status(400).send({ error: 'mount must be a path starting with /' });
+      }
+      try {
+        await killIcecastSource(mount);
+        return reply.send({ success: true });
+      } catch (err) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
     },
   );
 

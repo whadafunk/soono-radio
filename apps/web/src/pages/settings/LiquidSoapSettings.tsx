@@ -1,8 +1,152 @@
+import { useState } from 'react';
+import { useQuery, useMutation } from '@tanstack/react-query';
+import { useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { LiquidsoapConfig, LiquidsoapConfigSchema } from '@radio/shared';
+import {
+  fetchLiquidsoapConfig,
+  updateLiquidsoapConfig,
+  fetchLiquidsoapRawScript,
+  saveLiquidsoapRawScript,
+  restartLiquidsoap,
+} from '../../api';
+import { Loader, Check, AlertCircle, Code } from 'lucide-react';
+import { RawScriptEditor } from '../../components/RawScriptEditor';
+import { OutputSection } from './liquidsoap-sections/OutputSection';
+import { HarborSection } from './liquidsoap-sections/HarborSection';
+import { AutomationSection } from './liquidsoap-sections/AutomationSection';
+import { CrossfadeSection } from './liquidsoap-sections/CrossfadeSection';
+
 export function LiquidSoapSettings() {
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [showRawScript, setShowRawScript] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
+
+  const { data: config, isLoading, error } = useQuery({
+    queryKey: ['liquidsoap-config'],
+    queryFn: fetchLiquidsoapConfig,
+  });
+
+  const {
+    register,
+    handleSubmit,
+    control,
+    formState: { errors },
+    reset,
+  } = useForm<LiquidsoapConfig>({
+    resolver: zodResolver(LiquidsoapConfigSchema),
+    values: config,
+  });
+
+  const mutation = useMutation({
+    mutationFn: async (data: LiquidsoapConfig) => {
+      await updateLiquidsoapConfig(data);
+      setIsRestarting(true);
+      setToast({ type: 'success', message: 'Settings saved. Restarting Liquidsoap...' });
+      await restartLiquidsoap();
+      setIsRestarting(false);
+      setToast({ type: 'success', message: '✓ Liquidsoap restarted successfully' });
+      setTimeout(() => setToast(null), 5000);
+    },
+    onError: (err) => {
+      setIsRestarting(false);
+      setToast({ type: 'error', message: `✗ Error: ${(err as Error).message}` });
+      setTimeout(() => setToast(null), 5000);
+    },
+  });
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-96">
+        <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-300">
+        <p>Failed to load Liquidsoap settings</p>
+      </div>
+    );
+  }
+
   return (
-    <div>
-      <h1 className="text-3xl font-bold text-white">LiquidSoap</h1>
-      <p className="text-zinc-400 mt-2">Coming soon — configure the LiquidSoap audio engine here.</p>
+    <div className="space-y-6 max-w-5xl">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <h1 className="text-3xl font-bold text-white">LiquidSoap Settings</h1>
+          <p className="text-zinc-400 mt-2">
+            The audio engine — bridges live broadcasts and automation, then publishes to Icecast.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setShowRawScript(true)}
+            className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
+          >
+            <Code className="w-4 h-4" />
+            Raw Script
+          </button>
+        </div>
+      </div>
+
+      {toast && (
+        <div
+          className={`flex items-center gap-2 px-4 py-3 rounded-lg ${
+            toast.type === 'success'
+              ? 'bg-green-900/20 border border-green-800 text-green-300'
+              : 'bg-red-900/20 border border-red-800 text-red-300'
+          }`}
+        >
+          {toast.type === 'success' ? <Check className="w-5 h-5" /> : <AlertCircle className="w-5 h-5" />}
+          <p>{toast.message}</p>
+        </div>
+      )}
+
+      <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-8">
+        <OutputSection register={register} errors={errors} />
+        <HarborSection control={control} register={register} errors={errors} />
+        <AutomationSection register={register} control={control} />
+        <CrossfadeSection register={register} errors={errors} />
+
+        <div className="flex gap-4">
+          <button
+            type="submit"
+            disabled={mutation.isPending || isRestarting}
+            className="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {mutation.isPending || isRestarting ? (
+              <>
+                <Loader className="w-4 h-4 animate-spin" />
+                {isRestarting ? 'Restarting...' : 'Saving...'}
+              </>
+            ) : (
+              'Save & Restart'
+            )}
+          </button>
+          <button
+            type="button"
+            onClick={() => reset()}
+            disabled={mutation.isPending || isRestarting}
+            className="px-6 py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            Reset
+          </button>
+        </div>
+      </form>
+
+      <RawScriptEditor
+        isOpen={showRawScript}
+        title="Edit radio.liq"
+        fetchScript={fetchLiquidsoapRawScript}
+        saveScript={async (script) => {
+          await saveLiquidsoapRawScript(script);
+        }}
+        onClose={() => setShowRawScript(false)}
+        hint="Editing the raw script bypasses the form. The next 'Save & Restart' from the form will overwrite this."
+      />
     </div>
   );
 }

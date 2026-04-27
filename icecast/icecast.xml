@@ -15,20 +15,31 @@
     <admin-user>admin</admin-user>
     <admin-password>adminadmin</admin-password>
   </authentication>
-  <ssl-certificate>/etc/icecast2/certs/server.pem</ssl-certificate>
   <listen-socket>
     <port>8000</port>
+    <bind-address>0.0.0.0</bind-address>
+    <ssl>1</ssl>
+  </listen-socket>
+  <listen-socket>
+    <port>8001</port>
     <bind-address>0.0.0.0</bind-address>
   </listen-socket>
   <mount>
     <mount-name>/stream</mount-name>
     <max-listeners>-1</max-listeners>
+    <stream-name>mf radio</stream-name>
+    <stream-description>plays shit</stream-description>
+    <genre>varios</genre>
+    <bitrate>256</bitrate>
+    <type>mpeg</type>
+    <public>0</public>
   </mount>
   <paths>
-    <basedir>/usr/local/icecast</basedir>
+    <basedir>/usr/share/icecast2</basedir>
     <logdir>/usr/local/icecast/logs</logdir>
-    <webroot>/usr/local/icecast/share/icecast/web</webroot>
-    <adminroot>/usr/local/icecast/share/icecast/admin</adminroot>
+    <webroot>/etc/icecast2/web</webroot>
+    <adminroot>/etc/icecast2/admin</adminroot>
+    <ssl-certificate>/etc/icecast2/certs/gigi-serv.pem</ssl-certificate>
   </paths>
   <logging>
     <accesslog>access.log</accesslog>

@@ -27,6 +27,9 @@ export function GlobalSecuritySection({ control, register, certsData }: Props) {
               <PasswordInput value={field.value} onChange={field.onChange} />
             )}
           />
+          <p className="text-xs text-zinc-500 mt-2">
+            Liquidsoap reuses this password automatically when it publishes to Icecast — no need to set it twice.
+          </p>
         </div>
         <div className="grid grid-cols-2 gap-4">
           <div>

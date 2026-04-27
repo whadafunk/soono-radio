@@ -1,7 +1,13 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { Activity, Users, Gauge, Radio, Power, Loader } from 'lucide-react';
-import { fetchIcecastStats, fetchIcecastConfig, restartIcecast } from '../api';
-import { useState } from 'react';
+import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic } from 'lucide-react';
+import {
+  fetchIcecastStats,
+  fetchIcecastConfig,
+  restartIcecast,
+  kickIcecastSource,
+  fetchLiquidsoapStatus,
+} from '../api';
+import { useRef, useState } from 'react';
 
 export function Dashboard() {
   const [restartToast, setRestartToast] = useState<string | null>(null);
@@ -17,6 +23,12 @@ export function Dashboard() {
     queryFn: fetchIcecastConfig,
   });
 
+  const { data: lsStatus } = useQuery({
+    queryKey: ['liquidsoap-status'],
+    queryFn: fetchLiquidsoapStatus,
+    refetchInterval: 3000,
+  });
+
   const restartMutation = useMutation({
     mutationFn: restartIcecast,
     onSuccess: (data) => {
@@ -28,6 +40,36 @@ export function Dashboard() {
       setTimeout(() => setRestartToast(null), 5000);
     },
   });
+
+  const [kickingMount, setKickingMount] = useState<string | null>(null);
+  const [armedMount, setArmedMount] = useState<string | null>(null);
+  const armTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const kickMutation = useMutation({
+    mutationFn: kickIcecastSource,
+    onMutate: (mount) => setKickingMount(mount),
+    onSettled: () => setKickingMount(null),
+    onSuccess: (_, mount) => {
+      setRestartToast(`✓ Source kicked on ${mount}. The broadcaster can reconnect now.`);
+      setTimeout(() => setRestartToast(null), 5000);
+    },
+    onError: (err) => {
+      setRestartToast(`✗ Kick failed: ${(err as Error).message}`);
+      setTimeout(() => setRestartToast(null), 5000);
+    },
+  });
+
+  const handleKick = (mount: string) => {
+    if (armedMount === mount) {
+      if (armTimeout.current) clearTimeout(armTimeout.current);
+      setArmedMount(null);
+      kickMutation.mutate(mount);
+      return;
+    }
+    setArmedMount(mount);
+    if (armTimeout.current) clearTimeout(armTimeout.current);
+    armTimeout.current = setTimeout(() => setArmedMount(null), 3000);
+  };
 
   const formatUptime = (seconds: number): string => {
     if (!seconds) return '—';
@@ -78,7 +120,46 @@ export function Dashboard() {
       {/* Live Stream Stats */}
       <section>
         <h2 className="text-lg font-semibold text-white mb-4">Live Stream</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-zinc-400 text-sm font-medium">On Air</p>
+                <p
+                  className={`text-2xl font-bold mt-2 flex items-center gap-1 ${
+                    !lsStatus || !lsStatus.reachable
+                      ? 'text-zinc-500'
+                      : lsStatus.on_air === 'live'
+                        ? 'text-red-400'
+                        : lsStatus.on_air === 'automation'
+                          ? 'text-green-400'
+                          : 'text-zinc-500'
+                  }`}
+                >
+                  {!lsStatus || !lsStatus.reachable
+                    ? '● NO ENGINE'
+                    : lsStatus.on_air === 'live'
+                      ? '● LIVE'
+                      : lsStatus.on_air === 'automation'
+                        ? '● AUTO'
+                        : '● NO SOURCE'}
+                </p>
+                <p className="text-xs text-zinc-500 mt-1">Liquidsoap</p>
+              </div>
+              <Mic
+                className={`w-8 h-8 ${
+                  !lsStatus || !lsStatus.reachable
+                    ? 'text-zinc-700'
+                    : lsStatus.on_air === 'live'
+                      ? 'text-red-500'
+                      : lsStatus.on_air === 'automation'
+                        ? 'text-green-500'
+                        : 'text-zinc-700'
+                }`}
+              />
+            </div>
+          </div>
+
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -86,6 +167,7 @@ export function Dashboard() {
                 <p className={`text-2xl font-bold mt-2 flex items-center gap-1 ${isOnline ? 'text-green-400' : 'text-red-400'}`}>
                   {isOnline ? '● LIVE' : '● OFFLINE'}
                 </p>
+                <p className="text-xs text-zinc-500 mt-1">Icecast</p>
               </div>
               <Activity className={`w-8 h-8 ${isOnline ? 'text-green-500' : 'text-red-500'}`} />
             </div>
@@ -176,14 +258,32 @@ export function Dashboard() {
           <div className="grid grid-cols-1 gap-3">
             {config.mounts.map((mount) => (
               <div key={mount.name} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex items-center justify-between gap-4">
+                  <div className="min-w-0">
                     <p className="font-medium text-white">{mount.name}</p>
                     <p className="text-xs text-zinc-500 mt-1">
                       Max {mount.max_listeners === -1 ? 'unlimited' : mount.max_listeners} listeners
                       {mount.fallback_mount && ` • Fallback: ${mount.fallback_mount}`}
                     </p>
                   </div>
+                  <button
+                    type="button"
+                    onClick={() => handleKick(mount.name)}
+                    disabled={kickingMount === mount.name}
+                    title="Force-disconnect any source on this mount (workaround for the Icecast 2.4 SSL stale-source bug). Click twice to confirm."
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 ${
+                      armedMount === mount.name
+                        ? 'bg-red-600/20 border-red-600 text-red-300 hover:bg-red-600/30'
+                        : 'bg-zinc-800 hover:bg-red-900/30 border-zinc-700 hover:border-red-800 text-zinc-300 hover:text-red-300'
+                    }`}
+                  >
+                    {kickingMount === mount.name ? (
+                      <Loader className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <Zap className="w-3.5 h-3.5" />
+                    )}
+                    {armedMount === mount.name ? 'Click again to kick' : 'Kick source'}
+                  </button>
                 </div>
               </div>
             ))}
