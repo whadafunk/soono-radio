@@ -8,7 +8,7 @@ build/
 pnpm-lock.yaml
 .playwright-mcp/
 icecast/logs/
-icecast/certs/*.pem
+data/certs/*.pem
 liquidsoap/supervisor.json
 liquidsoap/mix-engine.liq
 liquidsoap/audio/*

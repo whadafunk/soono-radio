@@ -8,8 +8,9 @@ import { promisify } from 'util';
 const execFile = promisify(execFileCb);
 
 const CERTS_DIR =
-  process.env.ICECAST_CERTS_DIR ||
-  join(process.cwd(), '..', '..', 'icecast', 'certs');
+  process.env.RADIO_CERTS_DIR ||
+  process.env.ICECAST_CERTS_DIR || // legacy env name; kept for backwards compat
+  join(process.cwd(), '..', '..', 'data', 'certs');
 
 const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----/;
 const PEM_KEY_RE = /-----BEGIN (RSA |EC |ENCRYPTED |)PRIVATE KEY-----/;

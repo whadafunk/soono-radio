@@ -142,7 +142,7 @@ export function CertificatesSettings() {
         <p className="text-sm text-zinc-400 mb-4">
           Combined PEM file (certificate + private key). Stored in{' '}
           <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">
-            {data?.dir || 'icecast/certs/'}
+            {data?.dir || 'data/certs/'}
           </code>{' '}
           with restrictive permissions.
         </p>
