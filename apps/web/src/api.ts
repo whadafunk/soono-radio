@@ -7,6 +7,9 @@ import {
   LiquidsoapStatusSchema,
   IngestJob,
   IngestJobSchema,
+  Media,
+  MediaSchema,
+  MediaPatch,
   MediaCategory,
 } from '@radio/shared';
 
@@ -263,6 +266,65 @@ export async function uploadLibraryFiles(
     });
     xhr.send(form);
   });
+}
+
+export interface LibraryListParams {
+  q?: string;
+  category?: string;
+  favorite?: boolean;
+  sort?: string;
+  order?: 'asc' | 'desc';
+  limit?: number;
+  offset?: number;
+}
+
+export interface LibraryListResponse {
+  items: Media[];
+  total: number;
+  limit: number;
+  offset: number;
+}
+
+export async function fetchLibrary(params: LibraryListParams = {}): Promise<LibraryListResponse> {
+  const search = new URLSearchParams();
+  if (params.q) search.set('q', params.q);
+  if (params.category) search.set('category', params.category);
+  if (params.favorite !== undefined) search.set('favorite', String(params.favorite));
+  if (params.sort) search.set('sort', params.sort);
+  if (params.order) search.set('order', params.order);
+  if (params.limit !== undefined) search.set('limit', String(params.limit));
+  if (params.offset !== undefined) search.set('offset', String(params.offset));
+
+  const res = await fetch(`${API_BASE}/library?${search.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch library: ${res.statusText}`);
+  const data = await res.json();
+  return {
+    ...data,
+    items: data.items.map((i: unknown) => MediaSchema.parse(i)),
+  };
+}
+
+export async function fetchLibraryItem(id: number): Promise<Media> {
+  const res = await fetch(`${API_BASE}/library/${id}`);
+  if (!res.ok) throw new Error(`Failed to fetch track: ${res.statusText}`);
+  return MediaSchema.parse(await res.json());
+}
+
+export async function updateLibraryItem(id: number, patch: MediaPatch): Promise<Media> {
+  const res = await fetch(`${API_BASE}/library/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(patch),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to update: ${res.statusText}`);
+  }
+  return MediaSchema.parse(await res.json());
+}
+
+export function libraryAudioUrl(id: number): string {
+  return `${API_BASE}/library/${id}/audio`;
 }
 
 export async function fetchIngestJob(jobId: string): Promise<IngestJob> {

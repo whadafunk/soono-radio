@@ -1,6 +1,6 @@
 # Plan: Library & Ingest Pipeline
 
-**Status:** Phases 1, 2, 3 shipped. Phase 4 next.
+**Status:** Phases 1, 2, 3, 4 shipped. Phase 5 next.
 **Last reviewed:** 2026-04-28
 **Depends on:** Liquidsoap integration (shipped in commit `76fc39e`).
 **Unblocks:** supervisor + scheduler, clocks/schedules, ad rotation, reports.
@@ -241,7 +241,7 @@ preserves loudness). Gain is purely metadata until playout.
 - `GET /library/ingest/:id` — job status polling
 - Bare-bones upload page in UI (no fancy library UI yet — just "drop file, see status")
 
-### Phase 4 — library browse API + UI
+### Phase 4 — library browse API + UI ✅ shipped
 - `GET /library` — list with category filter, search, sort, pagination
 - `GET /library/:id` — full detail
 - `PATCH /library/:id` — edit display metadata (title/artist/notes/favorite/category)
