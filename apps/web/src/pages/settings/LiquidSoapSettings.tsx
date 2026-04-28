@@ -75,9 +75,9 @@ export function LiquidSoapSettings() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-white">LiquidSoap Settings</h1>
+          <h1 className="text-3xl font-bold text-white">Mix Engine</h1>
           <p className="text-zinc-400 mt-2">
-            The audio engine — bridges live broadcasts and automation, then publishes to Icecast.
+            Liquidsoap — the mixing board. Accepts live broadcasts, plays the queue fed by the Supervisor, and sends the result to the Streaming Engine.
           </p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
@@ -139,7 +139,7 @@ export function LiquidSoapSettings() {
 
       <RawScriptEditor
         isOpen={showRawScript}
-        title="Edit radio.liq"
+        title="Edit mix-engine.liq"
         fetchScript={fetchLiquidsoapRawScript}
         saveScript={async (script) => {
           await saveLiquidsoapRawScript(script);

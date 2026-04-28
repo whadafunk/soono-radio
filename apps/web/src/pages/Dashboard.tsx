@@ -32,7 +32,7 @@ export function Dashboard() {
   const restartMutation = useMutation({
     mutationFn: restartIcecast,
     onSuccess: (data) => {
-      setRestartToast(`✓ Icecast restarted successfully! Uptime: ${data.uptime}s`);
+      setRestartToast(`✓ Streaming Engine restarted successfully! Uptime: ${data.uptime}s`);
       setTimeout(() => setRestartToast(null), 5000);
     },
     onError: (err) => {
@@ -88,13 +88,13 @@ export function Dashboard() {
         <div>
           <h1 className="text-3xl font-bold text-white">Dashboard</h1>
           <p className="text-zinc-400 mt-2">
-            {isOnline ? '✓ Icecast is running' : '✗ Icecast is not responding'}
+            {isOnline ? '✓ Streaming Engine is running' : '✗ Streaming Engine is not responding'}
           </p>
         </div>
         <button
           onClick={() => restartMutation.mutate()}
           disabled={restartMutation.isPending}
-          title="Restart Icecast server"
+          title="Restart Streaming Engine"
           className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
         >
           {restartMutation.isPending ? (
@@ -105,7 +105,7 @@ export function Dashboard() {
           ) : (
             <>
               <Power className="w-4 h-4" />
-              Restart Icecast
+              Restart Streaming
             </>
           )}
         </button>
@@ -144,7 +144,7 @@ export function Dashboard() {
                         ? '● AUTO'
                         : '● NO SOURCE'}
                 </p>
-                <p className="text-xs text-zinc-500 mt-1">Liquidsoap</p>
+                <p className="text-xs text-zinc-500 mt-1">Mix Engine</p>
               </div>
               <Mic
                 className={`w-8 h-8 ${
@@ -167,7 +167,7 @@ export function Dashboard() {
                 <p className={`text-2xl font-bold mt-2 flex items-center gap-1 ${isOnline ? 'text-green-400' : 'text-red-400'}`}>
                   {isOnline ? '● LIVE' : '● OFFLINE'}
                 </p>
-                <p className="text-xs text-zinc-500 mt-1">Icecast</p>
+                <p className="text-xs text-zinc-500 mt-1">Streaming Engine</p>
               </div>
               <Activity className={`w-8 h-8 ${isOnline ? 'text-green-500' : 'text-red-500'}`} />
             </div>
@@ -294,7 +294,7 @@ export function Dashboard() {
       {/* Error State */}
       {statsError && (
         <div className="bg-red-900/20 border border-red-800 rounded-lg p-6 text-red-300">
-          <p className="font-medium">Icecast Not Responding</p>
+          <p className="font-medium">Streaming Engine Not Responding</p>
           <p className="text-sm mt-1">
             Start Icecast in another terminal: <code className="bg-red-950 px-2 py-1 rounded text-xs">./start-icecast.sh</code>
           </p>
@@ -305,7 +305,7 @@ export function Dashboard() {
       {isOnline && !statsLoading && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
           <p className="text-zinc-300">
-            ✓ Icecast is running and configured correctly.
+            ✓ Streaming Engine is running and configured correctly.
           </p>
           <p className="text-zinc-400 text-sm mt-2">
             To start broadcasting, connect your audio source to one of the mount points above using the source password from Settings.

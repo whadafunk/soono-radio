@@ -18,7 +18,7 @@ docker run \
   --add-host=host.docker.internal:host-gateway \
   -p 8005:8005 \
   -p 127.0.0.1:1234:1234 \
-  -v "$(pwd)/liquidsoap/radio.liq:/etc/liquidsoap/radio.liq:ro" \
+  -v "$(pwd)/liquidsoap/mix-engine.liq:/etc/liquidsoap/mix-engine.liq:ro" \
   -v "$(pwd)/liquidsoap/audio:/audio" \
   radio-liquidsoap:latest
 

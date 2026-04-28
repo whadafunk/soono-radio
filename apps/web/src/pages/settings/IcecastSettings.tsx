@@ -87,8 +87,8 @@ export function IcecastSettings() {
     <div className="space-y-6 max-w-5xl">
       <div className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-3xl font-bold text-white">Icecast Settings</h1>
-          <p className="text-zinc-400 mt-2">Configure your streaming server</p>
+          <h1 className="text-3xl font-bold text-white">Streaming Engine</h1>
+          <p className="text-zinc-400 mt-2">Icecast — distributes the audio to listeners</p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
           <button

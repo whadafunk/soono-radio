@@ -1,9 +1,9 @@
 import { NavLink, Outlet } from 'react-router-dom';
 
 const tabs = [
-  { label: 'Icecast', path: '/settings/icecast' },
+  { label: 'Streaming Engine', path: '/settings/icecast' },
+  { label: 'Mix Engine', path: '/settings/liquidsoap' },
   { label: 'Users', path: '/settings/users' },
-  { label: 'LiquidSoap', path: '/settings/liquidsoap' },
 ];
 
 export function SettingsLayout() {

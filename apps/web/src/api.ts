@@ -200,7 +200,7 @@ export async function updateLiquidsoapConfig(config: LiquidsoapConfig): Promise<
 
 export async function fetchLiquidsoapRawScript(): Promise<string> {
   const res = await fetch(`${API_BASE}/liquidsoap/script/raw`);
-  if (!res.ok) throw new Error(`Failed to fetch radio.liq: ${res.statusText}`);
+  if (!res.ok) throw new Error(`Failed to fetch mix-engine.liq: ${res.statusText}`);
   const data = await res.json();
   return data.script;
 }
@@ -213,7 +213,7 @@ export async function saveLiquidsoapRawScript(script: string): Promise<void> {
   });
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `Failed to save radio.liq: ${res.statusText}`);
+    throw new Error(data.error || `Failed to save mix-engine.liq: ${res.statusText}`);
   }
 }
 

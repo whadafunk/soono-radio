@@ -9,8 +9,8 @@ pnpm-lock.yaml
 .playwright-mcp/
 icecast/logs/
 icecast/certs/*.pem
-liquidsoap/config.json
-liquidsoap/radio.liq
+liquidsoap/supervisor.json
+liquidsoap/mix-engine.liq
 liquidsoap/audio/*
 !liquidsoap/audio/.gitkeep
 data/radio.db
