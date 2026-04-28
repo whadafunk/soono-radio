@@ -5,6 +5,7 @@ import multipart from '@fastify/multipart';
 import { icecastRoutes } from './routes/icecast.js';
 import { certificateRoutes } from './routes/certificates.js';
 import { liquidsoapRoutes } from './routes/liquidsoap.js';
+import { runMigrations } from './db/index.js';
 
 const fastify = Fastify({
   logger: true,
@@ -30,6 +31,8 @@ fastify.get('/', async () => {
 
 const start = async () => {
   try {
+    await runMigrations();
+    fastify.log.info('Database migrations applied');
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
   } catch (err) {
     fastify.log.error(err);

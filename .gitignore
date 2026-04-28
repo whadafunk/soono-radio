@@ -13,3 +13,7 @@ liquidsoap/config.json
 liquidsoap/radio.liq
 liquidsoap/audio/*
 !liquidsoap/audio/.gitkeep
+data/radio.db
+data/radio.db-*
+data/incoming/
+media/
