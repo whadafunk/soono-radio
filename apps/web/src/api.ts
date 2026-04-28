@@ -5,6 +5,9 @@ import {
   LiquidsoapConfigSchema,
   LiquidsoapStatus,
   LiquidsoapStatusSchema,
+  IngestJob,
+  IngestJobSchema,
+  MediaCategory,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -215,6 +218,65 @@ export async function fetchLiquidsoapStatus(): Promise<LiquidsoapStatus> {
   if (!res.ok) throw new Error(`Failed to fetch Liquidsoap status: ${res.statusText}`);
   const data = await res.json();
   return LiquidsoapStatusSchema.parse(data);
+}
+
+export interface UploadedJob {
+  job_id: string;
+  filename: string;
+  size_bytes: number;
+}
+
+export async function uploadLibraryFiles(
+  files: File[],
+  category: MediaCategory,
+  onProgress?: (loaded: number, total: number) => void,
+): Promise<{ jobs: UploadedJob[] }> {
+  const form = new FormData();
+  form.append('category', category);
+  for (const file of files) form.append('files', file, file.name);
+
+  // Use XHR so we can report upload progress; fetch can't yet.
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${API_BASE}/library/upload`);
+    xhr.upload.addEventListener('progress', (e) => {
+      if (e.lengthComputable && onProgress) onProgress(e.loaded, e.total);
+    });
+    xhr.addEventListener('error', () => reject(new Error('Network error')));
+    xhr.addEventListener('load', () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch (err) {
+          reject(err);
+        }
+      } else {
+        let message = `Upload failed: ${xhr.status}`;
+        try {
+          const data = JSON.parse(xhr.responseText);
+          if (data.error) message = data.error;
+        } catch {
+          /* ignore parse */
+        }
+        reject(new Error(message));
+      }
+    });
+    xhr.send(form);
+  });
+}
+
+export async function fetchIngestJob(jobId: string): Promise<IngestJob> {
+  const res = await fetch(`${API_BASE}/library/ingest/${encodeURIComponent(jobId)}`);
+  if (!res.ok) throw new Error(`Failed to fetch ingest job: ${res.statusText}`);
+  const data = await res.json();
+  return IngestJobSchema.parse(data);
+}
+
+export async function fetchIngestJobs(): Promise<IngestJob[]> {
+  const res = await fetch(`${API_BASE}/library/ingest`);
+  if (!res.ok) throw new Error(`Failed to fetch ingest jobs: ${res.statusText}`);
+  const data = await res.json();
+  return data.jobs.map((j: unknown) => IngestJobSchema.parse(j));
 }
 
 export async function restartLiquidsoap(): Promise<{ success: boolean }> {

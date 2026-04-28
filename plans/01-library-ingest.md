@@ -1,6 +1,6 @@
 # Plan: Library & Ingest Pipeline
 
-**Status:** in progress (Phase 1 starting).
+**Status:** Phases 1, 2, 3 shipped. Phase 4 next.
 **Last reviewed:** 2026-04-28
 **Depends on:** Liquidsoap integration (shipped in commit `76fc39e`).
 **Unblocks:** supervisor + scheduler, clocks/schedules, ad rotation, reports.
@@ -217,7 +217,7 @@ preserves loudness). Gain is purely metadata until playout.
 
 ## Phases (each = one merge unit)
 
-### Phase 1 — DB foundation (this commit cycle)
+### Phase 1 — DB foundation ✅ shipped (commit 7f5fc84)
 - Add Drizzle + better-sqlite3 deps to `apps/api`
 - `apps/api/drizzle.config.ts`
 - `apps/api/src/db/schema.ts` — `media` and `ingest_jobs` tables
@@ -227,7 +227,7 @@ preserves loudness). Gain is purely metadata until playout.
 - `data/` dir created and gitignored
 - **No application code yet.** Reviewable as just SQL/schema files.
 
-### Phase 2 — ingest worker
+### Phase 2 — ingest worker ✅ shipped (commit a1b8790)
 - `apps/api/src/services/ingestWorker.ts` — single-flight queue
 - ffprobe wrapper, ffmpeg loudnorm wrapper (both as small services)
 - sha256 streaming hash
@@ -236,7 +236,7 @@ preserves loudness). Gain is purely metadata until playout.
 - `media` row insert
 - CLI driver for testing without the HTTP layer
 
-### Phase 3 — upload endpoint
+### Phase 3 — upload endpoint ✅ shipped
 - `POST /library/upload` — multipart, hands off to ingest worker, returns job ID
 - `GET /library/ingest/:id` — job status polling
 - Bare-bones upload page in UI (no fancy library UI yet — just "drop file, see status")

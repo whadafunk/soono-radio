@@ -7,6 +7,9 @@ import { IcecastSettings } from './pages/settings/IcecastSettings';
 import { CertificatesSettings } from './pages/settings/CertificatesSettings';
 import { UsersSettings } from './pages/settings/UsersSettings';
 import { LiquidSoapSettings } from './pages/settings/LiquidSoapSettings';
+import { LibraryLayout } from './pages/library/LibraryLayout';
+import { LibraryBrowse } from './pages/library/LibraryBrowse';
+import { LibraryUpload } from './pages/library/LibraryUpload';
 import { ComingSoon } from './pages/ComingSoon';
 
 const queryClient = new QueryClient();
@@ -24,6 +27,10 @@ export function App() {
               <Route path="icecast" element={<IcecastSettings />} />
               <Route path="users" element={<UsersSettings />} />
               <Route path="liquidsoap" element={<LiquidSoapSettings />} />
+            </Route>
+            <Route path="/library" element={<LibraryLayout />}>
+              <Route index element={<LibraryBrowse />} />
+              <Route path="upload" element={<LibraryUpload />} />
             </Route>
             <Route path="/playlists" element={<ComingSoon page="Playlists" />} />
             <Route path="/jingles" element={<ComingSoon page="Jingles" />} />
