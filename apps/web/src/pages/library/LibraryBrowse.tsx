@@ -1,6 +1,9 @@
-import { useState, useMemo, useRef, useEffect } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Loader, Search, Star, Play, Pause, X, Save, AlertCircle } from 'lucide-react';
+import {
+  Loader, Search, Star, Play, Pause, X, Save, AlertCircle,
+  Settings2, ChevronDown, ChevronUp, ChevronsUpDown, Filter, Check,
+} from 'lucide-react';
 import { MEDIA_CATEGORIES, MediaCategory, Media, MediaPatch } from '@radio/shared';
 import {
   fetchLibrary,
@@ -10,44 +13,99 @@ import {
   LibraryListResponse,
 } from '../../api';
 
-const SORTS: Array<{ value: string; label: string }> = [
-  { value: 'created_at', label: 'Recently Added' },
-  { value: 'title', label: 'Title' },
-  { value: 'artist', label: 'Artist' },
-  { value: 'duration_seconds', label: 'Duration' },
-  { value: 'bitrate_kbps', label: 'Bitrate' },
-  { value: 'play_count', label: 'Play Count' },
-  { value: 'last_played_at', label: 'Last Played' },
+type ColumnId =
+  | 'title'
+  | 'artist'
+  | 'album'
+  | 'category'
+  | 'duration_seconds'
+  | 'bitrate_kbps'
+  | 'loudness_lufs'
+  | 'play_count'
+  | 'year'
+  | 'created_at'
+  | 'last_played_at';
+
+interface ColumnDef {
+  id: ColumnId;
+  label: string;
+  sortable: boolean;
+  align: 'left' | 'right';
+  defaultVisible: boolean;
+}
+
+const COLUMNS: ColumnDef[] = [
+  { id: 'title',            label: 'Title',         sortable: true,  align: 'left',  defaultVisible: true },
+  { id: 'artist',           label: 'Artist',        sortable: true,  align: 'left',  defaultVisible: true },
+  { id: 'album',            label: 'Album',         sortable: true,  align: 'left',  defaultVisible: false },
+  { id: 'category',         label: 'Category',      sortable: false, align: 'left',  defaultVisible: true },
+  { id: 'duration_seconds', label: 'Duration',      sortable: true,  align: 'right', defaultVisible: true },
+  { id: 'bitrate_kbps',     label: 'Bitrate',       sortable: true,  align: 'right', defaultVisible: true },
+  { id: 'loudness_lufs',    label: 'LUFS',          sortable: false, align: 'right', defaultVisible: false },
+  { id: 'play_count',       label: 'Plays',         sortable: true,  align: 'right', defaultVisible: true },
+  { id: 'year',             label: 'Year',          sortable: false, align: 'right', defaultVisible: false },
+  { id: 'created_at',       label: 'Added',         sortable: true,  align: 'right', defaultVisible: false },
+  { id: 'last_played_at',   label: 'Last Played',   sortable: true,  align: 'right', defaultVisible: false },
 ];
+
+const VISIBLE_COLS_KEY = 'library-visible-columns-v1';
+
+function loadVisibleCols(): Set<ColumnId> {
+  try {
+    const raw = localStorage.getItem(VISIBLE_COLS_KEY);
+    if (raw) {
+      const arr: string[] = JSON.parse(raw);
+      const valid = arr.filter((id): id is ColumnId =>
+        COLUMNS.some((c) => c.id === id),
+      );
+      if (valid.length > 0) return new Set(valid);
+    }
+  } catch {
+    /* fall through */
+  }
+  return new Set(COLUMNS.filter((c) => c.defaultVisible).map((c) => c.id));
+}
 
 export function LibraryBrowse() {
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
-  const [category, setCategory] = useState<'' | MediaCategory>('');
+  const [categorySet, setCategorySet] = useState<Set<MediaCategory>>(new Set());
   const [favoriteOnly, setFavoriteOnly] = useState(false);
-  const [sort, setSort] = useState('created_at');
+  const [sort, setSort] = useState<ColumnId>('created_at');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [playingId, setPlayingId] = useState<number | null>(null);
+  const [visibleCols, setVisibleCols] = useState<Set<ColumnId>>(() => loadVisibleCols());
   const limit = 50;
 
-  // Debounce search input.
+  // Persist column visibility.
+  useEffect(() => {
+    localStorage.setItem(VISIBLE_COLS_KEY, JSON.stringify(Array.from(visibleCols)));
+  }, [visibleCols]);
+
+  // Debounce search.
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q), 250);
     return () => clearTimeout(t);
   }, [q]);
 
+  // Reset to page 1 whenever filters change.
   useEffect(() => {
     setOffset(0);
-  }, [debouncedQ, category, favoriteOnly, sort, order]);
+  }, [debouncedQ, categorySet, favoriteOnly, sort, order]);
+
+  const categoryParam = useMemo(
+    () => (categorySet.size === 0 ? undefined : Array.from(categorySet).join(',')),
+    [categorySet],
+  );
 
   const { data, isLoading, error } = useQuery<LibraryListResponse>({
-    queryKey: ['library', { q: debouncedQ, category, favoriteOnly, sort, order, limit, offset }],
+    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, sort, order, limit, offset }],
     queryFn: () =>
       fetchLibrary({
         q: debouncedQ || undefined,
-        category: category || undefined,
+        category: categoryParam,
         favorite: favoriteOnly ? true : undefined,
         sort,
         order,
@@ -58,6 +116,19 @@ export function LibraryBrowse() {
 
   const items = data?.items ?? [];
   const total = data?.total ?? 0;
+
+  const visibleColumns = COLUMNS.filter((c) => visibleCols.has(c.id));
+
+  const handleSortClick = (id: ColumnId) => {
+    if (!COLUMNS.find((c) => c.id === id)?.sortable) return;
+    if (sort === id) {
+      setOrder((o) => (o === 'asc' ? 'desc' : 'asc'));
+    } else {
+      setSort(id);
+      // Smart defaults: time/numeric columns default to descending.
+      setOrder(id === 'title' || id === 'artist' || id === 'album' ? 'asc' : 'desc');
+    }
+  };
 
   return (
     <div className="space-y-4 max-w-7xl">
@@ -77,38 +148,7 @@ export function LibraryBrowse() {
           />
         </div>
 
-        <select
-          value={category}
-          onChange={(e) => setCategory(e.target.value as '' | MediaCategory)}
-          className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-        >
-          <option value="">All categories</option>
-          {MEDIA_CATEGORIES.map((c) => (
-            <option key={c} value={c}>
-              {c}
-            </option>
-          ))}
-        </select>
-
-        <select
-          value={sort}
-          onChange={(e) => setSort(e.target.value)}
-          className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
-        >
-          {SORTS.map((s) => (
-            <option key={s.value} value={s.value}>
-              {s.label}
-            </option>
-          ))}
-        </select>
-
-        <button
-          onClick={() => setOrder((o) => (o === 'asc' ? 'desc' : 'asc'))}
-          className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white hover:bg-zinc-700 transition-colors"
-          title="Toggle sort direction"
-        >
-          {order === 'asc' ? '↑' : '↓'}
-        </button>
+        <CategoryMultiSelect value={categorySet} onChange={setCategorySet} />
 
         <button
           onClick={() => setFavoriteOnly((v) => !v)}
@@ -141,9 +181,15 @@ export function LibraryBrowse() {
       ) : (
         <LibraryTable
           items={items}
+          visibleColumns={visibleColumns}
+          sort={sort}
+          order={order}
+          onSortClick={handleSortClick}
           playingId={playingId}
           onTogglePlay={(id) => setPlayingId((cur) => (cur === id ? null : id))}
           onSelect={(id) => setSelectedId(id)}
+          visibleCols={visibleCols}
+          setVisibleCols={setVisibleCols}
         />
       )}
 
@@ -162,16 +208,177 @@ export function LibraryBrowse() {
   );
 }
 
+function CategoryMultiSelect({
+  value,
+  onChange,
+}: {
+  value: Set<MediaCategory>;
+  onChange: (next: Set<MediaCategory>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const toggle = (c: MediaCategory) => {
+    const next = new Set(value);
+    if (next.has(c)) next.delete(c);
+    else next.add(c);
+    onChange(next);
+  };
+
+  const label =
+    value.size === 0
+      ? 'All categories'
+      : value.size === 1
+        ? Array.from(value)[0]
+        : `${value.size} categories`;
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-2 px-3 py-2 border rounded-lg transition-colors ${
+          value.size > 0
+            ? 'bg-indigo-600/20 border-indigo-600 text-indigo-200'
+            : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+        }`}
+      >
+        <Filter className="w-4 h-4" />
+        <span className="capitalize">{label}</span>
+        <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-56 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
+          <button
+            onClick={() => onChange(new Set())}
+            className="w-full text-left px-3 py-1.5 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded"
+          >
+            Clear all
+          </button>
+          <div className="border-t border-zinc-800 my-1" />
+          {MEDIA_CATEGORIES.map((c) => {
+            const checked = value.has(c);
+            return (
+              <button
+                key={c}
+                onClick={() => toggle(c)}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
+              >
+                <span
+                  className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                    checked ? 'bg-indigo-600 border-indigo-600' : 'border-zinc-600'
+                  }`}
+                >
+                  {checked && <Check className="w-3 h-3 text-white" />}
+                </span>
+                <span className="capitalize">{c}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function ColumnPicker({
+  visibleCols,
+  setVisibleCols,
+}: {
+  visibleCols: Set<ColumnId>;
+  setVisibleCols: (next: Set<ColumnId>) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const toggle = (id: ColumnId) => {
+    const next = new Set(visibleCols);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    // Keep at least Title visible — it's the row identifier.
+    if (!next.has('title')) next.add('title');
+    setVisibleCols(next);
+  };
+
+  return (
+    <div ref={ref} className="relative inline-block">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="p-1 text-zinc-400 hover:text-white transition-colors"
+        title="Show/hide columns"
+      >
+        <Settings2 className="w-4 h-4" />
+      </button>
+      {open && (
+        <div className="absolute right-0 z-30 mt-1 w-56 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
+          <p className="px-3 py-1.5 text-xs text-zinc-500 uppercase tracking-wider">Columns</p>
+          {COLUMNS.map((c) => {
+            const checked = visibleCols.has(c.id);
+            const isLocked = c.id === 'title';
+            return (
+              <button
+                key={c.id}
+                onClick={() => !isLocked && toggle(c.id)}
+                disabled={isLocked}
+                className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+              >
+                <span
+                  className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
+                    checked ? 'bg-indigo-600 border-indigo-600' : 'border-zinc-600'
+                  }`}
+                >
+                  {checked && <Check className="w-3 h-3 text-white" />}
+                </span>
+                <span>{c.label}</span>
+                {isLocked && <span className="text-[10px] text-zinc-500 ml-auto">always</span>}
+              </button>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function LibraryTable({
   items,
+  visibleColumns,
+  sort,
+  order,
+  onSortClick,
   playingId,
   onTogglePlay,
   onSelect,
+  visibleCols,
+  setVisibleCols,
 }: {
   items: Media[];
+  visibleColumns: ColumnDef[];
+  sort: ColumnId;
+  order: 'asc' | 'desc';
+  onSortClick: (id: ColumnId) => void;
   playingId: number | null;
   onTogglePlay: (id: number) => void;
   onSelect: (id: number) => void;
+  visibleCols: Set<ColumnId>;
+  setVisibleCols: (next: Set<ColumnId>) => void;
 }) {
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
@@ -179,14 +386,19 @@ function LibraryTable({
         <thead className="bg-zinc-950/50 border-b border-zinc-800">
           <tr>
             <th className="w-10"></th>
-            <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Title</th>
-            <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Artist</th>
-            <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Category</th>
-            <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Duration</th>
-            <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Bitrate</th>
-            <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">LUFS</th>
-            <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Plays</th>
+            {visibleColumns.map((c) => (
+              <SortHeader
+                key={c.id}
+                column={c}
+                active={sort === c.id}
+                order={order}
+                onClick={() => onSortClick(c.id)}
+              />
+            ))}
             <th className="w-10"></th>
+            <th className="w-10 text-right pr-2">
+              <ColumnPicker visibleCols={visibleCols} setVisibleCols={setVisibleCols} />
+            </th>
           </tr>
         </thead>
         <tbody>
@@ -205,46 +417,123 @@ function LibraryTable({
                   {playingId === m.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
                 </button>
               </td>
-              <td className="px-3 py-2 text-zinc-100 truncate max-w-xs">
-                {m.title || <span className="text-zinc-500 italic">{m.original_filename}</span>}
-                {playingId === m.id && (
-                  <div className="mt-1" onClick={(e) => e.stopPropagation()}>
-                    <audio
-                      src={libraryAudioUrl(m.id)}
-                      controls
-                      autoPlay
-                      className="w-full max-w-md h-8"
-                      onEnded={() => onTogglePlay(m.id)}
-                    />
-                  </div>
-                )}
-              </td>
-              <td className="px-3 py-2 text-zinc-300 truncate max-w-xs">{m.artist ?? '—'}</td>
-              <td className="px-3 py-2 text-zinc-400">{m.category}</td>
-              <td className="px-3 py-2 text-zinc-400 text-right font-mono text-xs">
-                {formatDuration(m.duration_seconds)}
-              </td>
-              <td className="px-3 py-2 text-zinc-400 text-right font-mono text-xs">
-                {m.bitrate_kbps}{m.was_transcoded ? '*' : ''}
-              </td>
-              <td className="px-3 py-2 text-zinc-400 text-right font-mono text-xs">
-                {m.loudness_lufs !== null ? m.loudness_lufs.toFixed(1) : '—'}
-              </td>
-              <td className="px-3 py-2 text-zinc-400 text-right">{m.play_count}</td>
+              {visibleColumns.map((c) => (
+                <Cell key={c.id} column={c} media={m} playingId={playingId} onTogglePlay={onTogglePlay} />
+              ))}
               <td className="px-2 py-2 text-center" onClick={(e) => e.stopPropagation()}>
                 {m.favorite ? (
                   <Star className="w-4 h-4 text-amber-400 fill-amber-400 inline" />
                 ) : null}
               </td>
+              <td className="w-10"></td>
             </tr>
           ))}
         </tbody>
       </table>
       <p className="text-[11px] text-zinc-500 px-3 py-2 border-t border-zinc-800/60">
-        Bitrate marked with * was transcoded at ingest. Plays count is updated by the playout engine, not by previews.
+        Click a column header to sort; click again to flip direction. Use the cog at right to choose visible columns. Bitrate marked with * was transcoded at ingest.
       </p>
     </div>
   );
+}
+
+function SortHeader({
+  column,
+  active,
+  order,
+  onClick,
+}: {
+  column: ColumnDef;
+  active: boolean;
+  order: 'asc' | 'desc';
+  onClick: () => void;
+}) {
+  const align = column.align === 'right' ? 'text-right' : 'text-left';
+  const justify = column.align === 'right' ? 'justify-end' : 'justify-start';
+  return (
+    <th
+      onClick={column.sortable ? onClick : undefined}
+      className={`text-xs font-medium uppercase tracking-wider px-3 py-2 ${align} ${
+        column.sortable ? 'cursor-pointer hover:text-white text-zinc-400 select-none' : 'text-zinc-400'
+      }`}
+    >
+      <span className={`inline-flex items-center gap-1 ${justify}`}>
+        {column.label}
+        {column.sortable && (
+          active ? (
+            order === 'asc' ? <ChevronUp className="w-3 h-3" /> : <ChevronDown className="w-3 h-3" />
+          ) : (
+            <ChevronsUpDown className="w-3 h-3 opacity-30" />
+          )
+        )}
+      </span>
+    </th>
+  );
+}
+
+function Cell({
+  column,
+  media,
+  playingId,
+  onTogglePlay,
+}: {
+  column: ColumnDef;
+  media: Media;
+  playingId: number | null;
+  onTogglePlay: (id: number) => void;
+}) {
+  const align = column.align === 'right' ? 'text-right' : 'text-left';
+  const baseClass = `px-3 py-2 ${align}`;
+
+  switch (column.id) {
+    case 'title':
+      return (
+        <td className={`${baseClass} text-zinc-100 truncate max-w-xs`}>
+          {media.title || (
+            <span className="text-zinc-500 italic">{media.original_filename}</span>
+          )}
+          {playingId === media.id && (
+            <div className="mt-1" onClick={(e) => e.stopPropagation()}>
+              <audio
+                src={libraryAudioUrl(media.id)}
+                controls
+                autoPlay
+                className="w-full max-w-md h-8"
+                onEnded={() => onTogglePlay(media.id)}
+              />
+            </div>
+          )}
+        </td>
+      );
+    case 'artist':
+      return <td className={`${baseClass} text-zinc-300 truncate max-w-xs`}>{media.artist ?? '—'}</td>;
+    case 'album':
+      return <td className={`${baseClass} text-zinc-300 truncate max-w-xs`}>{media.album ?? '—'}</td>;
+    case 'category':
+      return <td className={`${baseClass} text-zinc-400 capitalize`}>{media.category}</td>;
+    case 'duration_seconds':
+      return <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>{formatDuration(media.duration_seconds)}</td>;
+    case 'bitrate_kbps':
+      return (
+        <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>
+          {media.bitrate_kbps}{media.was_transcoded ? '*' : ''}
+        </td>
+      );
+    case 'loudness_lufs':
+      return (
+        <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>
+          {media.loudness_lufs !== null ? media.loudness_lufs.toFixed(1) : '—'}
+        </td>
+      );
+    case 'play_count':
+      return <td className={`${baseClass} text-zinc-400`}>{media.play_count}</td>;
+    case 'year':
+      return <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>{media.year ?? '—'}</td>;
+    case 'created_at':
+      return <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>{formatDate(media.created_at)}</td>;
+    case 'last_played_at':
+      return <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>{media.last_played_at ? formatDate(media.last_played_at) : '—'}</td>;
+  }
 }
 
 function Pagination({
@@ -296,7 +585,6 @@ function DetailDrawer({ id, onClose }: { id: number; onClose: () => void }) {
   const [draft, setDraft] = useState<MediaPatch>({});
   const [error, setError] = useState<string | null>(null);
 
-  // When the loaded item arrives, prime the draft with its editable fields.
   useEffect(() => {
     if (!data) return;
     setDraft({
@@ -482,4 +770,9 @@ function formatDuration(seconds: number): string {
   const mins = Math.floor(seconds / 60);
   const secs = Math.floor(seconds % 60);
   return `${mins}:${secs.toString().padStart(2, '0')}`;
+}
+
+function formatDate(d: Date | string): string {
+  const date = typeof d === 'string' ? new Date(d) : d;
+  return date.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }

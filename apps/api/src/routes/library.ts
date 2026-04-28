@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, and, or, like, desc, asc, sql, count, SQL } from 'drizzle-orm';
+import { eq, and, or, like, desc, asc, inArray, sql, count, SQL } from 'drizzle-orm';
 import { createWriteStream, createReadStream } from 'fs';
 import { rename, stat, unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
@@ -151,8 +151,13 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     const { q, category, favorite, sort, order, limit, offset } = request.query;
 
     const filters: SQL<unknown>[] = [];
-    if (category && isMediaCategory(category)) {
-      filters.push(eq(media.category, category));
+    if (category) {
+      const categories = category
+        .split(',')
+        .map((c) => c.trim())
+        .filter((c): c is MediaCategory => isMediaCategory(c));
+      if (categories.length === 1) filters.push(eq(media.category, categories[0]));
+      else if (categories.length > 1) filters.push(inArray(media.category, categories));
     }
     if (favorite === 'true') filters.push(eq(media.favorite, true));
     if (favorite === 'false') filters.push(eq(media.favorite, false));
