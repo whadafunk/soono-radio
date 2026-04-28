@@ -307,8 +307,13 @@ preserves loudness). Gain is purely metadata until playout.
 
 ---
 
-## Open questions (none currently blocking Phase 1)
+## Open questions / pinned follow-ups
 
-- **Postgres migration trigger**: when do we move off SQLite? (See `00-architecture-overview.md` §9.)
-- **Re-measurement strategy**: when target LUFS changes (e.g., we move from −23 to −16), do we batch-update all gains, or only on demand? (Phase 5 decision.)
-- **Cue point auto-detection**: Phase 4 will face the question of silence-detection at the head/tail for `cue_in_seconds`/`cue_out_seconds`. Defer the call.
+Pinned library polish — to revisit after the supervisor lands:
+
+- **Per-track gain trim** — operator override on top of the measured ReplayGain (`loudness_gain_db` is the measurement; an additional `gain_trim_db` lets the operator nudge a specific track up/down without rerunning loudnorm). UI lives in the detail drawer.
+- **Cue-point editing** — intro/outro markers, cue-in/cue-out (columns reserved at Phase 1; UI is the missing piece). Auto-detection (silence detection at head/tail) can come along.
+- **Waveform display + scrub UX** — visual scrubbing on the inline preview and detail drawer; needs a peaks-extraction step at ingest time (or computed on demand).
+- **Phase 6 — AcoustID/MusicBrainz** — fingerprinting for auto-tagging. Adds `chromaprint` (`fpcalc`) to the ingest container and a public-API rate-limit wrapper.
+- **Re-measurement strategy** — when target LUFS changes (e.g., we move from −23 to −16), do we batch-update all gains, or only on demand?
+- **Postgres migration trigger** — when do we move off SQLite? (See `00-architecture-overview.md` §9.)
