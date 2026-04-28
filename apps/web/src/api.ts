@@ -11,6 +11,7 @@ import {
   MediaSchema,
   MediaPatch,
   MediaCategory,
+  TranscodeOptions,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -325,6 +326,94 @@ export async function updateLibraryItem(id: number, patch: MediaPatch): Promise<
 
 export function libraryAudioUrl(id: number): string {
   return `${API_BASE}/library/${id}/audio`;
+}
+
+export async function deleteLibraryItem(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/library/${id}`, { method: 'DELETE' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Delete failed: ${res.statusText}`);
+  }
+}
+
+export async function reMeasureLibraryItem(id: number): Promise<Media> {
+  const res = await fetch(`${API_BASE}/library/${id}/re-measure`, { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Re-measure failed: ${res.statusText}`);
+  }
+  return MediaSchema.parse(await res.json());
+}
+
+export async function reTranscodeLibraryItem(
+  id: number,
+  options: TranscodeOptions,
+): Promise<Media> {
+  const res = await fetch(`${API_BASE}/library/${id}/re-transcode`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(options),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Re-transcode failed: ${res.statusText}`);
+  }
+  return MediaSchema.parse(await res.json());
+}
+
+export interface BulkResult {
+  succeeded: number[];
+  failed: { id: number; error: string }[];
+}
+
+export async function bulkDeleteLibrary(ids: number[]): Promise<BulkResult> {
+  const res = await fetch(`${API_BASE}/library`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Bulk delete failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function bulkSetCategory(ids: number[], category: MediaCategory): Promise<void> {
+  const res = await fetch(`${API_BASE}/library/bulk-category`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, category }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Bulk category failed: ${res.statusText}`);
+  }
+}
+
+export async function bulkSetFavorite(ids: number[], favorite: boolean): Promise<void> {
+  const res = await fetch(`${API_BASE}/library/bulk-favorite`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids, favorite }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Bulk favorite failed: ${res.statusText}`);
+  }
+}
+
+export async function bulkReMeasure(ids: number[]): Promise<BulkResult> {
+  const res = await fetch(`${API_BASE}/library/bulk-remeasure`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Bulk re-measure failed: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 export async function fetchIngestJob(jobId: string): Promise<IngestJob> {

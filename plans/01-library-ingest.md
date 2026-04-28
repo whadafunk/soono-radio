@@ -1,6 +1,6 @@
 # Plan: Library & Ingest Pipeline
 
-**Status:** Phases 1, 2, 3, 4 shipped. Phase 5 next.
+**Status:** Phases 1–5 shipped. Phase 6 (AcoustID) deferred until later.
 **Last reviewed:** 2026-04-28
 **Depends on:** Liquidsoap integration (shipped in commit `76fc39e`).
 **Unblocks:** supervisor + scheduler, clocks/schedules, ad rotation, reports.
@@ -248,7 +248,7 @@ preserves loudness). Gain is purely metadata until playout.
 - New sidebar entry "Library"
 - Browse page: filterable table, customisable columns, search, multi-select
 
-### Phase 5 — library actions
+### Phase 5 — library actions ✅ shipped
 - `DELETE /library/:id` — remove row + file
 - `POST /library/:id/re-transcode` — re-run transcode at new target (rare)
 - `POST /library/:id/re-measure` — re-run loudness measurement

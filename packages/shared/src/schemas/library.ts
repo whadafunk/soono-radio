@@ -81,6 +81,25 @@ export const MediaPatchSchema = z.object({
 });
 export type MediaPatch = z.infer<typeof MediaPatchSchema>;
 
+export const TranscodeOptionsSchema = z.object({
+  mode: z.enum(['cbr', 'vbr']).default('cbr'),
+  channels: z.enum(['preserve', 'stereo', 'mono']).default('preserve'),
+  trim_silence: z.boolean().default(false),
+});
+export type TranscodeOptions = z.infer<typeof TranscodeOptionsSchema>;
+
+export const BulkIdsSchema = z.object({
+  ids: z.array(z.number().int().positive()).min(1).max(500),
+});
+
+export const BulkCategorySchema = BulkIdsSchema.extend({
+  category: MediaCategorySchema,
+});
+
+export const BulkFavoriteSchema = BulkIdsSchema.extend({
+  favorite: z.boolean(),
+});
+
 export const IngestJobSchema = z.object({
   id: z.string(),
   status: IngestStatusSchema,

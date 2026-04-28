@@ -59,3 +59,59 @@ export const TRANSCODE_DEFAULTS = {
   samplerate_hz: MP3_SAMPLERATE_HZ,
   channels: 2,
 };
+
+export interface ReTranscodeOptions {
+  mode: 'cbr' | 'vbr';
+  channels: 'preserve' | 'stereo' | 'mono';
+  trim_silence: boolean;
+}
+
+/**
+ * Re-encode an existing MP3 with operator-chosen options. Source is the
+ * already-stored MP3 in the media pool; output is a temp file. Quality
+ * degrades slightly per pass — this is exposed as a deliberate operator
+ * action, not an automatic one.
+ */
+export async function reTranscodeMp3(
+  input: string,
+  output: string,
+  options: ReTranscodeOptions,
+): Promise<void> {
+  const args: string[] = ['-hide_banner', '-nostats', '-y', '-i', input];
+
+  if (options.trim_silence) {
+    // Strip leading and trailing silence below -50 dBFS. The two-step
+    // (trim head, reverse, trim head, reverse) is the canonical idiom.
+    const filter =
+      'silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB:detection=peak,' +
+      'areverse,silenceremove=start_periods=1:start_duration=0.1:start_threshold=-50dB:detection=peak,areverse';
+    args.push('-af', filter);
+  }
+
+  args.push('-c:a', 'libmp3lame');
+  if (options.mode === 'vbr') {
+    // -V 2 ≈ 190 kbps avg — good quality / size tradeoff. Lower is
+    // higher quality (V0 ≈ 245).
+    args.push('-q:a', '2');
+  } else {
+    args.push('-b:a', `${MP3_BITRATE_KBPS}k`);
+  }
+
+  args.push('-ar', String(MP3_SAMPLERATE_HZ));
+  if (options.channels === 'stereo') args.push('-ac', '2');
+  else if (options.channels === 'mono') args.push('-ac', '1');
+  // 'preserve': don't pass -ac, ffmpeg keeps input layout.
+
+  args.push('-map_metadata', '0', output);
+
+  await new Promise<void>((resolve, reject) => {
+    const proc = spawn('ffmpeg', args, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let stderr = '';
+    proc.stderr.on('data', (chunk) => (stderr += chunk));
+    proc.on('error', reject);
+    proc.on('close', (code) => {
+      if (code === 0) resolve();
+      else reject(new Error(`ffmpeg re-transcode exited ${code}: ${stderr.split('\n').slice(-5).join('\n')}`));
+    });
+  });
+}

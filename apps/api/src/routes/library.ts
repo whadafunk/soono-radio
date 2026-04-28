@@ -4,7 +4,15 @@ import { createWriteStream, createReadStream } from 'fs';
 import { rename, stat, unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
-import { MediaPatchSchema } from '@radio/shared';
+import {
+  MediaPatchSchema,
+  TranscodeOptionsSchema,
+  BulkIdsSchema,
+  BulkCategorySchema,
+  BulkFavoriteSchema,
+} from '@radio/shared';
+import { inArray as inArrayOp } from 'drizzle-orm';
+import { deleteMedia, reMeasureMedia, reTranscodeMedia } from '../services/library.js';
 import { db } from '../db/index.js';
 import { ingestJobs, media, MEDIA_CATEGORIES } from '../db/schema.js';
 import type { MediaCategory } from '../db/schema.js';
@@ -231,6 +239,118 @@ export async function libraryRoutes(fastify: FastifyInstance) {
       .returning();
     if (result.length === 0) return reply.status(404).send({ error: 'Not found' });
     return reply.send(result[0]);
+  });
+
+  fastify.delete<{ Params: { id: string } }>('/library/:id', async (request, reply) => {
+    const id = parseInt(request.params.id, 10);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: 'Invalid id' });
+    try {
+      await deleteMedia(id);
+      return reply.status(200).send({ success: true });
+    } catch (err) {
+      const msg = (err as Error).message;
+      if (msg.includes('not found')) return reply.status(404).send({ error: msg });
+      return reply.status(500).send({ error: msg });
+    }
+  });
+
+  fastify.post<{ Params: { id: string } }>('/library/:id/re-measure', async (request, reply) => {
+    const id = parseInt(request.params.id, 10);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: 'Invalid id' });
+    try {
+      const updated = await reMeasureMedia(id);
+      return reply.send(updated);
+    } catch (err) {
+      return reply.status(500).send({ error: (err as Error).message });
+    }
+  });
+
+  fastify.post<{ Params: { id: string }; Body: unknown }>(
+    '/library/:id/re-transcode',
+    async (request, reply) => {
+      const id = parseInt(request.params.id, 10);
+      if (!Number.isFinite(id)) return reply.status(400).send({ error: 'Invalid id' });
+      const parsed = TranscodeOptionsSchema.safeParse(request.body ?? {});
+      if (!parsed.success) {
+        return reply.status(400).send({ errors: parsed.error.errors });
+      }
+      try {
+        const updated = await reTranscodeMedia(id, parsed.data);
+        return reply.send(updated);
+      } catch (err) {
+        return reply.status(500).send({ error: (err as Error).message });
+      }
+    },
+  );
+
+  fastify.post<{ Params: { id: string } }>('/library/:id/acoustid', async (_request, reply) => {
+    return reply.status(501).send({
+      error: 'AcoustID lookup is planned for Phase 6 of the library plan',
+    });
+  });
+
+  // Bulk operations.
+  fastify.delete<{ Body: unknown }>('/library', async (request, reply) => {
+    const parsed = BulkIdsSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const results = { succeeded: [] as number[], failed: [] as { id: number; error: string }[] };
+    for (const id of parsed.data.ids) {
+      try {
+        await deleteMedia(id);
+        results.succeeded.push(id);
+      } catch (err) {
+        results.failed.push({ id, error: (err as Error).message });
+      }
+    }
+    return reply.send(results);
+  });
+
+  fastify.post<{ Body: unknown }>('/library/bulk-category', async (request, reply) => {
+    const parsed = BulkCategorySchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const result = await db
+      .update(media)
+      .set({ category: parsed.data.category, updated_at: new Date() })
+      .where(inArrayOp(media.id, parsed.data.ids));
+    return reply.send({ updated: parsed.data.ids.length, result });
+  });
+
+  fastify.post<{ Body: unknown }>('/library/bulk-favorite', async (request, reply) => {
+    const parsed = BulkFavoriteSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    await db
+      .update(media)
+      .set({ favorite: parsed.data.favorite, updated_at: new Date() })
+      .where(inArrayOp(media.id, parsed.data.ids));
+    return reply.send({ updated: parsed.data.ids.length });
+  });
+
+  fastify.post<{ Body: unknown }>('/library/bulk-remeasure', async (request, reply) => {
+    const parsed = BulkIdsSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const results = { succeeded: [] as number[], failed: [] as { id: number; error: string }[] };
+    // Sequential to avoid spawning N ffmpeg processes at once.
+    for (const id of parsed.data.ids) {
+      try {
+        await reMeasureMedia(id);
+        results.succeeded.push(id);
+      } catch (err) {
+        results.failed.push({ id, error: (err as Error).message });
+      }
+    }
+    return reply.send(results);
+  });
+
+  fastify.post('/library/bulk-retranscode', async (_request, reply) => {
+    return reply.status(501).send({
+      error: 'Bulk re-transcode is a Phase 5+ placeholder; use the per-track action for now',
+    });
+  });
+
+  fastify.post('/library/bulk-acoustid', async (_request, reply) => {
+    return reply.status(501).send({
+      error: 'AcoustID lookup is planned for Phase 6 of the library plan',
+    });
   });
 
   fastify.get<{ Params: { id: string } }>('/library/:id/audio', async (request, reply) => {
