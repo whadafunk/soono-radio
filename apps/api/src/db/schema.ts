@@ -120,3 +120,30 @@ export const ingestJobs = sqliteTable(
 
 export type IngestJob = typeof ingestJobs.$inferSelect;
 export type IngestJobInsert = typeof ingestJobs.$inferInsert;
+
+export const PLAY_SOURCES = ['auto', 'live', 'manual'] as const;
+export type PlaySource = (typeof PLAY_SOURCES)[number];
+
+export const playHistory = sqliteTable(
+  'play_history',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    media_id: integer('media_id').references(() => media.id, { onDelete: 'set null' }),
+    source: text('source', { enum: PLAY_SOURCES }).notNull(),
+    started_at: integer('started_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    ended_at: integer('ended_at', { mode: 'timestamp' }),
+    aborted: integer('aborted', { mode: 'boolean' }).notNull().default(false),
+    live_listener_count: integer('live_listener_count'),
+    pick_reason: text('pick_reason'),
+  },
+  (t) => ({
+    startedAtIdx: index('play_history_started_at_idx').on(t.started_at),
+    mediaIdx: index('play_history_media_id_idx').on(t.media_id),
+    sourceIdx: index('play_history_source_idx').on(t.source),
+  }),
+);
+
+export type PlayHistory = typeof playHistory.$inferSelect;
+export type PlayHistoryInsert = typeof playHistory.$inferInsert;
