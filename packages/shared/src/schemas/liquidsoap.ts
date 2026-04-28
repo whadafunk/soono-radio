@@ -33,10 +33,6 @@ export const LiquidsoapConfigSchema = z.object({
       certificate_path: z.string().nullable().default(null),
     }).default({}),
   }),
-  automation: z.object({
-    mode: z.enum(['silence', 'playlist']).default('silence'),
-    playlist_dir: z.string().default('/audio/automation'),
-  }),
   crossfade: z.object({
     duration_seconds: z.number().nonnegative().max(30).default(3),
     type: z.enum(CROSSFADE_TYPES).default('linear'),

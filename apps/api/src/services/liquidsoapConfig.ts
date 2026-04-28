@@ -67,14 +67,9 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
   lines.push('settings.server.telnet.port.set(1234)');
   lines.push('');
 
-  lines.push('# Automation source');
-  if (config.automation.mode === 'silence') {
-    lines.push('auto = blank(id="automation")');
-  } else {
-    lines.push(
-      `auto = playlist(id="automation", reload_mode="watch", "${escapeStr(config.automation.playlist_dir)}")`,
-    );
-  }
+  lines.push('# Queue fed by the Supervisor over telnet (request.queue.push).');
+  lines.push('# Empty queue plays silence; that is intentional and means "no Supervisor input yet".');
+  lines.push('queue = request.queue(id="auto")');
   lines.push('');
 
   if (config.harbor.enabled) {
@@ -98,25 +93,25 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
     lines.push('');
   }
 
-  lines.push('# Source priority — live takes over when present, automation otherwise');
+  lines.push('# Source priority — live takes over when present, queue otherwise');
   if (config.harbor.enabled && config.ducking.enabled) {
-    // Live ducks the automation bed. attack/release are seconds in liquidsoap.
+    // Live ducks the queue bed. attack/release are seconds in liquidsoap.
     const attack = (config.ducking.attack_ms / 1000).toFixed(3);
     const release = (config.ducking.release_ms / 1000).toFixed(3);
-    lines.push('# Ducking: when live is present, automation drops by depth_db');
-    lines.push(`auto = duck(`);
+    lines.push('# Ducking: when live is present, the queue drops by depth_db');
+    lines.push(`queue = duck(`);
     lines.push(`  attack=${attack},`);
     lines.push(`  release=${release},`);
     lines.push(`  threshold=-30.,`);
     lines.push(`  duration=0.5,`);
     lines.push(`  ${config.ducking.depth_db.toFixed(1)},`);
-    lines.push(`  live, auto`);
+    lines.push(`  live, queue`);
     lines.push(`)`);
   }
   if (config.harbor.enabled) {
-    lines.push('radio = fallback(track_sensitive=false, [live, auto])');
+    lines.push('radio = fallback(track_sensitive=false, [live, queue])');
   } else {
-    lines.push('radio = fallback(track_sensitive=false, [auto])');
+    lines.push('radio = fallback(track_sensitive=false, [queue])');
   }
   if (config.crossfade.duration_seconds > 0) {
     const crossOp = config.crossfade.type === 'smart' ? 'smart_cross' : 'cross';
