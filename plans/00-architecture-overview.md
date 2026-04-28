@@ -47,6 +47,14 @@ Talks to the playout API namespace.
 **Decision: one Fastify app, route-namespaced.** `/icecast/*`, `/liquidsoap/*`,
 later `/playout/*`, `/library/*`, `/reports/*`, `/portal/*`.
 
+**Supervisor placement (decided 2026-04-28):** lives as a service module
+inside `apps/api/` (not a separate Node process). Public interface kept
+narrow (`start()`, `stop()`, `enqueue()`, `getStatus()`, `onPlayed()`) so a
+future split into `apps/supervisor/` is mechanical — wrap the same
+interface in HTTP, change callers to forward instead of call. Triggers for
+that split: separate-host deploy, measurable latency impact on API
+requests, or independent restart cycles.
+
 Why one backend:
 - One deploy, one auth surface, one log stream
 - Code reuse: same Zod schemas, same React Query setup
