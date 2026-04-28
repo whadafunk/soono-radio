@@ -1,16 +1,37 @@
 import { z } from 'zod';
 
+// Codec + bitrate options — bitrates are codec-dependent. The UI offers
+// a codec dropdown that filters the bitrate dropdown.
+export const CODECS = ['mp3', 'aac', 'opus', 'vorbis'] as const;
+export type Codec = (typeof CODECS)[number];
+
+export const CODEC_BITRATES: Record<Codec, number[]> = {
+  mp3: [96, 128, 192, 256, 320],
+  aac: [64, 96, 128, 160, 192],
+  opus: [32, 64, 96, 128, 160],
+  vorbis: [96, 128, 160, 192, 256],
+};
+
+export const CROSSFADE_TYPES = ['linear', 'smart', 'logarithmic'] as const;
+export type CrossfadeType = (typeof CROSSFADE_TYPES)[number];
+
 export const LiquidsoapConfigSchema = z.object({
   output: z.object({
     icecast_host: z.string().min(1).default('host.docker.internal'),
     icecast_port: z.number().int().min(1).max(65535).default(8001),
     icecast_mount: z.string().min(1).default('/stream'),
+    codec: z.enum(CODECS).default('mp3'),
+    bitrate_kbps: z.number().int().min(8).max(512).default(128),
   }),
   harbor: z.object({
     enabled: z.boolean().default(true),
     port: z.number().int().min(1).max(65535).default(8005),
     mount_name: z.string().min(1).default('live'),
     password: z.string().min(1),
+    tls: z.object({
+      enabled: z.boolean().default(false),
+      certificate_path: z.string().nullable().default(null),
+    }).default({}),
   }),
   automation: z.object({
     mode: z.enum(['silence', 'playlist']).default('silence'),
@@ -18,7 +39,17 @@ export const LiquidsoapConfigSchema = z.object({
   }),
   crossfade: z.object({
     duration_seconds: z.number().nonnegative().max(30).default(3),
+    type: z.enum(CROSSFADE_TYPES).default('linear'),
   }),
+  master_bus: z.object({
+    soft_limiter: z.boolean().default(false),
+  }).default({}),
+  ducking: z.object({
+    enabled: z.boolean().default(false),
+    depth_db: z.number().min(-30).max(0).default(-9),
+    attack_ms: z.number().int().min(1).max(2000).default(100),
+    release_ms: z.number().int().min(1).max(10000).default(1000),
+  }).default({}),
 });
 
 export type LiquidsoapConfig = z.infer<typeof LiquidsoapConfigSchema>;

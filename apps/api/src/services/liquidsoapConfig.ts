@@ -79,29 +79,68 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
 
   if (config.harbor.enabled) {
     lines.push('# Live source via Harbor (Icecast source-protocol input)');
+    const args: string[] = [
+      `id="live"`,
+      `"${escapeStr(config.harbor.mount_name)}"`,
+      `port=${config.harbor.port}`,
+      `password="${escapeStr(config.harbor.password)}"`,
+    ];
+    if (config.harbor.tls.enabled && config.harbor.tls.certificate_path) {
+      // Liquidsoap's input.harbor accepts transport=https.transport(...).
+      // Cert path is mounted into the container at the same absolute path.
+      args.push(
+        `transport=https.transport(certificate="${escapeStr(config.harbor.tls.certificate_path)}", key="${escapeStr(config.harbor.tls.certificate_path)}")`,
+      );
+    }
     lines.push('live = input.harbor(');
-    lines.push(`  id="live",`);
-    lines.push(`  "${escapeStr(config.harbor.mount_name)}",`);
-    lines.push(`  port=${config.harbor.port},`);
-    lines.push(`  password="${escapeStr(config.harbor.password)}"`);
+    args.forEach((a, i) => lines.push(`  ${a}${i < args.length - 1 ? ',' : ''}`));
     lines.push(')');
     lines.push('');
   }
 
   lines.push('# Source priority — live takes over when present, automation otherwise');
+  if (config.harbor.enabled && config.ducking.enabled) {
+    // Live ducks the automation bed. attack/release are seconds in liquidsoap.
+    const attack = (config.ducking.attack_ms / 1000).toFixed(3);
+    const release = (config.ducking.release_ms / 1000).toFixed(3);
+    lines.push('# Ducking: when live is present, automation drops by depth_db');
+    lines.push(`auto = duck(`);
+    lines.push(`  attack=${attack},`);
+    lines.push(`  release=${release},`);
+    lines.push(`  threshold=-30.,`);
+    lines.push(`  duration=0.5,`);
+    lines.push(`  ${config.ducking.depth_db.toFixed(1)},`);
+    lines.push(`  live, auto`);
+    lines.push(`)`);
+  }
   if (config.harbor.enabled) {
     lines.push('radio = fallback(track_sensitive=false, [live, auto])');
   } else {
     lines.push('radio = fallback(track_sensitive=false, [auto])');
   }
   if (config.crossfade.duration_seconds > 0) {
-    lines.push(`radio = cross(duration=${config.crossfade.duration_seconds.toFixed(1)}, radio)`);
+    const crossOp = config.crossfade.type === 'smart' ? 'smart_cross' : 'cross';
+    if (config.crossfade.type === 'logarithmic') {
+      // `cross` with log curves is approximated via the `cross` operator's
+      // default behaviour driven by transition functions. For V1, log just
+      // flips fade.in/out into log shape via a small transition.
+      lines.push(
+        `radio = cross(duration=${config.crossfade.duration_seconds.toFixed(1)}, fun (a, b) -> add(normalize=false, [fade.in(type="log", b), fade.out(type="log", a)]), radio)`,
+      );
+    } else {
+      lines.push(`radio = ${crossOp}(duration=${config.crossfade.duration_seconds.toFixed(1)}, radio)`);
+    }
   }
   lines.push('');
 
+  if (config.master_bus.soft_limiter) {
+    lines.push('# Master bus: soft limiter at -1 dBFS (high-ratio compressor, only engages on transients)');
+    lines.push('radio = compress(threshold=-1.0, ratio=20.0, attack=5.0, release=50.0, radio)');
+  }
+
   lines.push('# Output to Icecast (source password resolved from icecast.xml at generation time)');
   lines.push('output.icecast(');
-  lines.push('  %mp3(bitrate=128, samplerate=44100, stereo=true),');
+  lines.push(`  ${formatCodec(config.output.codec, config.output.bitrate_kbps)},`);
   lines.push(`  host="${escapeStr(config.output.icecast_host)}",`);
   lines.push(`  port=${config.output.icecast_port},`);
   lines.push('  user="source",');
@@ -112,6 +151,21 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
   lines.push('');
 
   return lines.join('\n');
+}
+
+function formatCodec(codec: string, bitrate: number): string {
+  switch (codec) {
+    case 'mp3':
+      return `%mp3(bitrate=${bitrate}, samplerate=44100, stereo=true)`;
+    case 'aac':
+      return `%fdkaac(bitrate=${bitrate}, samplerate=44100, channels=2)`;
+    case 'opus':
+      return `%opus(bitrate=${bitrate}, samplerate=48000, channels=2, application="audio")`;
+    case 'vorbis':
+      return `%vorbis(quality=0.5, samplerate=44100, channels=2)`;
+    default:
+      return `%mp3(bitrate=${bitrate}, samplerate=44100, stereo=true)`;
+  }
 }
 
 function escapeStr(value: string): string {

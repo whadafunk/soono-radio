@@ -14,8 +14,9 @@ import { Loader, Check, AlertCircle, Code } from 'lucide-react';
 import { RawScriptEditor } from '../../components/RawScriptEditor';
 import { OutputSection } from './liquidsoap-sections/OutputSection';
 import { HarborSection } from './liquidsoap-sections/HarborSection';
-import { AutomationSection } from './liquidsoap-sections/AutomationSection';
 import { CrossfadeSection } from './liquidsoap-sections/CrossfadeSection';
+import { MasterBusSection } from './liquidsoap-sections/MasterBusSection';
+import { DuckingSection } from './liquidsoap-sections/DuckingSection';
 
 export function LiquidSoapSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -106,10 +107,11 @@ export function LiquidSoapSettings() {
       )}
 
       <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-8">
-        <OutputSection register={register} errors={errors} />
+        <OutputSection register={register} errors={errors} control={control} />
         <HarborSection control={control} register={register} errors={errors} />
-        <AutomationSection register={register} control={control} />
         <CrossfadeSection register={register} errors={errors} />
+        <MasterBusSection register={register} />
+        <DuckingSection register={register} control={control} />
 
         <div className="flex gap-4">
           <button
