@@ -103,14 +103,16 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
     lines.push('# Ducking requested but not yet implemented in this LS version (TODO).');
     lines.push(`# Operator settings: depth=${config.ducking.depth_db} dB, attack=${config.ducking.attack_ms} ms, release=${config.ducking.release_ms} ms`);
   }
+  // Adding blank() as the last fallback element guarantees the result
+  // is infallible at the type level — LS 2.2's crossfade and other
+  // downstream operators require this. mksafe(radio) wraps at runtime
+  // but doesn't always propagate infallibility through the type
+  // checker, so we put the safety in the fallback list itself.
   if (config.harbor.enabled) {
-    lines.push('radio = fallback(track_sensitive=false, [live, queue])');
+    lines.push('radio = fallback(track_sensitive=false, [live, queue, blank()])');
   } else {
-    lines.push('radio = fallback(track_sensitive=false, [queue])');
+    lines.push('radio = fallback(track_sensitive=false, [queue, blank()])');
   }
-  // crossfade and downstream operators require an infallible source.
-  // mksafe wraps with silence when nothing else is producing audio.
-  lines.push('radio = mksafe(radio)');
   if (config.crossfade.duration_seconds > 0) {
     // Liquidsoap 2.2's `cross` operator requires an explicit transition
     // function. `crossfade` is the higher-level wrapper with a default
