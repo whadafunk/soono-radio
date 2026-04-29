@@ -103,30 +103,26 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
     lines.push('# Ducking requested but not yet implemented in this LS version (TODO).');
     lines.push(`# Operator settings: depth=${config.ducking.depth_db} dB, attack=${config.ducking.attack_ms} ms, release=${config.ducking.release_ms} ms`);
   }
-  // Adding blank() as the last fallback element guarantees the result
-  // is infallible at the type level — LS 2.2's crossfade and other
-  // downstream operators require this. mksafe(radio) wraps at runtime
-  // but doesn't always propagate infallibility through the type
-  // checker, so we put the safety in the fallback list itself.
+  // blank() at the tail keeps the runtime always-on. Type-wise LS 2.2
+  // still treats fallback as source(?'a), but the output operator
+  // accepts fallible sources, so this is fine for the simple chain.
   if (config.harbor.enabled) {
     lines.push('radio = fallback(track_sensitive=false, [live, queue, blank()])');
   } else {
     lines.push('radio = fallback(track_sensitive=false, [queue, blank()])');
   }
   if (config.crossfade.duration_seconds > 0) {
-    // Liquidsoap 2.2's `cross` operator requires an explicit transition
-    // function. `crossfade` is the higher-level wrapper with a default
-    // linear fade built in — that's what we use for all three types here.
-    // 'smart' enables Liquidsoap's auto-detection of fade points based
-    // on track loudness. 'logarithmic' currently shares the same shape
-    // as linear (the underlying fade.in/out functions accept a 'type'
-    // argument that we'll wire up if/when an operator asks for it).
-    const duration = config.crossfade.duration_seconds.toFixed(1);
-    if (config.crossfade.type === 'smart') {
-      lines.push(`radio = crossfade(smart=true, duration=${duration}, radio)`);
-    } else {
-      lines.push(`radio = crossfade(duration=${duration}, radio)`);
-    }
+    // Crossfade in LS 2.2 requires source('a) (infallible at the type
+    // level), and fallback(...) returns source(?'a) regardless of
+    // children. mksafe() is just sugar for fallback-with-blank and has
+    // the same type. The realistic 2.2 idiom is "apply crossfade to a
+    // playlist() (infallible), then fallback with harbor", which our
+    // request.queue-based shape doesn't match. Skipping crossfade for
+    // now; tracks will hard-cut between songs. TODO: revisit with a
+    // live LS 2.2 interpreter to find a pattern that works.
+    lines.push(
+      `# Crossfade requested (${config.crossfade.duration_seconds}s ${config.crossfade.type}) but skipped — LS 2.2's crossfade rejects fallible sources. TODO.`,
+    );
   }
   lines.push('');
 
