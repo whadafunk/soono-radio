@@ -24,3 +24,36 @@ export const SupervisorStatusSchema = z.object({
   current_play_id: z.number().int().nullable(),
 });
 export type SupervisorStatus = z.infer<typeof SupervisorStatusSchema>;
+
+/** Display shape returned by /supervisor/now-playing — joined with media for titles. */
+export const NowPlayingSchema = z
+  .object({
+    id: z.number().int(),
+    media_id: z.number().int().nullable(),
+    source: PlaySourceSchema,
+    started_at: z.coerce.date(),
+    live_listener_count: z.number().int().nullable(),
+    title: z.string().nullable(),
+    artist: z.string().nullable(),
+    original_filename: z.string().nullable(),
+    duration_seconds: z.number().nullable(),
+  })
+  .nullable();
+export type NowPlaying = z.infer<typeof NowPlayingSchema>;
+
+/** Recent-plays row (one per /supervisor/recent-plays). */
+export const RecentPlaySchema = z.object({
+  id: z.number().int(),
+  media_id: z.number().int().nullable(),
+  source: PlaySourceSchema,
+  started_at: z.coerce.date(),
+  ended_at: z.coerce.date().nullable(),
+  aborted: z.boolean(),
+  live_listener_count: z.number().int().nullable(),
+  pick_reason: z.string().nullable(),
+  title: z.string().nullable(),
+  artist: z.string().nullable(),
+  original_filename: z.string().nullable(),
+  duration_seconds: z.number().nullable(),
+});
+export type RecentPlay = z.infer<typeof RecentPlaySchema>;

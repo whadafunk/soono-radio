@@ -12,6 +12,12 @@ import {
   MediaPatch,
   MediaCategory,
   TranscodeOptions,
+  SupervisorStatus,
+  SupervisorStatusSchema,
+  NowPlaying,
+  NowPlayingSchema,
+  RecentPlay,
+  RecentPlaySchema,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -401,6 +407,26 @@ export async function bulkSetFavorite(ids: number[], favorite: boolean): Promise
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Bulk favorite failed: ${res.statusText}`);
   }
+}
+
+export async function fetchSupervisorStatus(): Promise<SupervisorStatus> {
+  const res = await fetch(`${API_BASE}/supervisor/status`);
+  if (!res.ok) throw new Error(`Failed to fetch supervisor status: ${res.statusText}`);
+  return SupervisorStatusSchema.parse(await res.json());
+}
+
+export async function fetchNowPlaying(): Promise<NowPlaying> {
+  const res = await fetch(`${API_BASE}/supervisor/now-playing`);
+  if (!res.ok) throw new Error(`Failed to fetch now-playing: ${res.statusText}`);
+  const data = await res.json();
+  return NowPlayingSchema.parse(data);
+}
+
+export async function fetchRecentPlays(limit = 20): Promise<RecentPlay[]> {
+  const res = await fetch(`${API_BASE}/supervisor/recent-plays?limit=${limit}`);
+  if (!res.ok) throw new Error(`Failed to fetch recent plays: ${res.statusText}`);
+  const data = await res.json();
+  return data.plays.map((p: unknown) => RecentPlaySchema.parse(p));
 }
 
 export async function bulkReMeasure(ids: number[]): Promise<BulkResult> {

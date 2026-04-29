@@ -1,6 +1,6 @@
 # Plan: Supervisor — MVP-B
 
-**Status:** drafting (no code yet).
+**Status:** MVP-B shipped (Steps 1–4 complete). See "Open follow-ups" at the bottom.
 **Last reviewed:** 2026-04-29
 **Depends on:** Library Phases 1–5 (the picker reads from `media`),
 Mix Engine "boring forever" script (commit `b2d31a9`, queue is in place).

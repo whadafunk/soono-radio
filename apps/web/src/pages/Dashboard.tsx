@@ -1,13 +1,15 @@
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic } from 'lucide-react';
+import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2 } from 'lucide-react';
 import {
   fetchIcecastStats,
   fetchIcecastConfig,
   restartIcecast,
   kickIcecastSource,
-  fetchLiquidsoapStatus,
+  fetchSupervisorStatus,
+  fetchNowPlaying,
+  fetchRecentPlays,
 } from '../api';
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 
 export function Dashboard() {
   const [restartToast, setRestartToast] = useState<string | null>(null);
@@ -23,10 +25,22 @@ export function Dashboard() {
     queryFn: fetchIcecastConfig,
   });
 
-  const { data: lsStatus } = useQuery({
-    queryKey: ['liquidsoap-status'],
-    queryFn: fetchLiquidsoapStatus,
+  const { data: supStatus } = useQuery({
+    queryKey: ['supervisor-status'],
+    queryFn: fetchSupervisorStatus,
     refetchInterval: 3000,
+  });
+
+  const { data: nowPlaying } = useQuery({
+    queryKey: ['supervisor-now-playing'],
+    queryFn: fetchNowPlaying,
+    refetchInterval: 3000,
+  });
+
+  const { data: recentPlays = [] } = useQuery({
+    queryKey: ['supervisor-recent-plays'],
+    queryFn: () => fetchRecentPlays(10),
+    refetchInterval: 5000,
   });
 
   const restartMutation = useMutation({
@@ -117,49 +131,19 @@ export function Dashboard() {
         </div>
       )}
 
+      {/* Now Playing */}
+      <NowPlayingCard
+        nowPlaying={nowPlaying ?? null}
+        queueDepth={supStatus?.queue_depth ?? 0}
+        listenerCount={stats?.listener ?? 0}
+        reachable={supStatus?.reachable ?? false}
+        onAirSource={supStatus?.on_air_source ?? 'none'}
+      />
+
       {/* Live Stream Stats */}
       <section>
         <h2 className="text-lg font-semibold text-white mb-4">Live Stream</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-5 gap-4">
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-zinc-400 text-sm font-medium">On Air</p>
-                <p
-                  className={`text-2xl font-bold mt-2 flex items-center gap-1 ${
-                    !lsStatus || !lsStatus.reachable
-                      ? 'text-zinc-500'
-                      : lsStatus.on_air === 'live'
-                        ? 'text-red-400'
-                        : lsStatus.on_air === 'automation'
-                          ? 'text-green-400'
-                          : 'text-zinc-500'
-                  }`}
-                >
-                  {!lsStatus || !lsStatus.reachable
-                    ? '● NO ENGINE'
-                    : lsStatus.on_air === 'live'
-                      ? '● LIVE'
-                      : lsStatus.on_air === 'automation'
-                        ? '● AUTO'
-                        : '● NO SOURCE'}
-                </p>
-                <p className="text-xs text-zinc-500 mt-1">Mix Engine</p>
-              </div>
-              <Mic
-                className={`w-8 h-8 ${
-                  !lsStatus || !lsStatus.reachable
-                    ? 'text-zinc-700'
-                    : lsStatus.on_air === 'live'
-                      ? 'text-red-500'
-                      : lsStatus.on_air === 'automation'
-                        ? 'text-green-500'
-                        : 'text-zinc-700'
-                }`}
-              />
-            </div>
-          </div>
-
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -301,6 +285,8 @@ export function Dashboard() {
         </div>
       )}
 
+      <RecentPlaysSection plays={recentPlays} />
+
       {/* Info Box */}
       {isOnline && !statsLoading && (
         <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
@@ -314,4 +300,198 @@ export function Dashboard() {
       )}
     </div>
   );
+}
+
+import type { NowPlaying, RecentPlay } from '@radio/shared';
+
+function NowPlayingCard({
+  nowPlaying,
+  queueDepth,
+  listenerCount,
+  reachable,
+  onAirSource,
+}: {
+  nowPlaying: NowPlaying;
+  queueDepth: number;
+  listenerCount: number;
+  reachable: boolean;
+  onAirSource: 'live' | 'auto' | 'none';
+}) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const t = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, []);
+
+  if (!reachable) {
+    return (
+      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
+        <Mic className="w-10 h-10 text-zinc-700" />
+        <div>
+          <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
+          <p className="text-xl font-bold text-zinc-500 mt-1">● MIX ENGINE OFFLINE</p>
+          <p className="text-xs text-zinc-600 mt-1">
+            Start the Mix Engine to begin broadcasting:{' '}
+            <code className="bg-zinc-950 px-1.5 py-0.5 rounded">./start-liquidsoap.sh</code>
+          </p>
+        </div>
+      </section>
+    );
+  }
+
+  if (!nowPlaying) {
+    return (
+      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
+        <Mic className="w-10 h-10 text-zinc-700" />
+        <div className="flex-1">
+          <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
+          <p className="text-xl font-bold text-zinc-500 mt-1">● SILENCE</p>
+          <p className="text-xs text-zinc-600 mt-1">
+            Nothing in the queue. The Supervisor is waiting for an eligible track (separation cooldown or empty library).
+          </p>
+        </div>
+        <div className="text-right text-xs text-zinc-500">
+          <div>queue: {queueDepth}</div>
+          <div>listeners: {listenerCount}</div>
+        </div>
+      </section>
+    );
+  }
+
+  const elapsedSeconds = Math.max(
+    0,
+    Math.floor((now - new Date(nowPlaying.started_at).getTime()) / 1000),
+  );
+  const totalSeconds = nowPlaying.duration_seconds ?? 0;
+  const progress = totalSeconds > 0 ? Math.min(1, elapsedSeconds / totalSeconds) : 0;
+  const sourceLive = onAirSource === 'live' || nowPlaying.source === 'live';
+  const display = nowPlaying.title || nowPlaying.original_filename || '(unknown)';
+  const artist = nowPlaying.artist;
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+      <div className="flex items-start gap-4">
+        <Music2 className={`w-10 h-10 flex-shrink-0 ${sourceLive ? 'text-red-500' : 'text-green-500'}`} />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2">
+            <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
+            <span
+              className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                sourceLive ? 'bg-red-900/40 text-red-300' : 'bg-green-900/40 text-green-300'
+              }`}
+            >
+              ● {sourceLive ? 'LIVE' : 'AUTO'}
+            </span>
+          </div>
+          <p className="text-2xl font-bold text-white mt-1 truncate">{display}</p>
+          {artist && <p className="text-sm text-zinc-400 truncate">{artist}</p>}
+          {totalSeconds > 0 && (
+            <div className="mt-3">
+              <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+                <div
+                  className={`h-full ${sourceLive ? 'bg-red-500' : 'bg-indigo-500'} transition-all`}
+                  style={{ width: `${progress * 100}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-xs text-zinc-500 mt-1 font-mono">
+                <span>{formatMmSs(elapsedSeconds)}</span>
+                <span>{formatMmSs(totalSeconds)}</span>
+              </div>
+            </div>
+          )}
+        </div>
+        <div className="text-right text-xs text-zinc-500 space-y-1 flex-shrink-0">
+          <div>queue: <span className="text-zinc-300 font-mono">{queueDepth}</span></div>
+          <div>listeners: <span className="text-zinc-300 font-mono">{listenerCount}</span></div>
+          {nowPlaying.live_listener_count !== null && (
+            <div className="text-zinc-600">at start: {nowPlaying.live_listener_count}</div>
+          )}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function RecentPlaysSection({ plays }: { plays: RecentPlay[] }) {
+  if (plays.length === 0) return null;
+  // Drop the very first row if it matches the currently-playing one
+  // (no ended_at) — the Now Playing card already shows that.
+  const visible = plays.filter((p) => p.ended_at !== null).slice(0, 8);
+  if (visible.length === 0) return null;
+  return (
+    <section>
+      <h2 className="text-lg font-semibold text-white mb-3">Recent Plays</h2>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-zinc-950/50 border-b border-zinc-800">
+            <tr>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Time</th>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Track</th>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Source</th>
+              <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Duration</th>
+              <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Listeners</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((p) => {
+              const playedSeconds =
+                p.ended_at && p.started_at
+                  ? Math.max(0, Math.floor((new Date(p.ended_at).getTime() - new Date(p.started_at).getTime()) / 1000))
+                  : 0;
+              const display = p.title || p.original_filename || (p.source === 'live' ? '(live broadcast)' : '—');
+              return (
+                <tr key={p.id} className="border-t border-zinc-800/60">
+                  <td className="px-3 py-2 text-zinc-400 font-mono text-xs whitespace-nowrap">
+                    {formatTimeAgo(p.started_at)}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-200 truncate max-w-md">
+                    {display}
+                    {p.artist && <span className="text-zinc-500"> — {p.artist}</span>}
+                    {p.aborted && (
+                      <span className="ml-2 text-[10px] text-amber-400 font-mono uppercase">aborted</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span
+                      className={`text-xs px-1.5 py-0.5 rounded font-mono ${
+                        p.source === 'live'
+                          ? 'bg-red-900/40 text-red-300'
+                          : p.source === 'manual'
+                            ? 'bg-amber-900/40 text-amber-300'
+                            : 'bg-green-900/40 text-green-300'
+                      }`}
+                    >
+                      {p.source}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
+                    {formatMmSs(playedSeconds)}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-zinc-500">
+                    {p.live_listener_count ?? '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function formatMmSs(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds < 0) return '—';
+  const m = Math.floor(seconds / 60);
+  const s = Math.floor(seconds % 60);
+  return `${m}:${s.toString().padStart(2, '0')}`;
+}
+
+function formatTimeAgo(d: Date | string): string {
+  const t = typeof d === 'string' ? new Date(d).getTime() : d.getTime();
+  const ago = Math.floor((Date.now() - t) / 1000);
+  if (ago < 60) return `${ago}s ago`;
+  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
+  if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
+  return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }
