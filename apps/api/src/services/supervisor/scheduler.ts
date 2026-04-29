@@ -1,0 +1,146 @@
+import { db } from '../../db/index.js';
+import { playHistory } from '../../db/schema.js';
+import type { Media } from '../../db/schema.js';
+import { pickNext } from './picker.js';
+import type { TelnetClient } from './telnet.js';
+
+const TICK_INTERVAL_MS = 5_000;
+const QUEUE_DEPTH_THRESHOLD = 1;
+
+// Container-side path where the host's media/ pool is mounted by
+// start-liquidsoap.sh. Liquidsoap accesses files via this absolute path.
+const MEDIA_CONTAINER_PATH = '/media';
+
+export interface SchedulerState {
+  queue_depth: number;
+  on_air_source: 'live' | 'auto' | 'none';
+  last_push_request_id: number | null;
+}
+
+export interface SchedulerEvents {
+  pushed: (info: { media: Media; requestId: number | null; pickReason: string }) => void;
+}
+
+export class Scheduler {
+  private timer: NodeJS.Timeout | null = null;
+  private busy = false;
+  private state: SchedulerState = {
+    queue_depth: 0,
+    on_air_source: 'none',
+    last_push_request_id: null,
+  };
+
+  constructor(
+    private telnet: TelnetClient,
+    private logger: { info: (msg: string) => void; warn: (msg: string) => void },
+    private onPushed?: (info: { media: Media; requestId: number | null; pickReason: string }) => void,
+  ) {}
+
+  getState(): SchedulerState {
+    return { ...this.state };
+  }
+
+  start(): void {
+    if (this.timer) return;
+    // Run a tick immediately on start so we don't wait 5 s for the first
+    // push when the API boots into a connected Mix Engine.
+    void this.tick();
+    this.timer = setInterval(() => void this.tick(), TICK_INTERVAL_MS);
+  }
+
+  stop(): void {
+    if (this.timer) {
+      clearInterval(this.timer);
+      this.timer = null;
+    }
+  }
+
+  private async tick(): Promise<void> {
+    if (this.busy) return;
+    if (!this.telnet.isConnected()) {
+      this.state.on_air_source = 'none';
+      return;
+    }
+    this.busy = true;
+    try {
+      // 1. Read queue depth and live status.
+      const queueLines = await this.telnet.command('auto.queue').catch(() => [] as string[]);
+      this.state.queue_depth = parseQueueDepth(queueLines);
+
+      const liveLines = await this.telnet.command('live.status').catch(() => [] as string[]);
+      this.state.on_air_source = isLiveConnected(liveLines) ? 'live' : 'auto';
+
+      // 2. If queue is short, pick and push.
+      if (this.state.queue_depth >= QUEUE_DEPTH_THRESHOLD) return;
+
+      const pick = await pickNext();
+      if (!pick) {
+        // Empty library or every track blocked by separation. Don't spam
+        // the log; warn once per tick at most.
+        this.logger.warn('Picker returned no track (empty library or all blocked)');
+        return;
+      }
+
+      const containerUri = `${MEDIA_CONTAINER_PATH}/${pick.media.sha256}.mp3`;
+      const pushLines = await this.telnet.command(`auto.push ${containerUri}`);
+      const requestId = parsePushedRequestId(pushLines);
+      this.state.last_push_request_id = requestId;
+
+      // Step 2 records the row at push-time; Step 3 will refine timing
+      // (started_at, ended_at, aborted) using metadata events.
+      await db.insert(playHistory).values({
+        media_id: pick.media.id,
+        source: 'auto',
+        pick_reason: pick.reason,
+      });
+
+      this.logger.info(
+        `Pushed ${pick.media.title || pick.media.original_filename} ` +
+          `(media_id=${pick.media.id}, request_id=${requestId ?? '?'})`,
+      );
+
+      this.onPushed?.({ media: pick.media, requestId, pickReason: pick.reason });
+    } catch (err) {
+      this.logger.warn(`Scheduler tick failed: ${(err as Error).message}`);
+    } finally {
+      this.busy = false;
+    }
+  }
+}
+
+/**
+ * Liquidsoap's `<id>.queue` returns one or more lines. Each line lists
+ * pending request IDs (often comma-separated, sometimes whitespace).
+ * Empty queue: zero or one empty line. We count comma+whitespace tokens
+ * across all returned lines.
+ */
+function parseQueueDepth(lines: string[]): number {
+  const joined = lines.join(' ').trim();
+  if (joined.length === 0) return 0;
+  return joined.split(/[\s,]+/).filter((s) => /^\d+$/.test(s)).length;
+}
+
+/**
+ * `live.status` returns lines like:
+ *   "live source: connected"  or  "live: no source connected"
+ * We treat any line containing "connected" but not "no source" as live.
+ */
+function isLiveConnected(lines: string[]): boolean {
+  for (const line of lines) {
+    if (/no\s*source/i.test(line)) return false;
+    if (/connected/i.test(line)) return true;
+  }
+  return false;
+}
+
+/**
+ * `<id>.push <uri>` returns the new request id on the first non-empty line.
+ * Returns null if we can't parse — the push still happened.
+ */
+function parsePushedRequestId(lines: string[]): number | null {
+  for (const line of lines) {
+    const m = /^\s*(\d+)\s*$/.exec(line);
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
+}

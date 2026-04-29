@@ -20,6 +20,7 @@ docker run \
   -p 127.0.0.1:1234:1234 \
   -v "$(pwd)/liquidsoap/mix-engine.liq:/etc/liquidsoap/mix-engine.liq:ro" \
   -v "$(pwd)/liquidsoap/audio:/audio" \
+  -v "$(pwd)/media:/media:ro" \
   -v "$(pwd)/data/certs:/etc/icecast2/certs:ro" \
   radio-liquidsoap:latest
 

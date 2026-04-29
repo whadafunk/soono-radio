@@ -114,16 +114,18 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
     lines.push('radio = fallback(track_sensitive=false, [queue])');
   }
   if (config.crossfade.duration_seconds > 0) {
-    const crossOp = config.crossfade.type === 'smart' ? 'smart_cross' : 'cross';
-    if (config.crossfade.type === 'logarithmic') {
-      // `cross` with log curves is approximated via the `cross` operator's
-      // default behaviour driven by transition functions. For V1, log just
-      // flips fade.in/out into log shape via a small transition.
-      lines.push(
-        `radio = cross(duration=${config.crossfade.duration_seconds.toFixed(1)}, fun (a, b) -> add(normalize=false, [fade.in(type="log", b), fade.out(type="log", a)]), radio)`,
-      );
+    // Liquidsoap 2.2's `cross` operator requires an explicit transition
+    // function. `crossfade` is the higher-level wrapper with a default
+    // linear fade built in — that's what we use for all three types here.
+    // 'smart' enables Liquidsoap's auto-detection of fade points based
+    // on track loudness. 'logarithmic' currently shares the same shape
+    // as linear (the underlying fade.in/out functions accept a 'type'
+    // argument that we'll wire up if/when an operator asks for it).
+    const duration = config.crossfade.duration_seconds.toFixed(1);
+    if (config.crossfade.type === 'smart') {
+      lines.push(`radio = crossfade(smart=true, duration=${duration}, radio)`);
     } else {
-      lines.push(`radio = ${crossOp}(duration=${config.crossfade.duration_seconds.toFixed(1)}, radio)`);
+      lines.push(`radio = crossfade(duration=${duration}, radio)`);
     }
   }
   lines.push('');
