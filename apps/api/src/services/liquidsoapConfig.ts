@@ -113,6 +113,9 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
   } else {
     lines.push('radio = fallback(track_sensitive=false, [queue])');
   }
+  // crossfade and downstream operators require an infallible source.
+  // mksafe wraps with silence when nothing else is producing audio.
+  lines.push('radio = mksafe(radio)');
   if (config.crossfade.duration_seconds > 0) {
     // Liquidsoap 2.2's `cross` operator requires an explicit transition
     // function. `crossfade` is the higher-level wrapper with a default
