@@ -1,6 +1,6 @@
 # Plan: Supervisor — MVP-B
 
-**Status:** MVP-B shipped (Steps 1–4 complete). See "Open follow-ups" at the bottom.
+**Status:** MVP-B shipped (Steps 1–4 complete). Plus follow-ups: now-playing fix, telnet command corrections + serialization, smart boot recovery, settings tab + in-place restart. Two items pinned for future sessions — see "Pinned follow-ups" below.
 **Last reviewed:** 2026-04-29
 **Depends on:** Library Phases 1–5 (the picker reads from `media`),
 Mix Engine "boring forever" script (commit `b2d31a9`, queue is in place).
@@ -298,6 +298,52 @@ what's coming up. Looks like a real radio app for the first time.
 
 These all sit on top of the same play_history table and the same
 telnet connection, so MVP-B's foundations remain valid as we layer them in.
+
+---
+
+## Pinned follow-ups (revisit in future sessions)
+
+### 1. LS → API webhooks (Option C)
+
+Replace metadata polling with a push channel. In `mix-engine.liq`, register
+an `on_track` callback that POSTs to a new
+`/supervisor/internal/track-start` endpoint. Sub-second updates, event-
+driven semantics, no polling load. Detailed pros/cons discussed in the
+prior session — main drawback is the .liq script gains real logic that
+has to know the API's URL, plus a new HTTP endpoint to keep healthy
+with auth (localhost-only or shared secret). Polling stays as the
+fallback when the webhook is unreachable.
+
+Approach when picking this up:
+- Add `webhook_url` and a generated secret to the Supervisor config
+- Generator injects them into `mix-engine.liq` via `http.post` from the
+  `on_track` callback
+- New POST endpoint validates the secret, applies the same logic as the
+  metadata watcher (close previous row, refresh started_at on new one)
+- Heartbeat endpoint at 30 s for "is LS still alive" without grepping logs
+
+### 2. Crossfade revisit
+
+LS 2.2's `crossfade` requires `source('a)` (infallible by type), and
+our `request.queue → fallback → ...` chain produces `source(?'a)`.
+`mksafe()` is just sugar for `fallback([s, blank()])` and has the same
+type, so it doesn't help. Generator currently emits a comment
+documenting the operator's choice and skips the actual crossfade line.
+
+Three approaches worth iterating against the running container:
+- (a) Use `playlist()` instead of `request.queue()` — playlists are
+  infallible, so `crossfade(playlist(...))` type-checks. Cost: lose
+  telnet-driven queue control; supervisor would need to write a
+  playlist file every push instead of using `auto.push`. Ugly.
+- (b) Use `cross()` (lower level) with explicit transition function.
+  May type-check on fallible sources because the function handles them.
+  Earlier attempts got a different error; worth retrying with the
+  full LS 2.2 stdlib reference open.
+- (c) Apply crossfade to the queue ONLY (after a `mksafe`-then-cast
+  trick if there is one), accept that live↔queue transitions hard-cut
+  (which is normal for radio anyway).
+
+Best path: pick (b) first, iterate against `docker exec radio-liquidsoap nc localhost 1234` until a `cross(...)` invocation type-checks; fall back to (a) or (c) if (b) refuses.
 
 ---
 
