@@ -103,10 +103,15 @@ export async function getRecentPlays(limit = 20) {
 }
 
 /**
- * Single-row lookup for "what's playing right now" — the most recently
- * inserted row that hasn't yet been closed out.
+ * Single-row lookup by id — used when the supervisor knows which row is
+ * currently airing (from the metadata watcher's request.on_air poll).
+ *
+ * Note: a "most recent open row" lookup doesn't work here because the
+ * scheduler queues tracks ahead of time, so there are typically TWO
+ * rows with ended_at=null: the currently-playing one and the next
+ * queued one. The supervisor's current_play_id is the source of truth.
  */
-export async function getCurrentlyPlaying() {
+export async function getPlayById(id: number) {
   const rows = await db
     .select({
       id: playHistory.id,
@@ -121,8 +126,7 @@ export async function getCurrentlyPlaying() {
     })
     .from(playHistory)
     .leftJoin(mediaTable, eq(playHistory.media_id, mediaTable.id))
-    .where(isNull(playHistory.ended_at))
-    .orderBy(desc(playHistory.id))
+    .where(eq(playHistory.id, id))
     .limit(1);
   return rows[0] ?? null;
 }

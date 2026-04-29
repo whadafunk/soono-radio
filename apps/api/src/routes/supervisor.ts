@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { getStatus } from '../services/supervisor/index.js';
 import {
-  getCurrentlyPlaying,
+  getPlayById,
   getRecentPlays,
 } from '../services/supervisor/playHistory.js';
 
@@ -11,7 +11,14 @@ export async function supervisorRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get('/supervisor/now-playing', async (_request, reply) => {
-    const row = await getCurrentlyPlaying();
+    // Source of truth: the supervisor's current_play_id, set by the
+    // metadata watcher from LS's request.on_air poll. Falls back to
+    // null when the watcher hasn't ticked yet or LS isn't reachable.
+    const status = getStatus();
+    if (status.current_play_id === null) {
+      return reply.send(null);
+    }
+    const row = await getPlayById(status.current_play_id);
     return reply.send(row);
   });
 
