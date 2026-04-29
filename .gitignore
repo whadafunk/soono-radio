@@ -16,4 +16,5 @@ liquidsoap/audio/*
 data/radio.db
 data/radio.db-*
 data/incoming/
+data/supervisor-config.json
 media/

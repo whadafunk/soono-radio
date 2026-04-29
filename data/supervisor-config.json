@@ -1,6 +1,0 @@
-{
-  "scheduler_tick_ms": 5000,
-  "metadata_poll_ms": 1000,
-  "queue_depth_threshold": 1,
-  "separation_minutes": 30
-}
