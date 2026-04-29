@@ -1,4 +1,4 @@
-import { eq, desc, and, isNull, lt } from 'drizzle-orm';
+import { eq, desc, and, isNull, lt, notInArray } from 'drizzle-orm';
 import { db } from '../../db/index.js';
 import { playHistory, media as mediaTable } from '../../db/schema.js';
 import type { PlaySource } from '../../db/schema.js';
@@ -64,15 +64,27 @@ export async function recordEnded(args: {
 }
 
 /**
- * Find any open play_history rows older than `cutoff` and close them.
- * Used on Supervisor boot to recover from crashes — anything left open
- * is presumed to have ended at the cutoff time.
+ * Find any open play_history rows older than `cutoff` and close them,
+ * BUT spare any whose play_history_id is still alive in LS (the
+ * track is queued or airing right now from before the supervisor
+ * restarted).
+ *
+ * Without `liveIds`, behaves the same as the original closeStaleOpenRows —
+ * useful when LS itself is unreachable and we have no choice but to
+ * declare everything stale.
  */
-export async function closeStaleOpenRows(cutoff: Date): Promise<number> {
+export async function closeStaleOpenRows(
+  cutoff: Date,
+  liveIds: number[] = [],
+): Promise<number> {
+  const conditions = [isNull(playHistory.ended_at), lt(playHistory.started_at, cutoff)];
+  if (liveIds.length > 0) {
+    conditions.push(notInArray(playHistory.id, liveIds));
+  }
   const result = await db
     .update(playHistory)
     .set({ ended_at: cutoff, aborted: true })
-    .where(and(isNull(playHistory.ended_at), lt(playHistory.started_at, cutoff)));
+    .where(and(...conditions));
   return Number((result as any).rowsAffected ?? 0);
 }
 

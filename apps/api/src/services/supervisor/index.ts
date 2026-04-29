@@ -52,12 +52,19 @@ export async function start(): Promise<void> {
   });
   await state.telnet.start();
 
-  // Recover from a previous unclean shutdown: any rows still open from
-  // before the API restart get closed and marked aborted so /supervisor/
-  // status doesn't show a stale "currently playing" entry.
-  const recovered = await closeStaleOpenRows(new Date());
+  // Recover from a previous unclean shutdown. The naive 'close all open
+  // rows' is too aggressive — if LS is still playing or has queued
+  // tracks from before the restart, those rows are legitimately still
+  // in flight and shouldn't be closed. We probe LS for the live request
+  // ids, look up their play_history_id annotations, and spare those rows.
+  // If LS is unreachable, fall back to the simple close-everything logic.
+  const liveIds = await fetchAlivePlayHistoryIds(state.telnet, logger);
+  const recovered = await closeStaleOpenRows(new Date(), liveIds);
   if (recovered > 0) {
-    logger.info(`Closed ${recovered} stale play_history rows from previous run`);
+    logger.info(
+      `Closed ${recovered} stale play_history rows from previous run` +
+        (liveIds.length > 0 ? ` (spared ${liveIds.length} still alive in LS)` : ''),
+    );
   }
 
   state.scheduler = new Scheduler(state.telnet, logger);
@@ -109,6 +116,45 @@ export function onPlayed(handler: (play: PlayHistory) => void): () => void {
  * exposed primarily so the API has a way to seed the queue from a UI
  * button when a station first comes up.
  */
+/**
+ * Probe LS for all alive request ids, fetch their metadata, and pull
+ * the play_history_id annotation from each. Used at boot to know which
+ * rows are still legitimately in flight.
+ */
+async function fetchAlivePlayHistoryIds(
+  telnet: TelnetClient,
+  log: { info: (msg: string) => void; warn: (msg: string) => void },
+): Promise<number[]> {
+  // Telnet may not be connected yet (start() returned but the socket
+  // dance hasn't finished). Wait briefly for the first connect.
+  for (let i = 0; i < 10 && !telnet.isConnected(); i++) {
+    await new Promise((r) => setTimeout(r, 100));
+  }
+  if (!telnet.isConnected()) {
+    log.warn('Mix Engine telnet not yet reachable — skipping smart boot recovery');
+    return [];
+  }
+  try {
+    const aliveLines = await telnet.command('request.alive');
+    const rids = aliveLines
+      .flatMap((l) => l.split(/\s+/))
+      .map((s) => parseInt(s, 10))
+      .filter((n) => Number.isFinite(n));
+    const playIds: number[] = [];
+    for (const rid of rids) {
+      const meta = await telnet.command(`request.metadata ${rid}`).catch(() => [] as string[]);
+      for (const line of meta) {
+        const m = /^\s*play_history_id\s*=\s*"(\d+)"\s*$/.exec(line);
+        if (m) playIds.push(parseInt(m[1], 10));
+      }
+    }
+    return playIds;
+  } catch (err) {
+    log.warn(`Boot recovery probe failed: ${(err as Error).message}`);
+    return [];
+  }
+}
+
 export async function enqueueManual(mediaId: number): Promise<void> {
   if (!state.telnet || !state.telnet.isConnected()) {
     throw new Error('Mix Engine telnet is not connected');
