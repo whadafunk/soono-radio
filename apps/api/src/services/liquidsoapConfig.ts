@@ -95,18 +95,13 @@ function renderScript(config: LiquidsoapConfig, icecastSourcePassword: string): 
 
   lines.push('# Source priority — live takes over when present, queue otherwise');
   if (config.harbor.enabled && config.ducking.enabled) {
-    // Live ducks the queue bed. attack/release are seconds in liquidsoap.
-    const attack = (config.ducking.attack_ms / 1000).toFixed(3);
-    const release = (config.ducking.release_ms / 1000).toFixed(3);
-    lines.push('# Ducking: when live is present, the queue drops by depth_db');
-    lines.push(`queue = duck(`);
-    lines.push(`  attack=${attack},`);
-    lines.push(`  release=${release},`);
-    lines.push(`  threshold=-30.,`);
-    lines.push(`  duration=0.5,`);
-    lines.push(`  ${config.ducking.depth_db.toFixed(1)},`);
-    lines.push(`  live, queue`);
-    lines.push(`)`);
+    // Liquidsoap 2.2 doesn't ship a top-level duck() operator. A real
+    // implementation needs sidechain compression, which isn't a one-liner
+    // and varies between LS versions. Until we wire that up, emit a
+    // comment so the script still loads. The UI toggle remains so the
+    // operator's intent is preserved when proper ducking lands.
+    lines.push('# Ducking requested but not yet implemented in this LS version (TODO).');
+    lines.push(`# Operator settings: depth=${config.ducking.depth_db} dB, attack=${config.ducking.attack_ms} ms, release=${config.ducking.release_ms} ms`);
   }
   if (config.harbor.enabled) {
     lines.push('radio = fallback(track_sensitive=false, [live, queue])');
