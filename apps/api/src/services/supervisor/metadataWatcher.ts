@@ -110,14 +110,27 @@ export class MetadataWatcher {
       // metadata polling.
       if (liveOn) return;
 
-      // 2. Auto-source: read the queue's current track metadata.
+      // 2. Auto-source: find the currently airing request id, then read
+      //    its full metadata (which carries our play_history_id annotation
+      //    and the real on_air_timestamp).
+      const onAirLines = await this.telnet
+        .command('request.on_air')
+        .catch(() => [] as string[]);
+      const rid = parseFirstNumber(onAirLines);
+      if (rid === null) return;
+
       const metadataLines = await this.telnet
-        .command('auto.metadata')
+        .command(`request.metadata ${rid}`)
         .catch(() => [] as string[]);
       const metadata = parseMetadataBlock(metadataLines);
       const seenPlayId = parseInt(metadata.play_history_id ?? '', 10);
+      const onAirTs = parseFloat(metadata.on_air_timestamp ?? '');
+      const realStartedAt = Number.isFinite(onAirTs)
+        ? new Date(onAirTs * 1000)
+        : new Date();
 
-      // No metadata yet (queue hasn't started a track) — nothing to do.
+      // No play_history annotation — track was queued by something other
+      // than the supervisor (manual telnet poke, etc.). Skip.
       if (!Number.isFinite(seenPlayId)) return;
 
       // Same row as before — no transition.
@@ -136,10 +149,15 @@ export class MetadataWatcher {
         });
       }
 
-      // Stamp the new row's actual play-start time and snapshot listener count.
+      // Stamp the new row's actual play-start time (from on_air_timestamp,
+      // which is when LS actually put the track on the icecast output)
+      // and snapshot listener count.
       const liveListenerCount = await safeListenerCount();
-      const startedAt = new Date();
-      await recordStarted({ id: seenPlayId, startedAt, liveListenerCount });
+      await recordStarted({
+        id: seenPlayId,
+        startedAt: realStartedAt,
+        liveListenerCount,
+      });
 
       // Look up the track's expected duration so we can compute "aborted"
       // correctly when the next track replaces this one.
@@ -154,7 +172,11 @@ export class MetadataWatcher {
         .limit(1);
       const expectedDurationSeconds = trackRows[0]?.duration_seconds ?? null;
 
-      this.currentAuto = { id: seenPlayId, startedAt, expectedDurationSeconds };
+      this.currentAuto = {
+        id: seenPlayId,
+        startedAt: realStartedAt,
+        expectedDurationSeconds,
+      };
       this.logger.info(
         `Now playing play_history_id=${seenPlayId} ` +
           (expectedDurationSeconds ? `(${expectedDurationSeconds.toFixed(0)}s)` : ''),
@@ -179,6 +201,19 @@ function parseMetadataBlock(lines: string[]): Record<string, string> {
     out[m[1]] = m[2];
   }
   return out;
+}
+
+/**
+ * `request.on_air` returns one rid per line (when crossfading, multiple).
+ * We treat the first numeric line as the currently-airing one — without
+ * crossfade enabled today there's only ever one.
+ */
+function parseFirstNumber(lines: string[]): number | null {
+  for (const line of lines) {
+    const m = /^\s*(\d+)\s*$/.exec(line);
+    if (m) return parseInt(m[1], 10);
+  }
+  return null;
 }
 
 function isLiveConnected(lines: string[]): boolean {

@@ -131,24 +131,49 @@ export class TelnetClient extends EventEmitter {
 
   /**
    * Send a single command, return the response lines (between the command
-   * and the trailing "END" sentinel).
+   * and the trailing "END" sentinel). Multiple concurrent callers are
+   * serialised internally — they queue and await each other.
    */
   async command(cmd: string): Promise<string[]> {
+    // Wait for any in-flight command to finish before starting ours.
+    while (this.pending) {
+      await new Promise<void>((resolve) => {
+        this.commandQueue.push(resolve);
+      });
+    }
     if (!this.connected || !this.socket) {
       throw new Error('Telnet not connected');
-    }
-    if (this.pending) {
-      throw new Error('Telnet busy (one command at a time)');
     }
     return new Promise<string[]>((resolve, reject) => {
       const timer = setTimeout(() => {
         if (this.pending) {
           this.pending = null;
+          this.drainCommandQueue();
           reject(new Error(`Telnet command timed out: ${cmd}`));
         }
       }, COMMAND_TIMEOUT_MS);
-      this.pending = { resolve, reject, timer, accumulator: [] };
+      this.pending = {
+        resolve: (lines) => {
+          this.drainCommandQueue();
+          resolve(lines);
+        },
+        reject: (err) => {
+          this.drainCommandQueue();
+          reject(err);
+        },
+        timer,
+        accumulator: [],
+      };
       this.socket!.write(cmd + '\n');
     });
+  }
+
+  private commandQueue: Array<() => void> = [];
+
+  private drainCommandQueue(): void {
+    // Wake up the next caller waiting in the line; they'll re-check
+    // this.pending and decide whether to proceed.
+    const next = this.commandQueue.shift();
+    if (next) next();
   }
 }
