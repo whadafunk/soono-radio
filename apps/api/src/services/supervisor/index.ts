@@ -1,9 +1,11 @@
 import { eq } from 'drizzle-orm';
 import type { SupervisorStatus, PlayHistory } from '@radio/shared';
 import { db } from '../../db/index.js';
-import { media, playHistory } from '../../db/schema.js';
+import { media } from '../../db/schema.js';
 import { TelnetClient } from './telnet.js';
 import { Scheduler } from './scheduler.js';
+import { MetadataWatcher } from './metadataWatcher.js';
+import { closeStaleOpenRows, recordPushed } from './playHistory.js';
 
 const TELNET_HOST = process.env.LIQUIDSOAP_TELNET_HOST || '127.0.0.1';
 const TELNET_PORT = parseInt(process.env.LIQUIDSOAP_TELNET_PORT || '1234', 10);
@@ -13,7 +15,7 @@ interface SupervisorState {
   running: boolean;
   telnet: TelnetClient | null;
   scheduler: Scheduler | null;
-  current_play_id: number | null;
+  metadataWatcher: MetadataWatcher | null;
   playedHandlers: Set<(play: PlayHistory) => void>;
 }
 
@@ -21,7 +23,7 @@ const state: SupervisorState = {
   running: false,
   telnet: null,
   scheduler: null,
-  current_play_id: null,
+  metadataWatcher: null,
   playedHandlers: new Set(),
 };
 
@@ -50,8 +52,19 @@ export async function start(): Promise<void> {
   });
   await state.telnet.start();
 
+  // Recover from a previous unclean shutdown: any rows still open from
+  // before the API restart get closed and marked aborted so /supervisor/
+  // status doesn't show a stale "currently playing" entry.
+  const recovered = await closeStaleOpenRows(new Date());
+  if (recovered > 0) {
+    logger.info(`Closed ${recovered} stale play_history rows from previous run`);
+  }
+
   state.scheduler = new Scheduler(state.telnet, logger);
   state.scheduler.start();
+
+  state.metadataWatcher = new MetadataWatcher(state.telnet, logger);
+  state.metadataWatcher.start();
 
   state.running = true;
 }
@@ -59,6 +72,10 @@ export async function start(): Promise<void> {
 export async function stop(): Promise<void> {
   if (!state.running) return;
   state.running = false;
+  if (state.metadataWatcher) {
+    state.metadataWatcher.stop();
+    state.metadataWatcher = null;
+  }
   if (state.scheduler) {
     state.scheduler.stop();
     state.scheduler = null;
@@ -76,7 +93,7 @@ export function getStatus(): SupervisorStatus {
     reachable: state.telnet?.isConnected() ?? false,
     queue_depth: sched?.queue_depth ?? 0,
     on_air_source: sched?.on_air_source ?? 'none',
-    current_play_id: state.current_play_id,
+    current_play_id: state.metadataWatcher?.getCurrentPlayId() ?? null,
   };
 }
 
@@ -99,12 +116,14 @@ export async function enqueueManual(mediaId: number): Promise<void> {
   const rows = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
   if (rows.length === 0) throw new Error(`media ${mediaId} not found`);
   const m = rows[0];
-  const uri = `${MEDIA_CONTAINER_PATH}/${m.sha256}.mp3`;
-  await state.telnet.command(`auto.push ${uri}`);
-  await db.insert(playHistory).values({
-    media_id: m.id,
+  const playId = await recordPushed({
+    mediaId: m.id,
     source: 'manual',
-    pick_reason: 'enqueueManual via API',
+    pickReason: 'enqueueManual via API',
   });
-  logger.info(`Manual enqueue: ${m.title || m.original_filename} (media_id=${m.id})`);
+  const uri = `${MEDIA_CONTAINER_PATH}/${m.sha256}.mp3`;
+  await state.telnet.command(`auto.push annotate:play_history_id="${playId}":${uri}`);
+  logger.info(
+    `Manual enqueue: ${m.title || m.original_filename} (media_id=${m.id}, play_history_id=${playId})`,
+  );
 }

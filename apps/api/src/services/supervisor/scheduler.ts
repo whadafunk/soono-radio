@@ -1,7 +1,6 @@
-import { db } from '../../db/index.js';
-import { playHistory } from '../../db/schema.js';
 import type { Media } from '../../db/schema.js';
 import { pickNext } from './picker.js';
+import { recordPushed } from './playHistory.js';
 import type { TelnetClient } from './telnet.js';
 
 const TICK_INTERVAL_MS = 5_000;
@@ -81,22 +80,23 @@ export class Scheduler {
         return;
       }
 
+      // Insert the play_history row first so we know its id, then push
+      // with an annotation that lets the metadata watcher correlate the
+      // currently-playing track back to this row.
+      const playId = await recordPushed({
+        mediaId: pick.media.id,
+        source: 'auto',
+        pickReason: pick.reason,
+      });
       const containerUri = `${MEDIA_CONTAINER_PATH}/${pick.media.sha256}.mp3`;
-      const pushLines = await this.telnet.command(`auto.push ${containerUri}`);
+      const annotated = `annotate:play_history_id="${playId}":${containerUri}`;
+      const pushLines = await this.telnet.command(`auto.push ${annotated}`);
       const requestId = parsePushedRequestId(pushLines);
       this.state.last_push_request_id = requestId;
 
-      // Step 2 records the row at push-time; Step 3 will refine timing
-      // (started_at, ended_at, aborted) using metadata events.
-      await db.insert(playHistory).values({
-        media_id: pick.media.id,
-        source: 'auto',
-        pick_reason: pick.reason,
-      });
-
       this.logger.info(
         `Pushed ${pick.media.title || pick.media.original_filename} ` +
-          `(media_id=${pick.media.id}, request_id=${requestId ?? '?'})`,
+          `(media_id=${pick.media.id}, play_history_id=${playId}, request_id=${requestId ?? '?'})`,
       );
 
       this.onPushed?.({ media: pick.media, requestId, pickReason: pick.reason });
