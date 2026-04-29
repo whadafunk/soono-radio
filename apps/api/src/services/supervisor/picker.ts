@@ -2,8 +2,7 @@ import { eq, gte } from 'drizzle-orm';
 import { db } from '../../db/index.js';
 import { media, playHistory } from '../../db/schema.js';
 import type { Media } from '../../db/schema.js';
-
-const SEPARATION_MINUTES = 30;
+import { getSupervisorConfig } from './config.js';
 
 export interface PickResult {
   media: Media;
@@ -19,7 +18,8 @@ export interface PickResult {
  * Decoupled from the scheduler / telnet for testability — pure DB I/O.
  */
 export async function pickNext(now: Date = new Date()): Promise<PickResult | null> {
-  const cutoff = new Date(now.getTime() - SEPARATION_MINUTES * 60_000);
+  const separationMinutes = getSupervisorConfig().separation_minutes;
+  const cutoff = new Date(now.getTime() - separationMinutes * 60_000);
 
   const candidates = await db
     .select()
@@ -41,6 +41,6 @@ export async function pickNext(now: Date = new Date()): Promise<PickResult | nul
   const choice = eligible[Math.floor(Math.random() * eligible.length)];
   return {
     media: choice,
-    reason: `random pick category=music separation=${SEPARATION_MINUTES}min eligible=${eligible.length}/${candidates.length}`,
+    reason: `random pick category=music separation=${separationMinutes}min eligible=${eligible.length}/${candidates.length}`,
   };
 }

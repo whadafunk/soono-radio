@@ -14,6 +14,8 @@ import {
   TranscodeOptions,
   SupervisorStatus,
   SupervisorStatusSchema,
+  SupervisorConfig,
+  SupervisorConfigSchema,
   NowPlaying,
   NowPlayingSchema,
   RecentPlay,
@@ -420,6 +422,32 @@ export async function fetchNowPlaying(): Promise<NowPlaying> {
   if (!res.ok) throw new Error(`Failed to fetch now-playing: ${res.statusText}`);
   const data = await res.json();
   return NowPlayingSchema.parse(data);
+}
+
+export async function fetchSupervisorConfig(): Promise<SupervisorConfig> {
+  const res = await fetch(`${API_BASE}/supervisor/config`);
+  if (!res.ok) throw new Error(`Failed to fetch supervisor config: ${res.statusText}`);
+  return SupervisorConfigSchema.parse(await res.json());
+}
+
+export async function updateSupervisorConfig(config: SupervisorConfig): Promise<void> {
+  const res = await fetch(`${API_BASE}/supervisor/config`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(config),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to save supervisor config: ${res.statusText}`);
+  }
+}
+
+export async function restartSupervisor(): Promise<void> {
+  const res = await fetch(`${API_BASE}/supervisor/restart`, { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to restart supervisor: ${res.statusText}`);
+  }
 }
 
 export async function fetchRecentPlays(limit = 20): Promise<RecentPlay[]> {

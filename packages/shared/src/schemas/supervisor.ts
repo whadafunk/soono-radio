@@ -42,6 +42,14 @@ export const NowPlayingSchema = z
 export type NowPlaying = z.infer<typeof NowPlayingSchema>;
 
 /** Recent-plays row (one per /supervisor/recent-plays). */
+export const SupervisorConfigSchema = z.object({
+  scheduler_tick_ms: z.number().int().min(500).max(60_000).default(5_000),
+  metadata_poll_ms: z.number().int().min(500).max(60_000).default(5_000),
+  queue_depth_threshold: z.number().int().min(1).max(20).default(1),
+  separation_minutes: z.number().int().min(0).max(720).default(30),
+});
+export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>;
+
 export const RecentPlaySchema = z.object({
   id: z.number().int(),
   media_id: z.number().int().nullable(),

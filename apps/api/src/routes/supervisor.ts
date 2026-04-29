@@ -1,9 +1,14 @@
 import { FastifyInstance } from 'fastify';
-import { getStatus } from '../services/supervisor/index.js';
+import { SupervisorConfigSchema } from '@radio/shared';
+import { getStatus, start as supervisorStart, stop as supervisorStop } from '../services/supervisor/index.js';
 import {
   getPlayById,
   getRecentPlays,
 } from '../services/supervisor/playHistory.js';
+import {
+  getSupervisorConfig,
+  writeSupervisorConfig,
+} from '../services/supervisor/config.js';
 
 export async function supervisorRoutes(fastify: FastifyInstance) {
   fastify.get('/supervisor/status', async (_request, reply) => {
@@ -35,6 +40,28 @@ export async function supervisorRoutes(fastify: FastifyInstance) {
     return reply.status(501).send({
       error: 'skip arrives with a later supervisor phase (Live Assist)',
     });
+  });
+
+  fastify.get('/supervisor/config', async (_request, reply) => {
+    return reply.send(getSupervisorConfig());
+  });
+
+  fastify.post<{ Body: unknown }>('/supervisor/config', async (request, reply) => {
+    const parsed = SupervisorConfigSchema.safeParse(request.body);
+    if (!parsed.success) {
+      return reply.status(400).send({ errors: parsed.error.errors });
+    }
+    await writeSupervisorConfig(parsed.data);
+    return reply.send({ success: true });
+  });
+
+  fastify.post('/supervisor/restart', async (_request, reply) => {
+    // In-process restart — stops the supervisor module and starts it
+    // again, picking up any config changes. Doesn't touch the API
+    // server itself or any other routes.
+    await supervisorStop();
+    await supervisorStart();
+    return reply.send({ success: true });
   });
 }
 

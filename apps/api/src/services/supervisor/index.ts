@@ -6,6 +6,7 @@ import { TelnetClient } from './telnet.js';
 import { Scheduler } from './scheduler.js';
 import { MetadataWatcher } from './metadataWatcher.js';
 import { closeStaleOpenRows, recordPushed } from './playHistory.js';
+import { loadSupervisorConfig } from './config.js';
 
 const TELNET_HOST = process.env.LIQUIDSOAP_TELNET_HOST || '127.0.0.1';
 const TELNET_PORT = parseInt(process.env.LIQUIDSOAP_TELNET_PORT || '1234', 10);
@@ -43,6 +44,9 @@ export function setLogger(l: { info: (msg: string) => void; warn: (msg: string) 
  */
 export async function start(): Promise<void> {
   if (state.running) return;
+  // Load operator-tunable settings (poll intervals, separation, queue
+  // depth threshold) before any tick reads them.
+  await loadSupervisorConfig();
   state.telnet = new TelnetClient(TELNET_HOST, TELNET_PORT, logger);
   state.telnet.on('connected', () => {
     logger.info('Mix Engine telnet attached');

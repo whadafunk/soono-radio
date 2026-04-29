@@ -2,9 +2,7 @@ import type { Media } from '../../db/schema.js';
 import { pickNext } from './picker.js';
 import { recordPushed } from './playHistory.js';
 import type { TelnetClient } from './telnet.js';
-
-const TICK_INTERVAL_MS = 5_000;
-const QUEUE_DEPTH_THRESHOLD = 1;
+import { getSupervisorConfig } from './config.js';
 
 // Container-side path where the host's media/ pool is mounted by
 // start-liquidsoap.sh. Liquidsoap accesses files via this absolute path.
@@ -41,10 +39,11 @@ export class Scheduler {
 
   start(): void {
     if (this.timer) return;
-    // Run a tick immediately on start so we don't wait 5 s for the first
-    // push when the API boots into a connected Mix Engine.
+    const intervalMs = getSupervisorConfig().scheduler_tick_ms;
+    // Run a tick immediately on start so we don't wait the full interval
+    // for the first push when the API boots into a connected Mix Engine.
     void this.tick();
-    this.timer = setInterval(() => void this.tick(), TICK_INTERVAL_MS);
+    this.timer = setInterval(() => void this.tick(), intervalMs);
   }
 
   stop(): void {
@@ -70,7 +69,7 @@ export class Scheduler {
       this.state.on_air_source = isLiveConnected(liveLines) ? 'live' : 'auto';
 
       // 2. If queue is short, pick and push.
-      if (this.state.queue_depth >= QUEUE_DEPTH_THRESHOLD) return;
+      if (this.state.queue_depth >= getSupervisorConfig().queue_depth_threshold) return;
 
       const pick = await pickNext();
       if (!pick) {

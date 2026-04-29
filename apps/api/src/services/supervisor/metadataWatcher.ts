@@ -8,8 +8,7 @@ import {
   recordStarted,
 } from './playHistory.js';
 import { fetchIcecastStats } from '../icecastStats.js';
-
-const POLL_INTERVAL_MS = 5_000;
+import { getSupervisorConfig } from './config.js';
 
 interface OpenRowState {
   id: number;
@@ -45,8 +44,9 @@ export class MetadataWatcher {
 
   start(): void {
     if (this.timer) return;
+    const intervalMs = getSupervisorConfig().metadata_poll_ms;
     void this.tick();
-    this.timer = setInterval(() => void this.tick(), POLL_INTERVAL_MS);
+    this.timer = setInterval(() => void this.tick(), intervalMs);
   }
 
   stop(): void {
