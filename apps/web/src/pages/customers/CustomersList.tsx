@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader, Plus, Trash2, ChevronDown, ArrowUpDown } from 'lucide-react';
+import { Loader, Plus, Trash2, ChevronDown, ChevronUp, ChevronsUpDown } from 'lucide-react';
 import {
   Customer,
   CustomerCreate,
@@ -41,10 +41,11 @@ export function CustomersList() {
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [activeTab, setActiveTab] = useState<'contracts' | 'contacts'>('contracts');
+  const [customerSort, setCustomerSort] = useState<SortConfig>(null);
   const [contractSort, setContractSort] = useState<SortConfig>(null);
   const [contactSort, setContactSort] = useState<SortConfig>(null);
 
-  const { data: customers = [], isLoading } = useQuery({
+  const { data: rawCustomers = [], isLoading } = useQuery({
     queryKey: ['customers'],
     queryFn: fetchCustomers,
   });
@@ -58,6 +59,18 @@ export function CustomersList() {
     queryKey: ['contacts'],
     queryFn: () => fetchContacts(),
   });
+
+  let customers = [...rawCustomers];
+  if (customerSort) {
+    customers.sort((a, b) => {
+      let aVal: any = a[customerSort.column as keyof typeof a];
+      let bVal: any = b[customerSort.column as keyof typeof b];
+      if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+      if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+      const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+      return customerSort.direction === 'asc' ? cmp : -cmp;
+    });
+  }
 
   const selectedCustomer = customers.find((c) => c.id === selectedCustomerId);
   let customerContracts = selectedCustomerId
@@ -176,13 +189,21 @@ export function CustomersList() {
           <table className="w-full text-sm">
             <thead className="bg-zinc-800 sticky top-0">
               <tr>
-                <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                  Name
-                </th>
-                <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                  Email
-                </th>
-                <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                <SortableHeader
+                  label="Name"
+                  column="name"
+                  isActive={customerSort?.column === 'name'}
+                  direction={customerSort?.direction}
+                  onSort={() => toggleSort('name', setCustomerSort, customerSort)}
+                />
+                <SortableHeader
+                  label="Email"
+                  column="email"
+                  isActive={customerSort?.column === 'email'}
+                  direction={customerSort?.direction}
+                  onSort={() => toggleSort('email', setCustomerSort, customerSort)}
+                />
+                <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider border-r border-zinc-700/50">
                   Status
                 </th>
               </tr>
@@ -198,9 +219,9 @@ export function CustomersList() {
                       : ''
                   }`}
                 >
-                  <td className="px-6 py-3 font-medium text-white">{customer.name}</td>
-                  <td className="px-6 py-3 text-zinc-400">{customer.email || '—'}</td>
-                  <td className="px-6 py-3">
+                  <td className="px-6 py-3 font-medium text-white border-r border-zinc-700/50">{customer.name}</td>
+                  <td className="px-6 py-3 text-zinc-400 border-r border-zinc-700/50">{customer.email || '—'}</td>
+                  <td className="px-6 py-3 border-r border-zinc-700/50">
                     <span
                       className={`text-xs px-2 py-1 rounded ${
                         customer.active
@@ -226,14 +247,14 @@ export function CustomersList() {
 
       {/* BOTTOM: Assets for Selected Customer (50%) — Tabbed View */}
       {selectedCustomer ? (
-        <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <div className="flex-1 min-h-0 flex flex-col bg-slate-950 border border-indigo-900/50 rounded-lg overflow-hidden">
           {/* Tab Bar */}
-          <div className="flex border-b border-zinc-800 bg-zinc-800/50">
+          <div className="flex border-b border-indigo-900/30 bg-slate-900/50">
             <button
               onClick={() => setActiveTab('contracts')}
               className={`px-6 py-3 text-sm font-medium transition-colors ${
                 activeTab === 'contracts'
-                  ? 'text-white border-b-2 border-indigo-500 bg-zinc-900'
+                  ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
                   : 'text-zinc-400 hover:text-zinc-300'
               }`}
             >
@@ -243,7 +264,7 @@ export function CustomersList() {
               onClick={() => setActiveTab('contacts')}
               className={`px-6 py-3 text-sm font-medium transition-colors ${
                 activeTab === 'contacts'
-                  ? 'text-white border-b-2 border-indigo-500 bg-zinc-900'
+                  ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
                   : 'text-zinc-400 hover:text-zinc-300'
               }`}
             >
@@ -274,6 +295,7 @@ export function CustomersList() {
                           isActive={contractSort?.column === 'name'}
                           direction={contractSort?.direction}
                           onSort={() => toggleSort('name', setContractSort, contractSort)}
+                          borderColor="border-indigo-900/30"
                         />
                         <SortableHeader
                           label="Plays/mo"
@@ -281,6 +303,7 @@ export function CustomersList() {
                           isActive={contractSort?.column === 'plays_per_month'}
                           direction={contractSort?.direction}
                           onSort={() => toggleSort('plays_per_month', setContractSort, contractSort)}
+                          borderColor="border-indigo-900/30"
                         />
                         <SortableHeader
                           label="Period"
@@ -288,8 +311,9 @@ export function CustomersList() {
                           isActive={contractSort?.column === 'starts_on'}
                           direction={contractSort?.direction}
                           onSort={() => toggleSort('starts_on', setContractSort, contractSort)}
+                          borderColor="border-indigo-900/30"
                         />
-                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider border-r border-indigo-900/30">
                           Pacing
                         </th>
                       </tr>
@@ -329,6 +353,7 @@ export function CustomersList() {
                           isActive={contactSort?.column === 'name'}
                           direction={contactSort?.direction}
                           onSort={() => toggleSort('name', setContactSort, contactSort)}
+                          borderColor="border-indigo-900/30"
                         />
                         <SortableHeader
                           label="Email"
@@ -336,6 +361,7 @@ export function CustomersList() {
                           isActive={contactSort?.column === 'email'}
                           direction={contactSort?.direction}
                           onSort={() => toggleSort('email', setContactSort, contactSort)}
+                          borderColor="border-indigo-900/30"
                         />
                         <SortableHeader
                           label="Phone"
@@ -343,6 +369,7 @@ export function CustomersList() {
                           isActive={contactSort?.column === 'phone'}
                           direction={contactSort?.direction}
                           onSort={() => toggleSort('phone', setContactSort, contactSort)}
+                          borderColor="border-indigo-900/30"
                         />
                         <SortableHeader
                           label="Role"
@@ -350,17 +377,18 @@ export function CustomersList() {
                           isActive={contactSort?.column === 'role'}
                           direction={contactSort?.direction}
                           onSort={() => toggleSort('role', setContactSort, contactSort)}
+                          borderColor="border-indigo-900/30"
                         />
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-800">
                       {customerContacts.map((contact) => (
-                        <tr key={contact.id} className="hover:bg-zinc-800/50">
-                          <td className="px-6 py-2 font-medium text-white">{contact.name}</td>
-                          <td className="px-6 py-2 text-zinc-400">{contact.email || '—'}</td>
-                          <td className="px-6 py-2 text-zinc-400">{contact.phone || '—'}</td>
-                          <td className="px-6 py-2 text-zinc-400">
-                            <span className="text-xs px-2 py-0.5 bg-zinc-800 rounded">
+                        <tr key={contact.id} className="hover:bg-slate-900/50">
+                          <td className="px-6 py-2 font-medium text-white border-r border-indigo-900/30">{contact.name}</td>
+                          <td className="px-6 py-2 text-zinc-400 border-r border-indigo-900/30">{contact.email || '—'}</td>
+                          <td className="px-6 py-2 text-zinc-400 border-r border-indigo-900/30">{contact.phone || '—'}</td>
+                          <td className="px-6 py-2 text-zinc-400 border-r border-indigo-900/30">
+                            <span className="text-xs px-2 py-0.5 bg-slate-800 rounded">
                               {contact.role || 'General'}
                             </span>
                           </td>
@@ -394,22 +422,30 @@ function SortableHeader({
   isActive,
   direction,
   onSort,
+  borderColor = 'border-zinc-700/50',
 }: {
   label: string;
   column: string;
   isActive: boolean;
   direction?: 'asc' | 'desc';
   onSort: () => void;
+  borderColor?: string;
 }) {
   return (
     <th
       onClick={onSort}
-      className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-zinc-300 transition-colors"
+      className={`px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-white select-none transition-colors border-r ${borderColor}`}
     >
       <div className="flex items-center gap-1">
         {label}
-        {isActive && (
-          <ArrowUpDown className={`w-3 h-3 ${direction === 'asc' ? 'text-indigo-400' : 'text-indigo-300'}`} />
+        {isActive ? (
+          direction === 'asc' ? (
+            <ChevronUp className="w-3 h-3" />
+          ) : (
+            <ChevronDown className="w-3 h-3" />
+          )
+        ) : (
+          <ChevronsUpDown className="w-3 h-3 opacity-30" />
         )}
       </div>
     </th>
@@ -478,13 +514,13 @@ function ContractTableRow({ contract }: { contract: Contract & { customer_name: 
   });
 
   return (
-    <tr className="hover:bg-zinc-800/50">
-      <td className="px-6 py-2 font-medium text-white">{contract.name}</td>
-      <td className="px-6 py-2 text-zinc-400">{contract.plays_per_month}</td>
-      <td className="px-6 py-2 text-zinc-400 text-xs">
+    <tr className="hover:bg-slate-900/50">
+      <td className="px-6 py-2 font-medium text-white border-r border-indigo-900/30">{contract.name}</td>
+      <td className="px-6 py-2 text-zinc-400 border-r border-indigo-900/30">{contract.plays_per_month}</td>
+      <td className="px-6 py-2 text-zinc-400 text-xs border-r border-indigo-900/30">
         {contract.starts_on} → {contract.ends_on}
       </td>
-      <td className="px-6 py-2">
+      <td className="px-6 py-2 border-r border-indigo-900/30">
         {pacing && (
           <div className="flex items-center gap-2">
             <div className="text-xs font-medium text-white">{pacing.pct}%</div>
