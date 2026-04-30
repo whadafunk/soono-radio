@@ -509,3 +509,283 @@ export async function restartLiquidsoap(): Promise<{ success: boolean }> {
   // Liquidsoap may take a few seconds to bind telnet. Treat this as soft success.
   return { success: true };
 }
+
+// ============ SCHEDULING (CUSTOMERS + CONTRACTS) ============
+// MOCK DATA — replace with real API calls later
+
+import {
+  Customer,
+  CustomerCreate,
+  CustomerPatch,
+  CustomerSchema,
+  Contract,
+  ContractCreate,
+  ContractPatch,
+  ContractWithCustomer,
+  ContractPacingSchema,
+  Contact,
+  ContactCreate,
+  ContactPatch,
+} from '@radio/shared';
+
+// Mock in-memory store for phase 1 UI exploration
+let mockCustomers: Customer[] = [
+  {
+    id: 1,
+    name: 'ACME Corp',
+    email: 'contact@acme.com',
+    phone: '555-0001',
+    notes: 'Major local advertiser',
+    active: true,
+    created_at: new Date('2026-03-01'),
+    updated_at: new Date('2026-03-15'),
+  },
+  {
+    id: 2,
+    name: 'Local Plumber',
+    email: 'info@localplumber.com',
+    phone: '555-0002',
+    notes: null,
+    active: true,
+    created_at: new Date('2026-04-01'),
+    updated_at: new Date('2026-04-01'),
+  },
+];
+
+let mockContracts: Contract[] = [
+  {
+    id: 1,
+    customer_id: 1,
+    name: 'Summer Campaign 2026',
+    starts_on: '2026-06-01',
+    ends_on: '2026-08-31',
+    plays_per_month: 45,
+    time_window_start: '06:00',
+    time_window_end: '22:00',
+    days_of_week: null,
+    separation_minutes: 90,
+    advertiser_separation_min: 30,
+    priority: 'hard',
+    notes: 'Peak season promotion',
+    active: true,
+    created_at: new Date('2026-04-15'),
+    updated_at: new Date('2026-04-15'),
+  },
+  {
+    id: 2,
+    customer_id: 2,
+    name: 'Ongoing Local Spots',
+    starts_on: '2026-04-01',
+    ends_on: '2026-12-31',
+    plays_per_month: 20,
+    time_window_start: '07:00',
+    time_window_end: '20:00',
+    days_of_week: '1,2,3,4,5',
+    separation_minutes: 120,
+    advertiser_separation_min: 45,
+    priority: 'standard',
+    notes: null,
+    active: true,
+    created_at: new Date('2026-04-01'),
+    updated_at: new Date('2026-04-01'),
+  },
+];
+
+let nextCustomerId = 3;
+let nextContractId = 3;
+
+export async function fetchCustomers(): Promise<Customer[]> {
+  return Promise.resolve([...mockCustomers]);
+}
+
+export async function createCustomer(data: CustomerCreate): Promise<Customer> {
+  const customer: Customer = {
+    id: nextCustomerId++,
+    ...data,
+    email: data.email ?? null,
+    phone: data.phone ?? null,
+    notes: data.notes ?? null,
+    active: true,
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+  mockCustomers.push(customer);
+  return Promise.resolve(customer);
+}
+
+export async function fetchCustomer(id: number): Promise<Customer> {
+  const customer = mockCustomers.find((c) => c.id === id);
+  if (!customer) throw new Error(`Customer ${id} not found`);
+  return Promise.resolve(customer);
+}
+
+export async function updateCustomer(id: number, patch: CustomerPatch): Promise<Customer> {
+  const idx = mockCustomers.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error(`Customer ${id} not found`);
+  const updated = { ...mockCustomers[idx], ...patch, updated_at: new Date() };
+  mockCustomers[idx] = updated;
+  return Promise.resolve(updated);
+}
+
+export async function deleteCustomer(id: number): Promise<void> {
+  const idx = mockCustomers.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error(`Customer ${id} not found`);
+  mockCustomers.splice(idx, 1);
+  return Promise.resolve();
+}
+
+export async function fetchContracts(customerId?: number): Promise<ContractWithCustomer[]> {
+  const filtered = customerId
+    ? mockContracts.filter((c) => c.customer_id === customerId)
+    : mockContracts;
+
+  return Promise.resolve(
+    filtered.map((contract) => {
+      const customer = mockCustomers.find((c) => c.id === contract.customer_id);
+      return {
+        ...contract,
+        customer_name: customer?.name ?? 'Unknown',
+      };
+    }),
+  );
+}
+
+export async function createContract(data: ContractCreate): Promise<Contract> {
+  const contract: Contract = {
+    id: nextContractId++,
+    ...data,
+    time_window_start: data.time_window_start ?? null,
+    time_window_end: data.time_window_end ?? null,
+    days_of_week: data.days_of_week ?? null,
+    notes: data.notes ?? null,
+    active: true,
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+  mockContracts.push(contract);
+  return Promise.resolve(contract);
+}
+
+export async function fetchContract(id: number): Promise<Contract> {
+  const contract = mockContracts.find((c) => c.id === id);
+  if (!contract) throw new Error(`Contract ${id} not found`);
+  return Promise.resolve(contract);
+}
+
+export async function updateContract(id: number, patch: ContractPatch): Promise<Contract> {
+  const idx = mockContracts.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error(`Contract ${id} not found`);
+  const updated = { ...mockContracts[idx], ...patch, updated_at: new Date() };
+  mockContracts[idx] = updated;
+  return Promise.resolve(updated);
+}
+
+export async function deleteContract(id: number): Promise<void> {
+  const idx = mockContracts.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error(`Contract ${id} not found`);
+  mockContracts.splice(idx, 1);
+  return Promise.resolve();
+}
+
+export async function fetchContractPacing(
+  id: number,
+): Promise<{ plays_this_month: number; target: number; pct: number; on_track: boolean }> {
+  const contract = mockContracts.find((c) => c.id === id);
+  if (!contract) throw new Error(`Contract ${id} not found`);
+
+  const now = new Date();
+  const plays_this_month = Math.floor(Math.random() * (contract.plays_per_month + 1));
+  const target = contract.plays_per_month;
+  const pct = Math.round((plays_this_month / target) * 100);
+  const on_track = pct >= Math.round((now.getDate() / 28) * 100);
+
+  return Promise.resolve({
+    plays_this_month,
+    target,
+    pct,
+    on_track,
+  });
+}
+
+// ============ CONTACTS ============
+
+let mockContacts: Contact[] = [
+  {
+    id: 1,
+    customer_id: 1,
+    name: 'John Smith',
+    email: 'john@acme.com',
+    phone: '555-0001',
+    role: 'Account Manager',
+    notes: 'Primary contact for campaign planning',
+    created_at: new Date('2026-04-01'),
+    updated_at: new Date('2026-04-15'),
+  },
+  {
+    id: 2,
+    customer_id: 1,
+    name: 'Jane Doe',
+    email: 'jane@acme.com',
+    phone: '555-0002',
+    role: 'Technical Contact',
+    notes: null,
+    created_at: new Date('2026-04-10'),
+    updated_at: new Date('2026-04-10'),
+  },
+  {
+    id: 3,
+    customer_id: 2,
+    name: 'Bob Johnson',
+    email: 'bob@localplumber.com',
+    phone: '555-0003',
+    role: 'Owner',
+    notes: 'Check with Bob for any ad changes',
+    created_at: new Date('2026-04-01'),
+    updated_at: new Date('2026-04-01'),
+  },
+];
+
+let nextContactId = 4;
+
+export async function fetchContacts(customerId?: number): Promise<Contact[]> {
+  const filtered = customerId
+    ? mockContacts.filter((c) => c.customer_id === customerId)
+    : mockContacts;
+  return Promise.resolve([...filtered]);
+}
+
+export async function createContact(data: ContactCreate): Promise<Contact> {
+  const contact: Contact = {
+    id: nextContactId++,
+    ...data,
+    email: data.email ?? null,
+    phone: data.phone ?? null,
+    role: data.role ?? null,
+    notes: data.notes ?? null,
+    created_at: new Date(),
+    updated_at: new Date(),
+  };
+  mockContacts.push(contact);
+  return Promise.resolve(contact);
+}
+
+export async function fetchContact(id: number): Promise<Contact> {
+  const contact = mockContacts.find((c) => c.id === id);
+  if (!contact) throw new Error(`Contact ${id} not found`);
+  return Promise.resolve(contact);
+}
+
+export async function updateContact(id: number, patch: ContactPatch): Promise<Contact> {
+  const idx = mockContacts.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error(`Contact ${id} not found`);
+  const updated = { ...mockContacts[idx], ...patch, updated_at: new Date() };
+  mockContacts[idx] = updated;
+  return Promise.resolve(updated);
+}
+
+export async function deleteContact(id: number): Promise<void> {
+  const idx = mockContacts.findIndex((c) => c.id === id);
+  if (idx === -1) throw new Error(`Contact ${id} not found`);
+  mockContacts.splice(idx, 1);
+  return Promise.resolve();
+}

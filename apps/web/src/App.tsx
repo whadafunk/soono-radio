@@ -12,6 +12,8 @@ import { LibraryLayout } from './pages/library/LibraryLayout';
 import { LibraryBrowse } from './pages/library/LibraryBrowse';
 import { LibraryUpload } from './pages/library/LibraryUpload';
 import { ComingSoon } from './pages/ComingSoon';
+import { CustomersLayout } from './pages/customers/CustomersLayout';
+import { CustomersList } from './pages/customers/CustomersList';
 
 const queryClient = new QueryClient();
 
@@ -33,6 +35,9 @@ export function App() {
             <Route path="/library" element={<LibraryLayout />}>
               <Route index element={<LibraryBrowse />} />
               <Route path="upload" element={<LibraryUpload />} />
+            </Route>
+            <Route path="/customers" element={<CustomersLayout />}>
+              <Route index element={<CustomersList />} />
             </Route>
             <Route path="/playlists" element={<ComingSoon page="Playlists" />} />
             <Route path="/jingles" element={<ComingSoon page="Jingles" />} />
