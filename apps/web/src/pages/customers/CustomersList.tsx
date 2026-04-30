@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader, Plus, Trash2, ChevronDown } from 'lucide-react';
+import { Loader, Plus, Trash2, ChevronDown, ArrowUpDown } from 'lucide-react';
 import {
   Customer,
   CustomerCreate,
@@ -33,11 +33,16 @@ import {
   fetchContractPacing,
 } from '../../api';
 
+type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
+
 export function CustomersList() {
   const queryClient = useQueryClient();
   const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [activeTab, setActiveTab] = useState<'contracts' | 'contacts'>('contracts');
+  const [contractSort, setContractSort] = useState<SortConfig>(null);
+  const [contactSort, setContactSort] = useState<SortConfig>(null);
 
   const { data: customers = [], isLoading } = useQuery({
     queryKey: ['customers'],
@@ -55,12 +60,42 @@ export function CustomersList() {
   });
 
   const selectedCustomer = customers.find((c) => c.id === selectedCustomerId);
-  const customerContracts = selectedCustomerId
+  let customerContracts = selectedCustomerId
     ? contracts.filter((c) => c.customer_id === selectedCustomerId)
     : [];
-  const customerContacts = selectedCustomerId
+  let customerContacts = selectedCustomerId
     ? contacts.filter((c) => c.customer_id === selectedCustomerId)
     : [];
+
+  if (contractSort) {
+    customerContracts = [...customerContracts].sort((a, b) => {
+      let aVal: any = a[contractSort.column as keyof typeof a];
+      let bVal: any = b[contractSort.column as keyof typeof b];
+      if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+      if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+      const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+      return contractSort.direction === 'asc' ? cmp : -cmp;
+    });
+  }
+
+  if (contactSort) {
+    customerContacts = [...customerContacts].sort((a, b) => {
+      let aVal: any = a[contactSort.column as keyof typeof a];
+      let bVal: any = b[contactSort.column as keyof typeof b];
+      if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+      if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+      const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
+      return contactSort.direction === 'asc' ? cmp : -cmp;
+    });
+  }
+
+  const toggleSort = (column: string, setSortFn: (s: SortConfig) => void, currentSort: SortConfig) => {
+    if (currentSort?.column === column) {
+      setSortFn(currentSort.direction === 'asc' ? { column, direction: 'desc' } : null);
+    } else {
+      setSortFn({ column, direction: 'asc' });
+    }
+  };
 
   const createCustomerMutation = useMutation({
     mutationFn: createCustomer,
@@ -189,112 +224,159 @@ export function CustomersList() {
         </div>
       </div>
 
-      {/* BOTTOM: Assets for Selected Customer (50%) */}
+      {/* BOTTOM: Assets for Selected Customer (50%) — Tabbed View */}
       {selectedCustomer ? (
-        <div className="flex-1 min-h-0 flex flex-col space-y-4 overflow-hidden">
-          {/* Contracts Table */}
-          <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-            <div className="px-6 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-800/50">
-              <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
-                Contracts ({customerContracts.length})
-              </h3>
-              <button
-                onClick={() => {}}
-                className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors"
-              >
-                <Plus className="w-3 h-3" />
-                New
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-zinc-800 sticky top-0">
-                  <tr>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Plays/mo
-                    </th>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Period
-                    </th>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Pacing
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-800">
-                  {customerContracts.map((contract) => (
-                    <ContractTableRow key={contract.id} contract={contract} />
-                  ))}
-                </tbody>
-              </table>
-
-              {customerContracts.length === 0 && (
-                <div className="p-4 text-center text-zinc-500 text-xs">
-                  No contracts
-                </div>
-              )}
-            </div>
+        <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          {/* Tab Bar */}
+          <div className="flex border-b border-zinc-800 bg-zinc-800/50">
+            <button
+              onClick={() => setActiveTab('contracts')}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'contracts'
+                  ? 'text-white border-b-2 border-indigo-500 bg-zinc-900'
+                  : 'text-zinc-400 hover:text-zinc-300'
+              }`}
+            >
+              Contracts ({customerContracts.length})
+            </button>
+            <button
+              onClick={() => setActiveTab('contacts')}
+              className={`px-6 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'contacts'
+                  ? 'text-white border-b-2 border-indigo-500 bg-zinc-900'
+                  : 'text-zinc-400 hover:text-zinc-300'
+              }`}
+            >
+              Contacts ({customerContacts.length})
+            </button>
           </div>
 
-          {/* Contacts Table */}
-          <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-            <div className="px-6 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-800/50">
-              <h3 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider">
-                Contacts ({customerContacts.length})
-              </h3>
-              <button
-                onClick={() => {}}
-                className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors"
-              >
-                <Plus className="w-3 h-3" />
-                New
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-auto">
-              <table className="w-full text-xs">
-                <thead className="bg-zinc-800 sticky top-0">
-                  <tr>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Name
-                    </th>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Email
-                    </th>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Phone
-                    </th>
-                    <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                      Role
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-zinc-800">
-                  {customerContacts.map((contact) => (
-                    <tr key={contact.id} className="hover:bg-zinc-800/50">
-                      <td className="px-6 py-2 font-medium text-white">{contact.name}</td>
-                      <td className="px-6 py-2 text-zinc-400">{contact.email || '—'}</td>
-                      <td className="px-6 py-2 text-zinc-400">{contact.phone || '—'}</td>
-                      <td className="px-6 py-2 text-zinc-400">
-                        <span className="text-xs px-2 py-0.5 bg-zinc-800 rounded">
-                          {contact.role || 'General'}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-
-              {customerContacts.length === 0 && (
-                <div className="p-4 text-center text-zinc-500 text-xs">
-                  No contacts
+          {/* Tab Content */}
+          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+            {activeTab === 'contracts' ? (
+              <div className="flex-1 min-h-0 flex flex-col">
+                <div className="px-6 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-800/30">
+                  <button
+                    onClick={() => {}}
+                    className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors"
+                  >
+                    <Plus className="w-3 h-3" />
+                    New Contract
+                  </button>
                 </div>
-              )}
-            </div>
+                <div className="flex-1 overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-zinc-800 sticky top-0">
+                      <tr>
+                        <SortableHeader
+                          label="Name"
+                          column="name"
+                          isActive={contractSort?.column === 'name'}
+                          direction={contractSort?.direction}
+                          onSort={() => toggleSort('name', setContractSort, contractSort)}
+                        />
+                        <SortableHeader
+                          label="Plays/mo"
+                          column="plays_per_month"
+                          isActive={contractSort?.column === 'plays_per_month'}
+                          direction={contractSort?.direction}
+                          onSort={() => toggleSort('plays_per_month', setContractSort, contractSort)}
+                        />
+                        <SortableHeader
+                          label="Period"
+                          column="starts_on"
+                          isActive={contractSort?.column === 'starts_on'}
+                          direction={contractSort?.direction}
+                          onSort={() => toggleSort('starts_on', setContractSort, contractSort)}
+                        />
+                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                          Pacing
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800">
+                      {customerContracts.map((contract) => (
+                        <ContractTableRow key={contract.id} contract={contract} />
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {customerContracts.length === 0 && (
+                    <div className="p-4 text-center text-zinc-500 text-xs">
+                      No contracts
+                    </div>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex-1 min-h-0 flex flex-col">
+                <div className="px-6 py-3 border-b border-zinc-800 flex items-center justify-between bg-zinc-800/30">
+                  <button
+                    onClick={() => {}}
+                    className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors"
+                  >
+                    <Plus className="w-3 h-3" />
+                    New Contact
+                  </button>
+                </div>
+                <div className="flex-1 overflow-auto">
+                  <table className="w-full text-xs">
+                    <thead className="bg-zinc-800 sticky top-0">
+                      <tr>
+                        <SortableHeader
+                          label="Name"
+                          column="name"
+                          isActive={contactSort?.column === 'name'}
+                          direction={contactSort?.direction}
+                          onSort={() => toggleSort('name', setContactSort, contactSort)}
+                        />
+                        <SortableHeader
+                          label="Email"
+                          column="email"
+                          isActive={contactSort?.column === 'email'}
+                          direction={contactSort?.direction}
+                          onSort={() => toggleSort('email', setContactSort, contactSort)}
+                        />
+                        <SortableHeader
+                          label="Phone"
+                          column="phone"
+                          isActive={contactSort?.column === 'phone'}
+                          direction={contactSort?.direction}
+                          onSort={() => toggleSort('phone', setContactSort, contactSort)}
+                        />
+                        <SortableHeader
+                          label="Role"
+                          column="role"
+                          isActive={contactSort?.column === 'role'}
+                          direction={contactSort?.direction}
+                          onSort={() => toggleSort('role', setContactSort, contactSort)}
+                        />
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800">
+                      {customerContacts.map((contact) => (
+                        <tr key={contact.id} className="hover:bg-zinc-800/50">
+                          <td className="px-6 py-2 font-medium text-white">{contact.name}</td>
+                          <td className="px-6 py-2 text-zinc-400">{contact.email || '—'}</td>
+                          <td className="px-6 py-2 text-zinc-400">{contact.phone || '—'}</td>
+                          <td className="px-6 py-2 text-zinc-400">
+                            <span className="text-xs px-2 py-0.5 bg-zinc-800 rounded">
+                              {contact.role || 'General'}
+                            </span>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {customerContacts.length === 0 && (
+                    <div className="p-4 text-center text-zinc-500 text-xs">
+                      No contacts
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         </div>
       ) : (
@@ -303,6 +385,34 @@ export function CustomersList() {
         </div>
       )}
     </div>
+  );
+}
+
+function SortableHeader({
+  label,
+  column,
+  isActive,
+  direction,
+  onSort,
+}: {
+  label: string;
+  column: string;
+  isActive: boolean;
+  direction?: 'asc' | 'desc';
+  onSort: () => void;
+}) {
+  return (
+    <th
+      onClick={onSort}
+      className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-zinc-300 transition-colors"
+    >
+      <div className="flex items-center gap-1">
+        {label}
+        {isActive && (
+          <ArrowUpDown className={`w-3 h-3 ${direction === 'asc' ? 'text-indigo-400' : 'text-indigo-300'}`} />
+        )}
+      </div>
+    </th>
   );
 }
 
