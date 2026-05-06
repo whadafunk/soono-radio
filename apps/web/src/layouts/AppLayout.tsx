@@ -1,15 +1,22 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
-import { Menu, X, Radio } from 'lucide-react';
+import {
+  Menu, X, Radio,
+  LayoutDashboard, Music2, Users, Calendar,
+  Settings, ListMusic, Bell, ShieldCheck, Timer, Mic2,
+} from 'lucide-react';
 
 const navItems = [
-  { label: 'Dashboard', path: '/' },
-  { label: 'Library', path: '/library' },
-  { label: 'Customers', path: '/customers' },
-  { label: 'Settings', path: '/settings' },
-  { label: 'Certificates', path: '/certificates' },
-  { label: 'Playlists', path: '/playlists' },
-  { label: 'Jingles', path: '/jingles' },
+  { label: 'Dashboard',    path: '/',             icon: LayoutDashboard },
+  { label: 'Schedule',     path: '/schedule',     icon: Calendar        },
+  { label: 'Clocks',       path: '/clocks',       icon: Timer           },
+  { label: 'Shows',        path: '/shows',        icon: Mic2            },
+  { label: 'Library',      path: '/library',      icon: Music2          },
+  { label: 'Customers',    path: '/customers',    icon: Users           },
+  { label: 'Playlists',    path: '/playlists',    icon: ListMusic       },
+  { label: 'Jingles',      path: '/jingles',      icon: Bell            },
+  { label: 'Settings',     path: '/settings',     icon: Settings        },
+  { label: 'Certificates', path: '/certificates', icon: ShieldCheck     },
 ];
 
 export function AppLayout() {
@@ -19,64 +26,53 @@ export function AppLayout() {
   return (
     <div className="flex h-screen bg-zinc-950">
       {/* Sidebar */}
-      <aside
-        className={`${
-          sidebarOpen ? 'w-64' : 'w-20'
-        } bg-zinc-900 border-r border-zinc-800 transition-all duration-200 flex flex-col`}
-      >
+      <aside className={`${sidebarOpen ? 'w-56' : 'w-16'} bg-zinc-900 border-r border-zinc-800 transition-all duration-200 flex flex-col flex-shrink-0`}>
         {/* Logo */}
-        <div className="p-4 flex items-center gap-3 border-b border-zinc-800">
-          <Radio className="w-6 h-6 text-indigo-500" />
-          {sidebarOpen && <h1 className="font-bold text-lg">RADIO</h1>}
+        <div className="h-14 px-4 flex items-center gap-3 border-b border-zinc-800">
+          <Radio className="w-5 h-5 text-indigo-500 flex-shrink-0" />
+          {sidebarOpen && <span className="font-bold text-base tracking-wide text-white">RADIO</span>}
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-4 space-y-2">
-          {navItems.map((item) => {
+        <nav className="flex-1 px-2 py-3 space-y-0.5">
+          {navItems.map(({ label, path, icon: Icon }) => {
             const isActive =
-              item.path === '/'
-                ? location.pathname === '/'
-                : location.pathname.startsWith(item.path);
+              path === '/' ? location.pathname === '/' : location.pathname.startsWith(path);
             return (
               <Link
-                key={item.path}
-                to={item.path}
-                className={`flex items-center gap-3 px-4 py-2 rounded-lg transition-colors ${
+                key={path}
+                to={path}
+                title={sidebarOpen ? undefined : label}
+                className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive
                     ? 'bg-indigo-600 text-white'
-                    : 'text-zinc-300 hover:bg-zinc-800'
+                    : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
                 }`}
               >
-                <div className="w-5 h-5" />
-                {sidebarOpen && <span>{item.label}</span>}
+                <Icon className="w-4 h-4 flex-shrink-0" />
+                {sidebarOpen && <span className="text-sm font-medium">{label}</span>}
               </Link>
             );
           })}
         </nav>
 
-        {/* Toggle Button */}
-        <div className="p-4 border-t border-zinc-800">
+        {/* Toggle */}
+        <div className="px-2 py-3 border-t border-zinc-800">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
-            className="w-full p-2 hover:bg-zinc-800 rounded-lg transition-colors"
+            className="w-full flex items-center justify-center p-2 hover:bg-zinc-800 rounded-lg transition-colors text-zinc-500 hover:text-zinc-300"
           >
-            {sidebarOpen ? (
-              <X className="w-5 h-5 text-zinc-400" />
-            ) : (
-              <Menu className="w-5 h-5 text-zinc-400" />
-            )}
+            {sidebarOpen ? <X className="w-4 h-4" /> : <Menu className="w-4 h-4" />}
           </button>
         </div>
       </aside>
 
-      {/* Main Content */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Main */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
         {/* Top Bar */}
-        <header className="bg-zinc-900 border-b border-zinc-800 px-6 py-4">
+        <header className="bg-zinc-900 border-b border-zinc-800 px-6 py-4 flex-shrink-0">
           <h2 className="text-xl font-semibold text-zinc-100">Radio Automation System</h2>
         </header>
-
-        {/* Page Content */}
         <main className="flex-1 overflow-auto p-6">
           <Outlet />
         </main>

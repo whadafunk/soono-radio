@@ -2,9 +2,9 @@ import { NavLink, Outlet } from 'react-router-dom';
 
 const tabs = [
   { label: 'Streaming Engine', path: '/settings/icecast' },
-  { label: 'Mix Engine', path: '/settings/liquidsoap' },
-  { label: 'Supervisor', path: '/settings/supervisor' },
-  { label: 'Users', path: '/settings/users' },
+  { label: 'Mix Engine',       path: '/settings/liquidsoap' },
+  { label: 'Supervisor',       path: '/settings/supervisor' },
+  { label: 'Users',            path: '/settings/users' },
 ];
 
 export function SettingsLayout() {

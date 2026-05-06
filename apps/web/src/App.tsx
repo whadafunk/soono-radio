@@ -14,6 +14,10 @@ import { LibraryUpload } from './pages/library/LibraryUpload';
 import { ComingSoon } from './pages/ComingSoon';
 import { CustomersLayout } from './pages/customers/CustomersLayout';
 import { CustomersList } from './pages/customers/CustomersList';
+import { SchedulePage } from './pages/schedule/SchedulePage';
+import { ClocksPage } from './pages/clocks/ClocksPage';
+import { ShowsPage } from './pages/shows/ShowsPage';
+import { ShowDetailPage } from './pages/shows/ShowDetailPage';
 
 const queryClient = new QueryClient();
 
@@ -24,13 +28,13 @@ export function App() {
         <Routes>
           <Route element={<AppLayout />}>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/certificates" element={<CertificatesSettings />} />
             <Route path="/settings" element={<SettingsLayout />}>
               <Route index element={<Navigate to="icecast" replace />} />
               <Route path="icecast" element={<IcecastSettings />} />
-              <Route path="users" element={<UsersSettings />} />
               <Route path="liquidsoap" element={<LiquidSoapSettings />} />
               <Route path="supervisor" element={<SupervisorSettings />} />
+              <Route path="certificates" element={<CertificatesSettings />} />
+              <Route path="users" element={<UsersSettings />} />
             </Route>
             <Route path="/library" element={<LibraryLayout />}>
               <Route index element={<LibraryBrowse />} />
@@ -39,6 +43,11 @@ export function App() {
             <Route path="/customers" element={<CustomersLayout />}>
               <Route index element={<CustomersList />} />
             </Route>
+            <Route path="/certificates" element={<CertificatesSettings />} />
+            <Route path="/schedule" element={<SchedulePage />} />
+            <Route path="/clocks" element={<ClocksPage />} />
+            <Route path="/shows" element={<ShowsPage />} />
+            <Route path="/shows/:id" element={<ShowDetailPage />} />
             <Route path="/playlists" element={<ComingSoon page="Playlists" />} />
             <Route path="/jingles" element={<ComingSoon page="Jingles" />} />
           </Route>
