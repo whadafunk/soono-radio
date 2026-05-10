@@ -1,13 +1,16 @@
 import { z } from 'zod';
 
 export const MEDIA_CATEGORIES = [
+  // Music tab
   'music',
+  // Imaging tab
   'jingle',
-  'ad',
-  'intro',
   'promo',
-  'voice',
+  'intro',
+  'outro',
   'bed',
+  'spot',
+  // Production tab
   'recording',
 ] as const;
 export type MediaCategory = (typeof MEDIA_CATEGORIES)[number];

@@ -668,7 +668,6 @@ function ClockOnlyBlock({ entry, clock, onClick }: {
   onClick: (e: React.MouseEvent) => void;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
-  const totalSeg = clock ? clock.segments.reduce((a, s) => a + s.duration_minutes, 0) : 0;
 
   return (
     <div
@@ -689,13 +688,6 @@ function ClockOnlyBlock({ entry, clock, onClick }: {
               {entry.time_start}–{entry.time_end}
             </span>
           )}
-        </div>
-      )}
-      {totalSeg > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 h-[4px] flex">
-          {clock!.segments.map((seg, i) => (
-            <div key={i} style={{ width: `${(seg.duration_minutes / totalSeg) * 100}%`, backgroundColor: segColor(seg.type), opacity: 0.7 }} />
-          ))}
         </div>
       )}
     </div>
@@ -748,7 +740,6 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
   onClick: (e: React.MouseEvent) => void;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
-  const totalSeg = clock ? clock.segments.reduce((a, s) => a + s.duration_minutes, 0) : 0;
 
   return (
     <div
@@ -774,25 +765,8 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
           )}
         </div>
       )}
-      {totalSeg > 0 && (
-        <div className="absolute bottom-0 left-0 right-0 h-[4px] flex">
-          {clock!.segments.map((seg, i) => (
-            <div key={i} style={{ width: `${(seg.duration_minutes / totalSeg) * 100}%`, backgroundColor: segColor(seg.type), opacity: 0.7 }} />
-          ))}
-        </div>
-      )}
     </div>
   );
-}
-
-// ─── Segment color helper ─────────────────────────────────────────────────────
-
-function segColor(type: string): string {
-  const map: Record<string, string> = {
-    music: '#6366f1', ad: '#f59e0b', jingle: '#14b8a6',
-    news: '#f43f5e', live: '#10b981', promo: '#8b5cf6', silence: '#71717a',
-  };
-  return map[type] ?? '#71717a';
 }
 
 // ─── Slot picker (pill toggle + list) ────────────────────────────────────────
@@ -847,36 +821,20 @@ function SlotPicker({
           </button>
         ))}
 
-        {tab === 'clocks' && clocks.map((clock) => {
-          const total = clock.segments.reduce((a, s) => a + s.duration_minutes, 0);
-          return (
-            <button
-              key={clock.id}
-              onClick={() => onSelectClock(clock.id === selectedClockId ? null : clock.id)}
-              className={`w-full flex flex-col gap-1 px-4 py-2 text-left transition-colors ${
-                selectedClockId === clock.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
-              }`}
-            >
-              <div className="flex items-center gap-2 min-w-0 w-full">
-                <Clock className="w-3 h-3 text-zinc-500 flex-shrink-0" />
-                <span className={`flex-1 text-sm font-medium truncate ${selectedClockId === clock.id ? 'text-white' : 'text-zinc-300'}`}>
-                  {clock.name}
-                </span>
-                {total > 0 && (
-                  <span className="text-[11px] text-zinc-500 flex-shrink-0 tabular-nums">{formatDuration(total)}</span>
-                )}
-              </div>
-              {total > 0 && (
-                <div className="flex h-[3px] rounded-full overflow-hidden w-full gap-px ml-5">
-                  {clock.segments.map((seg, i) => (
-                    <div key={i} className="flex-none rounded-full"
-                      style={{ width: `${(seg.duration_minutes / total) * 100}%`, backgroundColor: segColor(seg.type) }} />
-                  ))}
-                </div>
-              )}
-            </button>
-          );
-        })}
+        {tab === 'clocks' && clocks.map((clock) => (
+          <button
+            key={clock.id}
+            onClick={() => onSelectClock(clock.id === selectedClockId ? null : clock.id)}
+            className={`w-full flex items-center gap-2 px-4 py-2 text-left transition-colors ${
+              selectedClockId === clock.id ? 'bg-zinc-800' : 'hover:bg-zinc-800/50'
+            }`}
+          >
+            <Clock className="w-3 h-3 text-zinc-500 flex-shrink-0" />
+            <span className={`flex-1 text-sm font-medium truncate ${selectedClockId === clock.id ? 'text-white' : 'text-zinc-300'}`}>
+              {clock.name}
+            </span>
+          </button>
+        ))}
 
         {tab === 'shows' && shows.length === 0 && (
           <p className="px-4 py-4 text-sm text-zinc-600 italic">No active shows</p>
@@ -914,15 +872,8 @@ function NewSlotPopover({
       const show = shows.find((s) => s.id === selectedShowId);
       if (show) return addMinutes(timeStart, show.duration_minutes);
     }
-    if (selectedClockId) {
-      const clock = clocks.find((c) => c.id === selectedClockId);
-      if (clock) {
-        const total = clock.segments.reduce((a, s) => a + s.duration_minutes, 0);
-        if (total > 0) return addMinutes(timeStart, total);
-      }
-    }
     return null;
-  }, [selectedShowId, selectedClockId, timeStart, shows, clocks]);
+  }, [selectedShowId, timeStart, shows]);
 
   const effectiveEnd = computedEnd ?? timeEnd;
 
@@ -1105,15 +1056,8 @@ function CalNewSlotPopover({
       const show = shows.find((s) => s.id === selectedShowId);
       if (show) return addMinutes(timeStart, show.duration_minutes);
     }
-    if (selectedClockId) {
-      const clock = clocks.find((c) => c.id === selectedClockId);
-      if (clock) {
-        const total = clock.segments.reduce((a, s) => a + s.duration_minutes, 0);
-        if (total > 0) return addMinutes(timeStart, total);
-      }
-    }
     return null;
-  }, [selectedShowId, selectedClockId, timeStart, shows, clocks]);
+  }, [selectedShowId, timeStart, shows]);
 
   // Pre-fill end for override: use the template entry's own end time
   const templateEnd = templateEntry ? templateEntry.time_end : null;

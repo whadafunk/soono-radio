@@ -6,6 +6,32 @@ import {
   Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle,
 } from 'lucide-react';
 import { MEDIA_CATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
+
+const CATEGORY_LABELS: Record<MediaCategory, string> = {
+  music: 'Music',
+  jingle: 'Jingle',
+  promo: 'Promo',
+  intro: 'Intro',
+  outro: 'Outro',
+  bed: 'Bed',
+  spot: 'Spot',
+  recording: 'Recording',
+};
+
+const TAB_CATEGORIES = {
+  all:        null as null,
+  music:      ['music'] as MediaCategory[],
+  imaging:    ['jingle', 'promo', 'intro', 'outro', 'bed', 'spot'] as MediaCategory[],
+  production: ['recording'] as MediaCategory[],
+};
+type LibraryTab = keyof typeof TAB_CATEGORIES;
+
+const TAB_LABELS: Record<LibraryTab, string> = {
+  all: 'All',
+  music: 'Music',
+  imaging: 'Imaging',
+  production: 'Production',
+};
 import {
   fetchLibrary,
   fetchLibraryItem,
@@ -79,6 +105,7 @@ export function LibraryBrowse() {
 
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
+  const [activeTab, setActiveTab] = useState<LibraryTab>('all');
   const [categorySet, setCategorySet] = useState<Set<MediaCategory>>(new Set());
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [sort, setSort] = useState<ColumnId>('created_at');
@@ -102,12 +129,21 @@ export function LibraryBrowse() {
 
   useEffect(() => {
     setOffset(0);
-  }, [debouncedQ, categorySet, favoriteOnly, sort, order]);
+  }, [debouncedQ, categorySet, activeTab, favoriteOnly, sort, order]);
 
-  const categoryParam = useMemo(
-    () => (categorySet.size === 0 ? undefined : Array.from(categorySet).join(',')),
-    [categorySet],
-  );
+  const categoryParam = useMemo(() => {
+    const tabCats = TAB_CATEGORIES[activeTab];
+    if (tabCats === null) {
+      return categorySet.size === 0 ? undefined : Array.from(categorySet).join(',');
+    }
+    const active = categorySet.size === 0 ? tabCats : tabCats.filter((c) => categorySet.has(c));
+    return active.join(',');
+  }, [categorySet, activeTab]);
+
+  const handleTabChange = (tab: LibraryTab) => {
+    setActiveTab(tab);
+    setCategorySet(new Set());
+  };
 
   const { data, isLoading, error } = useQuery<LibraryListResponse>({
     queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, sort, order, limit, offset }],
@@ -173,11 +209,29 @@ export function LibraryBrowse() {
     }
   };
 
+  const availableCategories: MediaCategory[] = TAB_CATEGORIES[activeTab] ?? [...MEDIA_CATEGORIES];
+
   return (
     <div className="space-y-4 max-w-7xl">
       <div>
         <h1 className="text-3xl font-bold text-white">Library</h1>
         <p className="text-zinc-400 mt-1">{total} {total === 1 ? 'track' : 'tracks'}</p>
+      </div>
+
+      <div className="flex gap-1 border-b border-zinc-800">
+        {(Object.keys(TAB_CATEGORIES) as LibraryTab[]).map((tab) => (
+          <button
+            key={tab}
+            onClick={() => handleTabChange(tab)}
+            className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
+              activeTab === tab
+                ? 'border-indigo-500 text-indigo-300'
+                : 'border-transparent text-zinc-400 hover:text-zinc-200'
+            }`}
+          >
+            {TAB_LABELS[tab]}
+          </button>
+        ))}
       </div>
 
       {toast && (
@@ -204,7 +258,13 @@ export function LibraryBrowse() {
           />
         </div>
 
-        <CategoryMultiSelect value={categorySet} onChange={setCategorySet} />
+        {availableCategories.length > 1 && (
+          <CategoryMultiSelect
+            categories={availableCategories}
+            value={categorySet}
+            onChange={setCategorySet}
+          />
+        )}
 
         <button
           onClick={() => setFavoriteOnly((v) => !v)}
@@ -358,12 +418,12 @@ function BulkActionBar({
                   wrap(
                     'category',
                     () => bulkSetCategory(ids, c),
-                    () => `Set ${ids.length} to ${c}`,
+                    () => `Set ${ids.length} to ${CATEGORY_LABELS[c]}`,
                   )
                 }
-                className="w-full text-left px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded capitalize"
+                className="w-full text-left px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded"
               >
-                {c}
+                {CATEGORY_LABELS[c]}
               </button>
             ))}
           </div>
@@ -445,9 +505,11 @@ function BulkActionBar({
 }
 
 function CategoryMultiSelect({
+  categories,
   value,
   onChange,
 }: {
+  categories: MediaCategory[];
   value: Set<MediaCategory>;
   onChange: (next: Set<MediaCategory>) => void;
 }) {
@@ -472,9 +534,9 @@ function CategoryMultiSelect({
 
   const label =
     value.size === 0
-      ? 'All categories'
+      ? 'All'
       : value.size === 1
-        ? Array.from(value)[0]
+        ? CATEGORY_LABELS[Array.from(value)[0]]
         : `${value.size} categories`;
 
   return (
@@ -488,11 +550,11 @@ function CategoryMultiSelect({
         }`}
       >
         <Filter className="w-4 h-4" />
-        <span className="capitalize">{label}</span>
+        <span>{label}</span>
         <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute z-30 mt-1 w-56 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
+        <div className="absolute z-30 mt-1 w-48 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
           <button
             onClick={() => onChange(new Set())}
             className="w-full text-left px-3 py-1.5 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded"
@@ -500,7 +562,7 @@ function CategoryMultiSelect({
             Clear all
           </button>
           <div className="border-t border-zinc-800 my-1" />
-          {MEDIA_CATEGORIES.map((c) => {
+          {categories.map((c) => {
             const checked = value.has(c);
             return (
               <button
@@ -515,7 +577,7 @@ function CategoryMultiSelect({
                 >
                   {checked && <Check className="w-3 h-3 text-white" />}
                 </span>
-                <span className="capitalize">{c}</span>
+                <span>{CATEGORY_LABELS[c]}</span>
               </button>
             );
           })}
@@ -775,7 +837,7 @@ function Cell({
     case 'album':
       return <td className={`${baseClass} text-zinc-300 truncate max-w-xs`}>{media.album ?? '—'}</td>;
     case 'category':
-      return <td className={`${baseClass} text-zinc-400 capitalize`}>{media.category}</td>;
+      return <td className={`${baseClass} text-zinc-400`}>{CATEGORY_LABELS[media.category]}</td>;
     case 'duration_seconds':
       return <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>{formatDuration(media.duration_seconds)}</td>;
     case 'bitrate_kbps':
@@ -1034,7 +1096,7 @@ function DetailDrawer({
                 >
                   {MEDIA_CATEGORIES.map((c) => (
                     <option key={c} value={c}>
-                      {c}
+                      {CATEGORY_LABELS[c]}
                     </option>
                   ))}
                 </select>

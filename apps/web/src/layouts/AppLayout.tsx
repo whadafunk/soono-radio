@@ -3,7 +3,7 @@ import { Outlet, Link, useLocation } from 'react-router-dom';
 import {
   Menu, X, Radio,
   LayoutDashboard, Music2, Users, Calendar,
-  Settings, ListMusic, Bell, ShieldCheck, Timer, Mic2,
+  Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat,
 } from 'lucide-react';
 
 const navItems = [
@@ -14,8 +14,9 @@ const navItems = [
   { label: 'Library',      path: '/library',      icon: Music2          },
   { label: 'Customers',    path: '/customers',    icon: Users           },
   { label: 'Playlists',    path: '/playlists',    icon: ListMusic       },
-  { label: 'Jingles',      path: '/jingles',      icon: Bell            },
+  { label: 'Rotations',    path: '/rotations',    icon: Repeat          },
   { label: 'Settings',     path: '/settings',     icon: Settings        },
+  { label: 'Users',        path: '/users',        icon: UserCog         },
   { label: 'Certificates', path: '/certificates', icon: ShieldCheck     },
 ];
 

@@ -1,9 +1,9 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useForm, useController } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader, Check, AlertCircle } from 'lucide-react';
-import { SupervisorConfig, SupervisorConfigSchema } from '@radio/shared';
+import { SupervisorConfig, SupervisorConfigSchema, MID_HOUR_HANDOFF_OPTIONS, MidHourHandoff } from '@radio/shared';
 import {
   fetchSupervisorConfig,
   updateSupervisorConfig,
@@ -26,6 +26,7 @@ export function SupervisorSettings() {
     handleSubmit,
     formState: { errors },
     reset,
+    control,
   } = useForm<SupervisorConfig>({
     resolver: zodResolver(SupervisorConfigSchema),
     values: config,
@@ -169,6 +170,10 @@ export function SupervisorSettings() {
           </div>
         </CollapsibleSection>
 
+        <CollapsibleSection title="Scheduling">
+          <MidHourHandoffPicker control={control} />
+        </CollapsibleSection>
+
         <div className="flex gap-4">
           <button
             type="submit"
@@ -194,6 +199,68 @@ export function SupervisorSettings() {
           </button>
         </div>
       </form>
+    </div>
+  );
+}
+
+const HANDOFF_OPTIONS: { value: MidHourHandoff; label: string; description: string }[] = [
+  {
+    value: 'finish_clock',
+    label: 'Finish clock',
+    description: 'Complete the current clock segment, then transition. The next show may start a few minutes late.',
+  },
+  {
+    value: 'hard_cut',
+    label: 'Hard cut',
+    description: 'Transition at exactly the scheduled time, cutting the current segment immediately.',
+  },
+  {
+    value: 'join_mid_clock',
+    label: 'Join mid-clock',
+    description: "Start the next show's clock at the position it would be at if it had started on the hour.",
+  },
+];
+
+function MidHourHandoffPicker({ control }: { control: ReturnType<typeof useForm<SupervisorConfig>>['control'] }) {
+  const { field } = useController({ name: 'mid_hour_handoff', control });
+
+  return (
+    <div>
+      <label className="block text-sm font-medium text-zinc-300 mb-3 flex items-center">
+        Mid-hour handoff
+        <HelpTooltip text="Controls what LiquidSoap does when a show ends mid-hour. This is a global station setting; individual shows cannot override it." />
+      </label>
+      <div className="space-y-2">
+        {HANDOFF_OPTIONS.map((opt) => {
+          const selected = field.value === opt.value;
+          return (
+            <button
+              key={opt.value}
+              type="button"
+              onClick={() => field.onChange(opt.value)}
+              className={`w-full text-left px-4 py-3 rounded-lg border transition-colors ${
+                selected
+                  ? 'border-indigo-500 bg-indigo-500/10 text-white'
+                  : 'border-zinc-700 bg-zinc-800/50 text-zinc-300 hover:border-zinc-500'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div
+                  className={`w-4 h-4 rounded-full border-2 flex-shrink-0 flex items-center justify-center ${
+                    selected ? 'border-indigo-500' : 'border-zinc-500'
+                  }`}
+                >
+                  {selected && <div className="w-2 h-2 rounded-full bg-indigo-500" />}
+                </div>
+                <div>
+                  <div className="text-sm font-medium">{opt.label}</div>
+                  <div className="text-xs text-zinc-400 mt-0.5">{opt.description}</div>
+                </div>
+              </div>
+            </button>
+          );
+        })}
+      </div>
     </div>
   );
 }

@@ -7,6 +7,11 @@ import { certificateRoutes } from './routes/certificates.js';
 import { liquidsoapRoutes } from './routes/liquidsoap.js';
 import { libraryRoutes } from './routes/library.js';
 import { supervisorRoutes } from './routes/supervisor.js';
+import { clockRoutes } from './routes/clocks.js';
+import { showRoutes } from './routes/shows.js';
+import { customerRoutes } from './routes/customers.js';
+import { scheduleRoutes } from './routes/schedule.js';
+import { rotationRoutes } from './routes/rotations.js';
 import { runMigrations } from './db/index.js';
 import { ingestQueue, recoverInterruptedJobs } from './services/ingest/queue.js';
 import { ensureDirs } from './services/ingest/paths.js';
@@ -34,6 +39,11 @@ fastify.register(certificateRoutes);
 fastify.register(liquidsoapRoutes);
 fastify.register(libraryRoutes);
 fastify.register(supervisorRoutes);
+fastify.register(clockRoutes);
+fastify.register(showRoutes);
+fastify.register(customerRoutes);
+fastify.register(scheduleRoutes);
+fastify.register(rotationRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Radio API Server' };

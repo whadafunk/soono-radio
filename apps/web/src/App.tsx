@@ -18,6 +18,7 @@ import { SchedulePage } from './pages/schedule/SchedulePage';
 import { ClocksPage } from './pages/clocks/ClocksPage';
 import { ShowsPage } from './pages/shows/ShowsPage';
 import { ShowDetailPage } from './pages/shows/ShowDetailPage';
+import { RotationsPage } from './pages/rotations/RotationsPage';
 
 const queryClient = new QueryClient();
 
@@ -33,8 +34,6 @@ export function App() {
               <Route path="icecast" element={<IcecastSettings />} />
               <Route path="liquidsoap" element={<LiquidSoapSettings />} />
               <Route path="supervisor" element={<SupervisorSettings />} />
-              <Route path="certificates" element={<CertificatesSettings />} />
-              <Route path="users" element={<UsersSettings />} />
             </Route>
             <Route path="/library" element={<LibraryLayout />}>
               <Route index element={<LibraryBrowse />} />
@@ -44,12 +43,13 @@ export function App() {
               <Route index element={<CustomersList />} />
             </Route>
             <Route path="/certificates" element={<CertificatesSettings />} />
+            <Route path="/users" element={<UsersSettings />} />
             <Route path="/schedule" element={<SchedulePage />} />
             <Route path="/clocks" element={<ClocksPage />} />
             <Route path="/shows" element={<ShowsPage />} />
             <Route path="/shows/:id" element={<ShowDetailPage />} />
             <Route path="/playlists" element={<ComingSoon page="Playlists" />} />
-            <Route path="/jingles" element={<ComingSoon page="Jingles" />} />
+            <Route path="/rotations" element={<RotationsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

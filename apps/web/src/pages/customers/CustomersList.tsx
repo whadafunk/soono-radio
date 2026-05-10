@@ -1,67 +1,131 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useForm, useController, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Loader, Plus, Trash2, ChevronDown, ChevronUp, ChevronsUpDown, Pencil, X, UserPlus } from 'lucide-react';
+import {
+  Loader,
+  Plus,
+  Trash2,
+  ChevronDown,
+  ChevronUp,
+  ChevronsUpDown,
+  Pencil,
+  X,
+  UserPlus,
+} from 'lucide-react';
 import {
   Customer,
   CustomerCreate,
   CustomerCreateSchema,
   CustomerPatch,
   CustomerPatchSchema,
-  Contract,
-  ContractCreate,
-  ContractCreateSchema,
-  ContractPatch,
-  ContractPatchSchema,
+  Campaign,
+  CampaignCreate,
+  CampaignCreateSchema,
+  CampaignPatch,
+  CampaignPatchSchema,
+  FIRST_IN_SLOT_MODES,
   Contact,
   ContactCreate,
   ContactCreateSchema,
   ContactPatch,
   ContactPatchSchema,
-  INTERVAL_OPTIONS,
-  INDUSTRY_OPTIONS,
 } from '@radio/shared';
+import { HelpTooltip } from '../../components/HelpTooltip';
+import { CampaignMediaSection } from './CampaignMediaSection';
 import {
   fetchCustomers,
   createCustomer,
   updateCustomer,
   deleteCustomer,
-  fetchContracts,
-  createContract,
-  updateContract,
-  deleteContract,
+  deleteCustomers,
+  deleteCampaigns,
+  deleteContacts,
+  fetchCampaigns,
+  createCampaign,
+  updateCampaign,
+  deleteCampaign,
   fetchContacts,
   fetchAllContacts,
+  fetchContactsWithCustomers,
+  fetchContactCustomers,
   createContact,
   updateContact,
   deleteContact,
   associateContact,
   dissociateContact,
   setContactPrimary,
-  fetchContractPacing,
+  fetchCampaignPacing,
+  fetchCampaignMedia,
+  removeCampaignMedia,
 } from '../../api';
 
 type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
 
-const INPUT = 'w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50';
+const INPUT =
+  'w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50';
 const LABEL = 'block text-xs font-medium text-zinc-300 mb-1';
+
+function sortRows<T extends object>(rows: T[], sort: SortConfig): T[] {
+  if (!sort) return rows;
+  return [...rows].sort((a, b) => {
+    let aVal: unknown = a[sort.column as keyof T];
+    let bVal: unknown = b[sort.column as keyof T];
+    if (typeof aVal === 'string') aVal = aVal.toLowerCase();
+    if (typeof bVal === 'string') bVal = bVal.toLowerCase();
+    const cmp = (aVal as string | number) < (bVal as string | number) ? -1 : (aVal as string | number) > (bVal as string | number) ? 1 : 0;
+    return sort.direction === 'asc' ? cmp : -cmp;
+  });
+}
+
+function handleShiftClick<T extends number>(
+  id: T,
+  orderedIds: T[],
+  selected: Set<T>,
+  setSelected: React.Dispatch<React.SetStateAction<Set<T>>>,
+  lastClicked: T | null,
+  setLastClicked: (id: T) => void,
+  e: React.MouseEvent,
+) {
+  if (e.shiftKey && lastClicked !== null) {
+    const a = orderedIds.indexOf(lastClicked);
+    const b = orderedIds.indexOf(id);
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    setSelected((prev) => {
+      const next = new Set(prev);
+      orderedIds.slice(lo, hi + 1).forEach((i) => next.add(i));
+      return next;
+    });
+  } else {
+    setSelected((prev) => (prev.size === 1 && prev.has(id) ? new Set<T>() : new Set<T>([id])));
+    setLastClicked(id);
+  }
+}
 
 export function CustomersList() {
   const queryClient = useQueryClient();
-  const [selectedCustomerId, setSelectedCustomerId] = useState<number | null>(null);
-  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-  const [activeTab, setActiveTab] = useState<'contracts' | 'contacts'>('contracts');
-  const [customerSort, setCustomerSort] = useState<SortConfig>(null);
-  const [contractSort, setContractSort] = useState<SortConfig>(null);
-  const [contactSort, setContactSort] = useState<SortConfig>(null);
+
+  const [focusedCustomerId, setFocusedCustomerId] = useState<number | null>(null);
+  const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<number>>(new Set());
+  const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<number>>(new Set());
+  const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
+  const [lastClickedCustomerId, setLastClickedCustomerId] = useState<number | null>(null);
+  const [lastClickedCampaignId, setLastClickedCampaignId] = useState<number | null>(null);
+  const [lastClickedContactId, setLastClickedContactId] = useState<number | null>(null);
+  const [activeTab, setActiveTab] = useState<'campaigns' | 'contacts'>('campaigns');
   const [editTarget, setEditTarget] = useState<{
-    type: 'customer' | 'contract' | 'contact';
+    type: 'customer' | 'campaign' | 'contact';
     id: number;
   } | null>(null);
-  const [isCreatingContract, setIsCreatingContract] = useState(false);
+  const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
+  const [isCreatingCampaign, setIsCreatingCampaign] = useState(false);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
+  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [customerSort, setCustomerSort] = useState<SortConfig>(null);
+  const [campaignSort, setCampaignSort] = useState<SortConfig>(null);
+  const [contactSort, setContactSort] = useState<SortConfig>(null);
+  const [confirmDeleteCustomers, setConfirmDeleteCustomers] = useState(false);
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -73,15 +137,20 @@ export function CustomersList() {
     queryFn: fetchCustomers,
   });
 
-  const { data: contracts = [] } = useQuery({
-    queryKey: ['contracts'],
-    queryFn: () => fetchContracts(),
+  const { data: allCampaigns = [] } = useQuery({
+    queryKey: ['campaigns'],
+    queryFn: () => fetchCampaigns(),
   });
 
-  const { data: contacts = [] } = useQuery({
-    queryKey: ['contacts', selectedCustomerId],
-    queryFn: () => fetchContacts(selectedCustomerId ?? undefined),
-    enabled: !!selectedCustomerId,
+  const { data: allContactsWithCustomers = [] } = useQuery({
+    queryKey: ['contacts-all-with-customers'],
+    queryFn: fetchContactsWithCustomers,
+  });
+
+  const { data: filteredContacts = [] } = useQuery({
+    queryKey: ['contacts', focusedCustomerId],
+    queryFn: () => fetchContacts(focusedCustomerId!),
+    enabled: focusedCustomerId !== null,
   });
 
   const { data: allContacts = [] } = useQuery({
@@ -89,50 +158,27 @@ export function CustomersList() {
     queryFn: fetchAllContacts,
   });
 
-  let customers = [...rawCustomers];
-  if (customerSort) {
-    customers.sort((a, b) => {
-      let aVal: any = a[customerSort.column as keyof typeof a];
-      let bVal: any = b[customerSort.column as keyof typeof b];
-      if (typeof aVal === 'string') aVal = aVal.toLowerCase();
-      if (typeof bVal === 'string') bVal = bVal.toLowerCase();
-      const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-      return customerSort.direction === 'asc' ? cmp : -cmp;
-    });
-  }
+  const customers = sortRows(rawCustomers, customerSort);
 
-  const selectedCustomer = customers.find((c) => c.id === selectedCustomerId);
+  const displayedCampaigns = focusedCustomerId
+    ? sortRows(
+        allCampaigns.filter((c) => c.customer_id === focusedCustomerId),
+        campaignSort,
+      )
+    : sortRows(allCampaigns, campaignSort);
+
+  const displayedContacts = focusedCustomerId
+    ? sortRows(filteredContacts, contactSort)
+    : sortRows(allContactsWithCustomers, contactSort);
 
   const isCustomerActive = (customerId: number) =>
-    contracts.some((c) => c.customer_id === customerId && c.active);
-  let customerContracts = selectedCustomerId
-    ? contracts.filter((c) => c.customer_id === selectedCustomerId)
-    : [];
-  let customerContacts = contacts; // already filtered by selectedCustomerId in the query
+    allCampaigns.some((c) => c.customer_id === customerId && c.active);
 
-  if (contractSort) {
-    customerContracts = [...customerContracts].sort((a, b) => {
-      let aVal: any = a[contractSort.column as keyof typeof a];
-      let bVal: any = b[contractSort.column as keyof typeof b];
-      if (typeof aVal === 'string') aVal = aVal.toLowerCase();
-      if (typeof bVal === 'string') bVal = bVal.toLowerCase();
-      const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-      return contractSort.direction === 'asc' ? cmp : -cmp;
-    });
-  }
-
-  if (contactSort) {
-    customerContacts = [...customerContacts].sort((a, b) => {
-      let aVal: any = a[contactSort.column as keyof typeof a];
-      let bVal: any = b[contactSort.column as keyof typeof b];
-      if (typeof aVal === 'string') aVal = aVal.toLowerCase();
-      if (typeof bVal === 'string') bVal = bVal.toLowerCase();
-      const cmp = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-      return contactSort.direction === 'asc' ? cmp : -cmp;
-    });
-  }
-
-  const toggleSort = (column: string, setSortFn: (s: SortConfig) => void, currentSort: SortConfig) => {
+  const toggleSort = (
+    column: string,
+    setSortFn: (s: SortConfig) => void,
+    currentSort: SortConfig,
+  ) => {
     if (currentSort?.column === column) {
       setSortFn(currentSort.direction === 'asc' ? { column, direction: 'desc' } : null);
     } else {
@@ -140,12 +186,60 @@ export function CustomersList() {
     }
   };
 
+  const handleCustomerClick = (id: number, orderedIds: number[], e: React.MouseEvent) => {
+    if (e.shiftKey) {
+      handleShiftClick(
+        id,
+        orderedIds,
+        selectedCustomerIds,
+        setSelectedCustomerIds,
+        lastClickedCustomerId,
+        setLastClickedCustomerId,
+        e,
+      );
+    } else {
+      const isOnlySelected = selectedCustomerIds.size === 1 && selectedCustomerIds.has(id);
+      if (isOnlySelected) {
+        setSelectedCustomerIds(new Set());
+        setFocusedCustomerId(null);
+        setLastClickedCustomerId(null);
+      } else {
+        setSelectedCustomerIds(new Set([id]));
+        setFocusedCustomerId(id);
+        setLastClickedCustomerId(id);
+      }
+    }
+  };
+
+  const clearCustomerFocus = () => {
+    setFocusedCustomerId(null);
+    setSelectedCustomerIds(new Set());
+    setLastClickedCustomerId(null);
+  };
+
+  const canEditCustomer = selectedCustomerIds.size === 1;
+  const canDeleteCustomer = selectedCustomerIds.size > 0;
+  const editCustomerId = canEditCustomer ? [...selectedCustomerIds][0] : null;
+
+  const canEditCampaign = selectedCampaignIds.size === 1;
+  const canDeleteCampaign = selectedCampaignIds.size > 0;
+  const editCampaignId = canEditCampaign ? [...selectedCampaignIds][0] : null;
+
+  const canEditContact = selectedContactIds.size === 1;
+  const canDeleteContact = selectedContactIds.size > 0;
+  const editContactId = canEditContact ? [...selectedContactIds][0] : null;
+
+  const selectedCustomersHaveCampaigns = [...selectedCustomerIds].some((cid) =>
+    allCampaigns.some((c) => c.customer_id === cid),
+  );
+
   const createCustomerMutation = useMutation({
     mutationFn: createCustomer,
     onSuccess: (newCustomer) => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       setIsCreatingCustomer(false);
-      setSelectedCustomerId(newCustomer.id);
+      setFocusedCustomerId(newCustomer.id);
+      setSelectedCustomerIds(new Set([newCustomer.id]));
       showToast('success', 'Customer created');
     },
     onError: (err) => showToast('error', (err as Error).message),
@@ -161,43 +255,74 @@ export function CustomersList() {
     onError: (err) => showToast('error', (err as Error).message),
   });
 
+  const deleteCustomersMutation = useMutation({
+    mutationFn: (ids: number[]) => deleteCustomers(ids),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['customers'] });
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
+      setSelectedCustomerIds(new Set());
+      setFocusedCustomerId(null);
+      setLastClickedCustomerId(null);
+      setConfirmDeleteCustomers(false);
+      showToast('success', 'Customer(s) deleted');
+    },
+    onError: (err) => showToast('error', (err as Error).message),
+  });
+
   const deleteCustomerMutation = useMutation({
     mutationFn: deleteCustomer,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
-      setSelectedCustomerId(null);
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
+      setSelectedCustomerIds(new Set());
+      setFocusedCustomerId(null);
       setEditTarget(null);
       showToast('success', 'Customer deleted');
     },
     onError: (err) => showToast('error', (err as Error).message),
   });
 
-  const updateContractMutation = useMutation({
-    mutationFn: ({ id, patch }: { id: number; patch: ContractPatch }) => updateContract(id, patch),
+  const updateCampaignMutation = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: CampaignPatch }) => updateCampaign(id, patch),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['contracts'] });
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       setEditTarget(null);
-      showToast('success', 'Contract updated');
+      showToast('success', 'Campaign updated');
     },
     onError: (err) => showToast('error', (err as Error).message),
   });
 
-  const deleteContractMutation = useMutation({
-    mutationFn: deleteContract,
+  const deleteCampaignsMutation = useMutation({
+    mutationFn: (ids: number[]) => deleteCampaigns(ids),
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      setEditTarget(null);
-      showToast('success', 'Contract deleted');
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      setSelectedCampaignIds(new Set());
+      setLastClickedCampaignId(null);
+      showToast('success', 'Campaign(s) deleted');
     },
     onError: (err) => showToast('error', (err as Error).message),
   });
 
-  const createContractMutation = useMutation({
-    mutationFn: createContract,
+  const deleteCampaignMutation = useMutation({
+    mutationFn: deleteCampaign,
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['contracts'] });
-      setIsCreatingContract(false);
-      showToast('success', 'Contract created');
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      setEditTarget(null);
+      showToast('success', 'Campaign deleted');
+    },
+    onError: (err) => showToast('error', (err as Error).message),
+  });
+
+  const createCampaignMutation = useMutation({
+    mutationFn: createCampaign,
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+      setIsCreatingCampaign(false);
+      showToast('success', 'Campaign created');
     },
     onError: (err) => showToast('error', (err as Error).message),
   });
@@ -207,29 +332,59 @@ export function CustomersList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setIsCreatingContact(false);
       showToast('success', 'Contact added');
     },
     onError: (err) => showToast('error', (err as Error).message),
   });
 
+  const deleteContactsMutation = useMutation({
+    mutationFn: (ids: number[]) => deleteContacts(ids),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
+      setSelectedContactIds(new Set());
+      setLastClickedContactId(null);
+      showToast('success', 'Contact(s) deleted');
+    },
+    onError: (err) => showToast('error', (err as Error).message),
+  });
+
   const associateContactMutation = useMutation({
     mutationFn: ({ contactId, isPrimary }: { contactId: number; isPrimary?: boolean }) =>
-      associateContact(selectedCustomerId!, contactId, isPrimary),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts'] }),
+      associateContact(focusedCustomerId!, contactId, isPrimary),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
+    },
     onError: (err) => showToast('error', (err as Error).message),
   });
 
   const dissociateContactMutation = useMutation({
-    mutationFn: (contactId: number) => dissociateContact(selectedCustomerId!, contactId),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts'] }),
+    mutationFn: (contactId: number) => dissociateContact(focusedCustomerId!, contactId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
+    },
     onError: (err) => showToast('error', (err as Error).message),
   });
 
   const setPrimaryMutation = useMutation({
-    mutationFn: ({ customerId, contactId, isPrimary }: { customerId: number; contactId: number; isPrimary: boolean }) =>
-      setContactPrimary(customerId, contactId, isPrimary),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['contacts'] }),
+    mutationFn: ({
+      customerId,
+      contactId,
+      isPrimary,
+    }: {
+      customerId: number;
+      contactId: number;
+      isPrimary: boolean;
+    }) => setContactPrimary(customerId, contactId, isPrimary),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
+    },
     onError: (err) => showToast('error', (err as Error).message),
   });
 
@@ -237,6 +392,7 @@ export function CustomersList() {
     mutationFn: ({ id, patch }: { id: number; patch: ContactPatch }) => updateContact(id, patch),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setEditTarget(null);
       showToast('success', 'Contact updated');
     },
@@ -247,11 +403,33 @@ export function CustomersList() {
     mutationFn: deleteContact,
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all'] });
+      queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setEditTarget(null);
       showToast('success', 'Contact deleted');
     },
     onError: (err) => showToast('error', (err as Error).message),
   });
+
+  const handleDeleteCustomers = () => {
+    if (selectedCustomersHaveCampaigns) {
+      setConfirmDeleteCustomers(true);
+    } else {
+      deleteCustomersMutation.mutate([...selectedCustomerIds]);
+    }
+  };
+
+  const handleDeleteCampaigns = () => {
+    deleteCampaignsMutation.mutate([...selectedCampaignIds]);
+  };
+
+  const handleDeleteContacts = () => {
+    deleteContactsMutation.mutate([...selectedContactIds]);
+  };
+
+  const orderedCustomerIds = customers.map((c) => c.id);
+  const orderedCampaignIds = displayedCampaigns.map((c) => c.id);
+  const orderedContactIds = (displayedContacts as Array<{ id: number }>).map((c) => c.id);
 
   if (isLoading)
     return (
@@ -259,6 +437,10 @@ export function CustomersList() {
         <Loader className="w-8 h-8 animate-spin text-indigo-500" />
       </div>
     );
+
+  const focusedCustomerName = focusedCustomerId
+    ? customers.find((c) => c.id === focusedCustomerId)?.name
+    : null;
 
   return (
     <div className="space-y-2 h-full flex flex-col">
@@ -274,31 +456,46 @@ export function CustomersList() {
         </div>
       )}
 
+      {/* Bulk customer delete confirm dialog */}
+      {confirmDeleteCustomers && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div
+            className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md p-6 space-y-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="text-sm text-zinc-100 font-medium">
+              Delete {selectedCustomerIds.size} customer{selectedCustomerIds.size > 1 ? 's' : ''}?
+            </p>
+            <p className="text-xs text-amber-400">
+              Warning: these customers have active campaigns that will also be deleted.
+            </p>
+            <p className="text-xs text-zinc-400">This cannot be undone.</p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => setConfirmDeleteCustomers(false)}
+                disabled={deleteCustomersMutation.isPending}
+                className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => deleteCustomersMutation.mutate([...selectedCustomerIds])}
+                disabled={deleteCustomersMutation.isPending}
+                className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+              >
+                {deleteCustomersMutation.isPending ? 'Deleting…' : 'Yes, delete'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* TOP: Customers Table */}
       <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
         <div className="px-6 py-4 border-b border-zinc-800 flex items-center gap-2 bg-zinc-800/50">
           <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider flex-1">
             Customers ({customers.length})
           </h2>
-          {selectedCustomerId && (
-            <>
-              <button
-                onClick={() => setEditTarget({ type: 'customer', id: selectedCustomerId })}
-                className="flex items-center gap-1.5 px-2.5 py-1.5 text-xs text-zinc-300 hover:text-white bg-zinc-700 hover:bg-zinc-600 rounded-lg transition-colors"
-              >
-                <Pencil className="w-3 h-3" />
-                Edit
-              </button>
-              <button
-                onClick={() => deleteCustomerMutation.mutate(selectedCustomerId)}
-                disabled={deleteCustomerMutation.isPending}
-                className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded-lg transition-colors disabled:opacity-50"
-                title="Delete customer"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
-            </>
-          )}
           <button
             onClick={() => setIsCreatingCustomer(true)}
             className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-lg transition-colors"
@@ -306,17 +503,33 @@ export function CustomersList() {
             <Plus className="w-4 h-4" />
             New
           </button>
+          <button
+            onClick={() => {
+              if (editCustomerId) setEditTarget({ type: 'customer', id: editCustomerId });
+            }}
+            disabled={!canEditCustomer}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg transition-colors ${
+              canEditCustomer
+                ? 'text-zinc-300 hover:text-white bg-zinc-700 hover:bg-zinc-600'
+                : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
+            }`}
+          >
+            <Pencil className="w-3 h-3" />
+            Edit
+          </button>
+          <button
+            onClick={handleDeleteCustomers}
+            disabled={!canDeleteCustomer || deleteCustomersMutation.isPending}
+            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg transition-colors ${
+              canDeleteCustomer
+                ? 'text-red-400 hover:bg-red-900/20 bg-zinc-700'
+                : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
+            }`}
+          >
+            <Trash2 className="w-3 h-3" />
+            {selectedCustomerIds.size > 1 ? `Delete (${selectedCustomerIds.size})` : 'Delete'}
+          </button>
         </div>
-
-        {isCreatingCustomer && (
-          <div className="px-6 py-3 border-b border-zinc-800 bg-zinc-800/30">
-            <CreateCustomerForm
-              onSubmit={(data) => createCustomerMutation.mutate(data)}
-              onCancel={() => setIsCreatingCustomer(false)}
-              isLoading={createCustomerMutation.isPending}
-            />
-          </div>
-        )}
 
         <div className="flex-1 overflow-auto">
           <table className="w-full text-sm">
@@ -345,22 +558,26 @@ export function CustomersList() {
               {customers.map((customer) => (
                 <tr
                   key={customer.id}
-                  onClick={() => setSelectedCustomerId(customer.id)}
+                  onClick={(e) => handleCustomerClick(customer.id, orderedCustomerIds, e)}
                   onDoubleClick={() => setEditTarget({ type: 'customer', id: customer.id })}
                   title="Double-click to edit"
-                  className={`hover:bg-zinc-800/50 cursor-pointer transition-colors ${
-                    selectedCustomerId === customer.id
+                  className={`cursor-pointer transition-colors ${
+                    selectedCustomerIds.has(customer.id)
                       ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
-                      : ''
+                      : 'hover:bg-zinc-800/50'
                   }`}
                 >
                   <td className="px-6 py-3 font-medium text-white">{customer.name}</td>
                   <td className="px-6 py-3 text-zinc-300">{customer.email || '—'}</td>
                   <td className="px-6 py-3">
                     {isCustomerActive(customer.id) ? (
-                      <span className="text-xs px-2 py-1 rounded bg-green-900/30 text-green-300">Active</span>
+                      <span className="text-xs px-2 py-1 rounded bg-green-900/30 text-green-300">
+                        Active
+                      </span>
                     ) : (
-                      <span className="text-xs px-2 py-1 rounded bg-zinc-800 text-zinc-400">No active contracts</span>
+                      <span className="text-xs px-2 py-1 rounded bg-zinc-800 text-zinc-400">
+                        No active campaigns
+                      </span>
                     )}
                   </td>
                 </tr>
@@ -368,7 +585,7 @@ export function CustomersList() {
             </tbody>
           </table>
 
-          {customers.length === 0 && !isCreatingCustomer && (
+          {customers.length === 0 && (
             <div className="p-6 text-center text-zinc-300 text-sm">
               No customers. Create one to get started.
             </div>
@@ -376,170 +593,288 @@ export function CustomersList() {
         </div>
       </div>
 
-      {/* BOTTOM: Assets for Selected Customer — Tabbed View */}
-      {selectedCustomer ? (
-        <div className="flex-1 min-h-0 flex flex-col bg-slate-950 border border-indigo-900/50 rounded-lg overflow-hidden">
-          <div className="flex border-b border-indigo-900/30 bg-slate-900/50">
-            <button
-              onClick={() => setActiveTab('contracts')}
-              className={`px-6 py-3 text-sm font-medium transition-colors ${
-                activeTab === 'contracts'
-                  ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
-                  : 'text-zinc-300 hover:text-white'
-              }`}
-            >
-              Contracts ({customerContracts.length})
-            </button>
-            <button
-              onClick={() => setActiveTab('contacts')}
-              className={`px-6 py-3 text-sm font-medium transition-colors ${
-                activeTab === 'contacts'
-                  ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
-                  : 'text-zinc-300 hover:text-white'
-              }`}
-            >
-              Contacts ({customerContacts.length})
-            </button>
-          </div>
-
-          <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
-            {activeTab === 'contracts' ? (
-              <div className="flex-1 min-h-0 flex flex-col">
-                <div className="px-6 py-3 border-b border-zinc-800 flex items-center justify-end bg-zinc-800/30">
-                  <button
-                    onClick={() => { setIsCreatingContract(true); setIsCreatingContact(false); }}
-                    className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors"
-                  >
-                    <Plus className="w-3 h-3" />
-                    New Contract
-                  </button>
-                </div>
-                {isCreatingContract && selectedCustomerId && (
-                  <div className="px-6 py-3 border-b border-zinc-800 bg-zinc-800/30">
-                    <CreateContractForm
-                      customerId={selectedCustomerId}
-                      onSubmit={(data) => createContractMutation.mutate(data)}
-                      onCancel={() => setIsCreatingContract(false)}
-                      isLoading={createContractMutation.isPending}
-                    />
-                  </div>
+      {/* BOTTOM: Campaigns / Contacts — always visible */}
+      <div className="flex-1 min-h-0 flex flex-col bg-slate-950 border border-indigo-900/50 rounded-lg overflow-hidden">
+        {/* Tab bar + filter chip */}
+        <div className="flex items-center border-b border-indigo-900/30 bg-slate-900/50">
+          <button
+            onClick={() => setActiveTab('campaigns')}
+            className={`px-6 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'campaigns'
+                ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
+                : 'text-zinc-300 hover:text-white'
+            }`}
+          >
+            Campaigns ({displayedCampaigns.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('contacts')}
+            className={`px-6 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'contacts'
+                ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
+                : 'text-zinc-300 hover:text-white'
+            }`}
+          >
+            Contacts ({displayedContacts.length})
+          </button>
+          <div className="flex-1" />
+          {focusedCustomerId && focusedCustomerName && (
+            <div className="mr-3 flex items-center gap-1.5 px-2.5 py-1 bg-indigo-900/30 border border-indigo-700/50 rounded-lg text-xs text-indigo-300">
+              <span>
+                {focusedCustomerName}
+                {selectedCustomerIds.size > 1 && (
+                  <span className="ml-1 text-indigo-400">+{selectedCustomerIds.size - 1} more</span>
                 )}
-                <div className="flex-1 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-zinc-800 sticky top-0">
-                      <tr>
-                        <SortableHeader
-                          label="Name"
-                          column="name"
-                          isActive={contractSort?.column === 'name'}
-                          direction={contractSort?.direction}
-                          onSort={() => toggleSort('name', setContractSort, contractSort)}
-                          borderColor="border-indigo-800"
-                        />
-                        <SortableHeader
-                          label="Plays/mo"
-                          column="plays_per_month"
-                          isActive={contractSort?.column === 'plays_per_month'}
-                          direction={contractSort?.direction}
-                          onSort={() => toggleSort('plays_per_month', setContractSort, contractSort)}
-                          borderColor="border-indigo-800"
-                        />
-                        <SortableHeader
-                          label="Period"
-                          column="starts_on"
-                          isActive={contractSort?.column === 'starts_on'}
-                          direction={contractSort?.direction}
-                          onSort={() => toggleSort('starts_on', setContractSort, contractSort)}
-                          borderColor="border-indigo-800"
-                        />
-                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
-                          Pacing
-                        </th>
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-800">
-                      {customerContracts.map((contract) => (
-                        <ContractTableRow
-                          key={contract.id}
-                          contract={contract}
-                          onEdit={() => setEditTarget({ type: 'contract', id: contract.id })}
-                        />
-                      ))}
-                    </tbody>
-                  </table>
+              </span>
+              <button onClick={clearCustomerFocus} className="hover:text-white">
+                <X className="w-3 h-3" />
+              </button>
+            </div>
+          )}
+        </div>
 
-                  {customerContracts.length === 0 && (
-                    <div className="p-4 text-center text-zinc-300 text-xs">No contracts</div>
-                  )}
-                </div>
+        <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+          {activeTab === 'campaigns' ? (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-2 bg-zinc-800/30">
+                <div className="flex-1" />
+                <button
+                  onClick={() => {
+                    if (focusedCustomerId) setIsCreatingCampaign(true);
+                  }}
+                  disabled={!focusedCustomerId}
+                  className={`flex items-center gap-2 px-3 py-1 text-xs rounded transition-colors ${
+                    focusedCustomerId
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                      : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                  }`}
+                >
+                  <Plus className="w-3 h-3" />
+                  New Campaign
+                </button>
+                <button
+                  onClick={() => {
+                    if (editCampaignId) setEditTarget({ type: 'campaign', id: editCampaignId });
+                  }}
+                  disabled={!canEditCampaign}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                    canEditCampaign
+                      ? 'text-zinc-300 hover:text-white bg-zinc-700 hover:bg-zinc-600'
+                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
+                  }`}
+                >
+                  <Pencil className="w-3 h-3" />
+                  Edit
+                </button>
+                <button
+                  onClick={handleDeleteCampaigns}
+                  disabled={!canDeleteCampaign || deleteCampaignsMutation.isPending}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                    canDeleteCampaign
+                      ? 'text-red-400 hover:bg-red-900/20 bg-zinc-700'
+                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
+                  }`}
+                >
+                  <Trash2 className="w-3 h-3" />
+                  {selectedCampaignIds.size > 1
+                    ? `Delete (${selectedCampaignIds.size})`
+                    : 'Delete'}
+                </button>
               </div>
-            ) : (
-              <div className="flex-1 min-h-0 flex flex-col">
-                <div className="px-6 py-3 border-b border-zinc-800 flex items-center justify-end bg-zinc-800/30">
-                  <button
-                    onClick={() => { setIsCreatingContact(true); setIsCreatingContract(false); }}
-                    className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors"
-                  >
-                    <Plus className="w-3 h-3" />
-                    New Contact
-                  </button>
-                </div>
-                {isCreatingContact && selectedCustomerId && (
-                  <div className="px-6 py-3 border-b border-zinc-800 bg-zinc-800/30">
-                    <CreateContactForm
-                      customerId={selectedCustomerId}
-                      onSubmit={(data) => createContactMutation.mutate(data)}
-                      onCancel={() => setIsCreatingContact(false)}
-                      isLoading={createContactMutation.isPending}
-                    />
-                  </div>
+              <div className="flex-1 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-zinc-800 sticky top-0">
+                    <tr>
+                      {!focusedCustomerId && (
+                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider border-r border-indigo-800">
+                          Customer
+                        </th>
+                      )}
+                      <SortableHeader
+                        label="Name"
+                        column="name"
+                        isActive={campaignSort?.column === 'name'}
+                        direction={campaignSort?.direction}
+                        onSort={() => toggleSort('name', setCampaignSort, campaignSort)}
+                        borderColor="border-indigo-800"
+                      />
+                      <SortableHeader
+                        label="Plays/mo"
+                        column="plays_per_month"
+                        isActive={campaignSort?.column === 'plays_per_month'}
+                        direction={campaignSort?.direction}
+                        onSort={() =>
+                          toggleSort('plays_per_month', setCampaignSort, campaignSort)
+                        }
+                        borderColor="border-indigo-800"
+                      />
+                      <SortableHeader
+                        label="Period"
+                        column="starts_on"
+                        isActive={campaignSort?.column === 'starts_on'}
+                        direction={campaignSort?.direction}
+                        onSort={() => toggleSort('starts_on', setCampaignSort, campaignSort)}
+                        borderColor="border-indigo-800"
+                      />
+                      <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                        Pacing
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800">
+                    {displayedCampaigns.map((campaign) => (
+                      <CampaignTableRow
+                        key={campaign.id}
+                        campaign={campaign}
+                        showCustomer={!focusedCustomerId}
+                        isSelected={selectedCampaignIds.has(campaign.id)}
+                        onClick={(e) =>
+                          handleShiftClick(
+                            campaign.id,
+                            orderedCampaignIds,
+                            selectedCampaignIds,
+                            setSelectedCampaignIds,
+                            lastClickedCampaignId,
+                            setLastClickedCampaignId,
+                            e,
+                          )
+                        }
+                        onEdit={() => setEditTarget({ type: 'campaign', id: campaign.id })}
+                      />
+                    ))}
+                  </tbody>
+                </table>
+
+                {displayedCampaigns.length === 0 && (
+                  <div className="p-4 text-center text-zinc-300 text-xs">No campaigns</div>
                 )}
-                <div className="flex-1 overflow-auto">
-                  <table className="w-full text-xs">
-                    <thead className="bg-zinc-800 sticky top-0">
-                      <tr>
-                        <SortableHeader
-                          label="Name"
-                          column="name"
-                          isActive={contactSort?.column === 'name'}
-                          direction={contactSort?.direction}
-                          onSort={() => toggleSort('name', setContactSort, contactSort)}
-                          borderColor="border-indigo-800"
-                        />
-                        <SortableHeader
-                          label="Email"
-                          column="email"
-                          isActive={contactSort?.column === 'email'}
-                          direction={contactSort?.direction}
-                          onSort={() => toggleSort('email', setContactSort, contactSort)}
-                          borderColor="border-indigo-800"
-                        />
-                        <SortableHeader
-                          label="Phone"
-                          column="phone"
-                          isActive={contactSort?.column === 'phone'}
-                          direction={contactSort?.direction}
-                          onSort={() => toggleSort('phone', setContactSort, contactSort)}
-                          borderColor="border-indigo-800"
-                        />
-                        <SortableHeader
-                          label="Role"
-                          column="role"
-                          isActive={contactSort?.column === 'role'}
-                          direction={contactSort?.direction}
-                          onSort={() => toggleSort('role', setContactSort, contactSort)}
-                          borderColor="border-indigo-800"
-                        />
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-zinc-800">
-                      {customerContacts.map((contact) => (
+              </div>
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-2 bg-zinc-800/30">
+                <div className="flex-1" />
+                <button
+                  onClick={() => {
+                    if (focusedCustomerId) setIsCreatingContact(true);
+                  }}
+                  disabled={!focusedCustomerId}
+                  className={`flex items-center gap-2 px-3 py-1 text-xs rounded transition-colors ${
+                    focusedCustomerId
+                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                      : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
+                  }`}
+                >
+                  <Plus className="w-3 h-3" />
+                  New Contact
+                </button>
+                <button
+                  onClick={() => {
+                    if (editContactId) setEditTarget({ type: 'contact', id: editContactId });
+                  }}
+                  disabled={!canEditContact}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                    canEditContact
+                      ? 'text-zinc-300 hover:text-white bg-zinc-700 hover:bg-zinc-600'
+                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
+                  }`}
+                >
+                  <Pencil className="w-3 h-3" />
+                  Edit
+                </button>
+                <button
+                  onClick={handleDeleteContacts}
+                  disabled={!canDeleteContact || deleteContactsMutation.isPending}
+                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
+                    canDeleteContact
+                      ? 'text-red-400 hover:bg-red-900/20 bg-zinc-700'
+                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
+                  }`}
+                >
+                  <Trash2 className="w-3 h-3" />
+                  {selectedContactIds.size > 1
+                    ? `Delete (${selectedContactIds.size})`
+                    : 'Delete'}
+                </button>
+              </div>
+              <div className="flex-1 overflow-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-zinc-800 sticky top-0">
+                    <tr>
+                      {!focusedCustomerId && (
+                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider border-r border-indigo-800">
+                          Customer(s)
+                        </th>
+                      )}
+                      <SortableHeader
+                        label="Name"
+                        column="name"
+                        isActive={contactSort?.column === 'name'}
+                        direction={contactSort?.direction}
+                        onSort={() => toggleSort('name', setContactSort, contactSort)}
+                        borderColor="border-indigo-800"
+                      />
+                      <SortableHeader
+                        label="Email"
+                        column="email"
+                        isActive={contactSort?.column === 'email'}
+                        direction={contactSort?.direction}
+                        onSort={() => toggleSort('email', setContactSort, contactSort)}
+                        borderColor="border-indigo-800"
+                      />
+                      <SortableHeader
+                        label="Phone"
+                        column="phone"
+                        isActive={contactSort?.column === 'phone'}
+                        direction={contactSort?.direction}
+                        onSort={() => toggleSort('phone', setContactSort, contactSort)}
+                        borderColor="border-indigo-800"
+                      />
+                      <SortableHeader
+                        label="Role"
+                        column="role"
+                        isActive={contactSort?.column === 'role'}
+                        direction={contactSort?.direction}
+                        onSort={() => toggleSort('role', setContactSort, contactSort)}
+                        borderColor="border-indigo-800"
+                      />
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-zinc-800">
+                    {displayedContacts.map((contact) => {
+                      const withCustomers = contact as Contact & {
+                        customer_names?: string[];
+                        is_primary?: boolean;
+                      };
+                      return (
                         <tr
                           key={contact.id}
-                          onDoubleClick={() => setEditTarget({ type: 'contact', id: contact.id })}
+                          onClick={(e) =>
+                            handleShiftClick(
+                              contact.id,
+                              orderedContactIds,
+                              selectedContactIds,
+                              setSelectedContactIds,
+                              lastClickedContactId,
+                              setLastClickedContactId,
+                              e,
+                            )
+                          }
+                          onDoubleClick={() =>
+                            setEditTarget({ type: 'contact', id: contact.id })
+                          }
                           title="Double-click to edit"
-                          className="hover:bg-slate-900/50 cursor-pointer"
+                          className={`cursor-pointer transition-colors ${
+                            selectedContactIds.has(contact.id)
+                              ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
+                              : 'hover:bg-slate-900/50'
+                          }`}
                         >
+                          {!focusedCustomerId && (
+                            <td className="px-6 py-2 text-zinc-400">
+                              {withCustomers.customer_names?.join(', ') || '—'}
+                            </td>
+                          )}
                           <td className="px-6 py-2 font-medium text-white">{contact.name}</td>
                           <td className="px-6 py-2 text-zinc-300">{contact.email || '—'}</td>
                           <td className="px-6 py-2 text-zinc-300">{contact.phone || '—'}</td>
@@ -549,22 +884,53 @@ export function CustomersList() {
                             </span>
                           </td>
                         </tr>
-                      ))}
-                    </tbody>
-                  </table>
+                      );
+                    })}
+                  </tbody>
+                </table>
 
-                  {customerContacts.length === 0 && (
-                    <div className="p-4 text-center text-zinc-300 text-xs">No contacts</div>
-                  )}
-                </div>
+                {displayedContacts.length === 0 && (
+                  <div className="p-4 text-center text-zinc-300 text-xs">No contacts</div>
+                )}
               </div>
-            )}
-          </div>
+            </div>
+          )}
         </div>
-      ) : (
-        <div className="flex-1 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-lg text-center">
-          <p className="text-zinc-400 text-sm">Select a customer to view contracts and contacts</p>
-        </div>
+      </div>
+
+      {/* Create Modals */}
+      {isCreatingCustomer && (
+        <CreateModal title="New Customer" onClose={() => setIsCreatingCustomer(false)}>
+          <CreateCustomerForm
+            onSubmit={(data) => createCustomerMutation.mutate(data)}
+            onCancel={() => setIsCreatingCustomer(false)}
+            isLoading={createCustomerMutation.isPending}
+          />
+        </CreateModal>
+      )}
+
+      {isCreatingCampaign && focusedCustomerId && (
+        <CreateModal title="New Campaign" onClose={() => setIsCreatingCampaign(false)}>
+          <CreateCampaignForm
+            customers={customers}
+            defaultCustomerId={focusedCustomerId}
+            allCampaigns={allCampaigns}
+            onSubmit={(data) => createCampaignMutation.mutate(data)}
+            onCancel={() => setIsCreatingCampaign(false)}
+            isLoading={createCampaignMutation.isPending}
+          />
+        </CreateModal>
+      )}
+
+      {isCreatingContact && focusedCustomerId && (
+        <CreateModal title="New Contact" onClose={() => setIsCreatingContact(false)}>
+          <CreateContactForm
+            customerId={focusedCustomerId}
+            onSubmit={(data) => createContactMutation.mutate(data)}
+            onCancel={() => setIsCreatingContact(false)}
+            isLoading={createContactMutation.isPending}
+          />
+        </CreateModal>
       )}
 
       {/* Edit Modal */}
@@ -572,11 +938,10 @@ export function CustomersList() {
         <EditModal
           target={editTarget}
           customers={customers}
-          contracts={contracts}
-          contacts={contacts}
+          campaigns={allCampaigns}
+          contacts={filteredContacts}
           allContacts={allContacts}
           onClose={() => setEditTarget(null)}
-          onEditContact={(id) => setEditTarget({ type: 'contact', id })}
           onUpdateCustomer={(id, patch) => updateCustomerMutation.mutate({ id, patch })}
           onDeleteCustomer={(id) => deleteCustomerMutation.mutate(id)}
           onCreateContact={(data) => createContactMutation.mutate(data)}
@@ -587,18 +952,18 @@ export function CustomersList() {
           onSetPrimary={(customerId, contactId, isPrimary) =>
             setPrimaryMutation.mutate({ customerId, contactId, isPrimary })
           }
-          onUpdateContract={(id, patch) => updateContractMutation.mutate({ id, patch })}
-          onDeleteContract={(id) => deleteContractMutation.mutate(id)}
+          onUpdateCampaign={(id, patch) => updateCampaignMutation.mutate({ id, patch })}
+          onDeleteCampaign={(id) => deleteCampaignMutation.mutate(id)}
           onUpdateContact={(id, patch) => updateContactMutation.mutate({ id, patch })}
           onDeleteContact={(id) => deleteContactMutation.mutate(id)}
           isUpdating={
             updateCustomerMutation.isPending ||
-            updateContractMutation.isPending ||
+            updateCampaignMutation.isPending ||
             updateContactMutation.isPending
           }
           isDeleting={
             deleteCustomerMutation.isPending ||
-            deleteContractMutation.isPending ||
+            deleteCampaignMutation.isPending ||
             deleteContactMutation.isPending
           }
         />
@@ -643,6 +1008,47 @@ function SortableHeader({
   );
 }
 
+function CreateModal({
+  title,
+  onClose,
+  children,
+}: {
+  title: string;
+  onClose: () => void;
+  children: React.ReactNode;
+}) {
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
+      onClick={onClose}
+    >
+      <div
+        className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-lg"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="px-6 py-4 border-b border-zinc-700 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-white">{title}</h2>
+          <button
+            onClick={onClose}
+            className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition-colors"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>
+  );
+}
+
 function CreateCustomerForm({
   onSubmit,
   onCancel,
@@ -657,65 +1063,445 @@ function CreateCustomerForm({
   });
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
-      <div className="grid grid-cols-3 gap-2">
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <div className="px-6 py-5 space-y-4">
         <div>
+          <label className={LABEL}>Name *</label>
           <input
             type="text"
             {...register('name')}
-            placeholder="Customer name *"
-            className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+            disabled={isLoading}
+            className={INPUT}
+            placeholder="ACME Corp"
           />
           {formState.errors.name && (
-            <p className="text-red-400 text-xs mt-0.5">{formState.errors.name.message}</p>
+            <p className="text-red-400 text-xs mt-1">{formState.errors.name.message}</p>
           )}
         </div>
-        <input
-          type="email"
-          {...register('email')}
-          placeholder="Email"
-          className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-        />
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="flex-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white text-xs rounded transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors disabled:opacity-50"
-          >
-            Create
-          </button>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>Email</label>
+            <input type="email" {...register('email')} disabled={isLoading} className={INPUT} />
+            {formState.errors.email && (
+              <p className="text-red-400 text-xs mt-1">{formState.errors.email.message}</p>
+            )}
+          </div>
+          <div>
+            <label className={LABEL}>Phone</label>
+            <input type="text" {...register('phone')} disabled={isLoading} className={INPUT} />
+          </div>
         </div>
+        <div>
+          <label className={LABEL}>Notes</label>
+          <textarea {...register('notes')} disabled={isLoading} rows={2} className={INPUT} />
+        </div>
+      </div>
+      <div className="px-6 py-4 border-t border-zinc-700 flex justify-end gap-2 bg-zinc-800/50 rounded-b-xl">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={isLoading}
+          className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={isLoading}
+          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+        >
+          {isLoading ? 'Creating…' : 'Create Customer'}
+        </button>
       </div>
     </form>
   );
 }
 
-function ContractTableRow({
-  contract,
-  onEdit,
+function CampaignExclusionPicker({
+  allCampaigns,
+  excludeId,
+  value,
+  onChange,
+  disabled,
 }: {
-  contract: Contract & { customer_name: string };
-  onEdit: () => void;
+  allCampaigns: (Campaign & { customer_name: string })[];
+  excludeId: number | null;
+  value: number[];
+  onChange: (ids: number[]) => void;
+  disabled: boolean;
 }) {
-  const { data: pacing } = useQuery({
-    queryKey: ['contract-pacing', contract.id],
-    queryFn: () => fetchContractPacing(contract.id),
+  const [open, setOpen] = useState(false);
+  const available = allCampaigns.filter(c => c.id !== excludeId);
+  const selected = allCampaigns.filter(c => value.includes(c.id));
+  const toggle = (id: number) =>
+    onChange(value.includes(id) ? value.filter(x => x !== id) : [...value, id]);
+
+  return (
+    <div className="space-y-2">
+      {selected.length > 0 && (
+        <div className="flex flex-wrap gap-1.5">
+          {selected.map(c => (
+            <span key={c.id} className="flex items-center gap-1 px-2 py-0.5 bg-rose-900/30 border border-rose-700/50 rounded text-xs text-rose-300">
+              {c.name}
+              {!disabled && (
+                <button type="button" onClick={() => toggle(c.id)} className="hover:text-white ml-0.5">
+                  <X className="w-3 h-3" />
+                </button>
+              )}
+            </span>
+          ))}
+        </div>
+      )}
+      {available.length > 0 ? (
+        open ? (
+          <div className="border border-zinc-700 rounded-lg overflow-hidden">
+            <div className="max-h-40 overflow-y-auto divide-y divide-zinc-800">
+              {available.map(c => (
+                <label key={c.id} className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-zinc-800">
+                  <input
+                    type="checkbox"
+                    checked={value.includes(c.id)}
+                    onChange={() => toggle(c.id)}
+                    disabled={disabled}
+                    className="rounded border-zinc-600 text-rose-500 h-3.5 w-3.5"
+                  />
+                  <span className="text-sm text-white flex-1 truncate">{c.name}</span>
+                  <span className="text-xs text-zinc-400 shrink-0">{c.customer_name}</span>
+                </label>
+              ))}
+            </div>
+            <button type="button" onClick={() => setOpen(false)} className="w-full px-3 py-1.5 text-xs text-zinc-400 hover:text-white bg-zinc-800/50 border-t border-zinc-700 text-left transition-colors">
+              Done
+            </button>
+          </div>
+        ) : (
+          <button type="button" onClick={() => setOpen(true)} disabled={disabled} className="flex items-center gap-1.5 text-xs text-zinc-400 hover:text-white transition-colors py-1">
+            <Plus className="w-3.5 h-3.5" />
+            {selected.length === 0 ? 'Add exclusion' : 'Add more'}
+          </button>
+        )
+      ) : (
+        <p className="text-xs text-zinc-500">No other campaigns to exclude.</p>
+      )}
+    </div>
+  );
+}
+
+function CreateCampaignForm({
+  customers,
+  defaultCustomerId,
+  allCampaigns,
+  onSubmit,
+  onCancel,
+  isLoading,
+}: {
+  customers: Customer[];
+  defaultCustomerId: number;
+  allCampaigns: (Campaign & { customer_name: string })[];
+  onSubmit: (data: CampaignCreate) => void;
+  onCancel: () => void;
+  isLoading: boolean;
+}) {
+  const { control, register, handleSubmit, formState } = useForm<CampaignCreate>({
+    resolver: zodResolver(CampaignCreateSchema),
+    defaultValues: {
+      customer_id: defaultCustomerId,
+      plays_per_month: 30,
+      advertiser_separation_spots: 1,
+      competing_exclusions: [],
+      priority: 'best_effort',
+      first_in_slot: false,
+      first_in_slot_mode: 'always',
+    },
+  });
+
+  const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
+  const firstInSlot = useWatch({ control, name: 'first_in_slot' });
+
+  return (
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
+        <div>
+          <label className={LABEL}>Customer *</label>
+          <select {...register('customer_id', { valueAsNumber: true })} disabled={isLoading} className={INPUT}>
+            {customers.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+        </div>
+
+        <div>
+          <label className={LABEL}>Campaign Name *</label>
+          <input type="text" {...register('name')} disabled={isLoading} className={INPUT} placeholder="Summer Campaign 2026" />
+          {formState.errors.name && <p className="text-red-400 text-xs mt-1">{formState.errors.name.message}</p>}
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Start Date *
+              <HelpTooltip text="The first date this campaign is eligible to air." />
+            </label>
+            <input type="date" {...register('starts_on')} disabled={isLoading} className={INPUT} />
+            {formState.errors.starts_on && <p className="text-red-400 text-xs mt-1">{formState.errors.starts_on.message}</p>}
+          </div>
+          <div>
+            <label className={LABEL}>
+              End Date *
+              <HelpTooltip text="The last date this campaign is eligible to air. No plays are scheduled after this date." />
+            </label>
+            <input type="date" {...register('ends_on')} disabled={isLoading} className={INPUT} />
+            {formState.errors.ends_on && <p className="text-red-400 text-xs mt-1">{formState.errors.ends_on.message}</p>}
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Plays / Month *
+              <HelpTooltip text="Target number of airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
+            </label>
+            <input type="number" min={1} {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+            {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
+          </div>
+          <div>
+            <label className={LABEL}>
+              Max Plays / Day
+              <HelpTooltip text="Hard cap on how many times this spot can air in a single day. Leave blank for no daily limit." />
+            </label>
+            <input
+              type="number"
+              min={1}
+              placeholder="No limit"
+              {...register('max_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading}
+              className={INPUT}
+            />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Sweeps / Month
+              <HelpTooltip text="Number of times per month to air the sweep (long-form) version of this spot. Leave blank to disable sweeps for this campaign." />
+            </label>
+            <input
+              type="number"
+              min={0}
+              placeholder="No sweeps"
+              {...register('sweeps_per_month', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading}
+              className={INPUT}
+            />
+          </div>
+          <div>
+            <label className={LABEL}>
+              Max Sweeps / Day
+              <HelpTooltip text="Hard cap on sweep plays per day. Only available when sweeps are configured." />
+            </label>
+            <input
+              type="number"
+              min={1}
+              placeholder="No limit"
+              {...register('max_sweeps_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading}
+              className={INPUT}
+            />
+          </div>
+        </div>
+
+        <div className="pt-1 space-y-3">
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Placement</p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>
+                Priority
+                <HelpTooltip text="Hard: the scheduler must hit the monthly play target, bumping best-effort campaigns when there isn't room. Best Effort: plays are distributed opportunistically." />
+              </label>
+              <select {...register('priority')} disabled={isLoading} className={INPUT}>
+                <option value="best_effort">Best Effort</option>
+                <option value="hard">Hard</option>
+              </select>
+            </div>
+            <div>
+              <label className={LABEL}>
+                Intra-break Separation
+                <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
+              </label>
+              <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3 items-end">
+            <div className="flex items-center gap-2 pb-2">
+              <input type="checkbox" {...register('first_in_slot')} disabled={isLoading} className="rounded border-zinc-700 text-indigo-600 h-4 w-4 flex-shrink-0" />
+              <label className="text-sm font-medium text-zinc-300 flex items-center gap-0">
+                First in slot
+                <HelpTooltip text="This campaign's spot should open the commercial break rather than appear mid-break." />
+              </label>
+            </div>
+            <div>
+              <label className={LABEL + (!firstInSlot ? ' opacity-40' : '')}>
+                First-in-slot rule
+                <HelpTooltip text="Every play: all airings open the break. At least once: the scheduler guarantees at least one opening position per day. Once + preferred: one opening per day guaranteed, and the scheduler prefers first position for remaining plays too." />
+              </label>
+              <select
+                {...register('first_in_slot_mode', { setValueAs: v => v === '' ? null : v })}
+                disabled={isLoading || !firstInSlot}
+                className={INPUT + (!firstInSlot ? ' opacity-40' : '')}
+              >
+                <option value="always">Every play</option>
+                <option value="at_least_one">At least once daily</option>
+                <option value="at_least_one_preferred">Once daily + preferred</option>
+              </select>
+            </div>
+          </div>
+
+          <div>
+            <label className={LABEL}>
+              Competing Exclusions
+              <HelpTooltip text="Campaigns that cannot air in the same commercial break as this one. Use for direct competitors or exclusivity agreements." />
+            </label>
+            <CampaignExclusionPicker
+              allCampaigns={allCampaigns}
+              excludeId={null}
+              value={exclusionsField.value ?? []}
+              onChange={exclusionsField.onChange}
+              disabled={isLoading}
+            />
+          </div>
+        </div>
+
+        <div>
+          <label className={LABEL}>Notes</label>
+          <textarea {...register('notes')} disabled={isLoading} rows={2} className={INPUT} />
+        </div>
+      </div>
+      <div className="px-6 py-4 border-t border-zinc-700 flex justify-end gap-2 bg-zinc-800/50 rounded-b-xl">
+        <button type="button" onClick={onCancel} disabled={isLoading} className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+          Cancel
+        </button>
+        <button type="submit" disabled={isLoading} className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+          {isLoading ? 'Creating…' : 'Create Campaign'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CreateContactForm({
+  customerId,
+  onSubmit,
+  onCancel,
+  isLoading,
+}: {
+  customerId: number;
+  onSubmit: (data: ContactCreate) => void;
+  onCancel: () => void;
+  isLoading: boolean;
+}) {
+  const { register, handleSubmit, formState } = useForm<ContactCreate>({
+    resolver: zodResolver(ContactCreateSchema),
+    defaultValues: { customer_id: customerId },
   });
 
   return (
-    <tr onDoubleClick={onEdit} title="Double-click to edit" className="hover:bg-slate-900/50 cursor-pointer">
-      <td className="px-6 py-2 font-medium text-white">{contract.name}</td>
-      <td className="px-6 py-2 text-zinc-300">{contract.plays_per_month}</td>
+    <form onSubmit={handleSubmit(onSubmit)}>
+      <div className="px-6 py-5 space-y-4">
+        <div>
+          <label className={LABEL}>Name *</label>
+          <input type="text" {...register('name')} disabled={isLoading} className={INPUT} />
+          {formState.errors.name && (
+            <p className="text-red-400 text-xs mt-1">{formState.errors.name.message}</p>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>Email</label>
+            <input type="email" {...register('email')} disabled={isLoading} className={INPUT} />
+            {formState.errors.email && (
+              <p className="text-red-400 text-xs mt-1">{formState.errors.email.message}</p>
+            )}
+          </div>
+          <div>
+            <label className={LABEL}>Phone</label>
+            <input type="text" {...register('phone')} disabled={isLoading} className={INPUT} />
+          </div>
+        </div>
+        <div>
+          <label className={LABEL}>Role</label>
+          <input
+            type="text"
+            {...register('role')}
+            disabled={isLoading}
+            className={INPUT}
+            placeholder="e.g. Account Manager"
+          />
+        </div>
+        <div>
+          <label className={LABEL}>Notes</label>
+          <textarea {...register('notes')} disabled={isLoading} rows={2} className={INPUT} />
+        </div>
+      </div>
+      <div className="px-6 py-4 border-t border-zinc-700 flex justify-end gap-2 bg-zinc-800/50 rounded-b-xl">
+        <button
+          type="button"
+          onClick={onCancel}
+          disabled={isLoading}
+          className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+        >
+          Cancel
+        </button>
+        <button
+          type="submit"
+          disabled={isLoading}
+          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+        >
+          {isLoading ? 'Creating…' : 'Create Contact'}
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CampaignTableRow({
+  campaign,
+  showCustomer,
+  isSelected,
+  onClick,
+  onEdit,
+}: {
+  campaign: Campaign & { customer_name: string };
+  showCustomer: boolean;
+  isSelected: boolean;
+  onClick: (e: React.MouseEvent) => void;
+  onEdit: () => void;
+}) {
+  const { data: pacing } = useQuery({
+    queryKey: ['campaign-pacing', campaign.id],
+    queryFn: () => fetchCampaignPacing(campaign.id),
+  });
+
+  return (
+    <tr
+      onClick={onClick}
+      onDoubleClick={onEdit}
+      title="Double-click to edit"
+      className={`cursor-pointer transition-colors ${
+        isSelected
+          ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
+          : 'hover:bg-slate-900/50'
+      }`}
+    >
+      {showCustomer && (
+        <td className="px-6 py-2 text-zinc-400">{campaign.customer_name}</td>
+      )}
+      <td className="px-6 py-2 font-medium text-white">{campaign.name}</td>
+      <td className="px-6 py-2 text-zinc-300">{campaign.plays_per_month}</td>
       <td className="px-6 py-2 text-zinc-300 text-xs">
-        {contract.starts_on} → {contract.ends_on}
+        {campaign.starts_on} → {campaign.ends_on}
       </td>
       <td className="px-6 py-2">
         {pacing && (
@@ -734,39 +1520,37 @@ function ContractTableRow({
 function EditModal({
   target,
   customers,
-  contracts,
+  campaigns,
   contacts,
   allContacts,
   onClose,
-  onEditContact,
   onUpdateCustomer,
   onDeleteCustomer,
   onCreateContact,
   onAssociateContact,
   onDissociateContact,
   onSetPrimary,
-  onUpdateContract,
-  onDeleteContract,
+  onUpdateCampaign,
+  onDeleteCampaign,
   onUpdateContact,
   onDeleteContact,
   isUpdating,
   isDeleting,
 }: {
-  target: { type: 'customer' | 'contract' | 'contact'; id: number };
+  target: { type: 'customer' | 'campaign' | 'contact'; id: number };
   customers: Customer[];
-  contracts: (Contract & { customer_name: string })[];
+  campaigns: (Campaign & { customer_name: string })[];
   contacts: (Contact & { is_primary: boolean })[];
   allContacts: Contact[];
   onClose: () => void;
-  onEditContact: (id: number) => void;
   onUpdateCustomer: (id: number, patch: CustomerPatch) => void;
   onDeleteCustomer: (id: number) => void;
   onCreateContact: (data: ContactCreate) => void;
   onAssociateContact: (contactId: number, isPrimary?: boolean) => void;
   onDissociateContact: (contactId: number) => void;
   onSetPrimary: (customerId: number, contactId: number, isPrimary: boolean) => void;
-  onUpdateContract: (id: number, patch: ContractPatch) => void;
-  onDeleteContract: (id: number) => void;
+  onUpdateCampaign: (id: number, patch: CampaignPatch) => void;
+  onDeleteCampaign: (id: number) => void;
   onUpdateContact: (id: number, patch: ContactPatch) => void;
   onDeleteContact: (id: number) => void;
   isUpdating: boolean;
@@ -786,24 +1570,30 @@ function EditModal({
     if (target.type === 'customer') {
       const c = customers.find((c) => c.id === target.id);
       return c ? c.name : 'Customer';
-    } else if (target.type === 'contract') {
-      const c = contracts.find((c) => c.id === target.id);
-      return c ? c.name : 'Contract';
+    } else if (target.type === 'campaign') {
+      const c = campaigns.find((c) => c.id === target.id);
+      return c ? c.name : 'Campaign';
     } else {
       const c = contacts.find((c) => c.id === target.id);
-      return c ? c.name : 'Contact';
+      if (c) return c.name;
+      const allC = allContacts.find((c) => c.id === target.id);
+      return allC ? allC.name : 'Contact';
     }
   };
 
   const typeLabel =
-    target.type === 'customer' ? 'Customer' :
-    target.type === 'contract' ? 'Contract' : 'Contact';
+    target.type === 'customer' ? 'Customer' : target.type === 'campaign' ? 'Campaign' : 'Contact';
 
   const handleDelete = () => {
     if (target.type === 'customer') onDeleteCustomer(target.id);
-    else if (target.type === 'contract') onDeleteContract(target.id);
+    else if (target.type === 'campaign') onDeleteCampaign(target.id);
     else onDeleteContact(target.id);
   };
+
+  const editContact =
+    target.type === 'contact'
+      ? contacts.find((c) => c.id === target.id) ?? allContacts.find((c) => c.id === target.id)
+      : undefined;
 
   return (
     <div
@@ -846,21 +1636,25 @@ function EditModal({
               onCreateContact={onCreateContact}
               onAssociateContact={onAssociateContact}
               onDissociateContact={onDissociateContact}
-              onSetPrimary={(contactId, isPrimary) => onSetPrimary(target.id, contactId, isPrimary)}
+              onSetPrimary={(contactId, isPrimary) =>
+                onSetPrimary(target.id, contactId, isPrimary)
+              }
               onDeleteContact={onDeleteContact}
               isLoading={isUpdating}
             />
           )}
-          {target.type === 'contract' && (
-            <ContractEditForm
-              contract={contracts.find((c) => c.id === target.id)!}
-              onSubmit={(patch) => onUpdateContract(target.id, patch)}
+          {target.type === 'campaign' && (
+            <CampaignEditForm
+              campaign={campaigns.find((c) => c.id === target.id)!}
+              customers={customers}
+              allCampaigns={campaigns}
+              onSubmit={(patch) => onUpdateCampaign(target.id, patch)}
               isLoading={isUpdating}
             />
           )}
-          {target.type === 'contact' && (
+          {target.type === 'contact' && editContact && (
             <ContactEditForm
-              contact={contacts.find((c) => c.id === target.id)!}
+              contact={editContact}
               onSubmit={(patch) => onUpdateContact(target.id, patch)}
               isLoading={isUpdating}
             />
@@ -890,7 +1684,8 @@ function EditModal({
           ) : (
             <>
               <p className="text-sm text-zinc-300">
-                Delete this {typeLabel.toLowerCase()}? <span className="text-zinc-300">This cannot be undone.</span>
+                Delete this {typeLabel.toLowerCase()}?{' '}
+                <span className="text-zinc-300">This cannot be undone.</span>
               </p>
               <div className="flex gap-2">
                 <button
@@ -966,14 +1761,23 @@ function CustomerEditForm({
 
   const { register, handleSubmit, formState } = useForm<CustomerPatch>({
     resolver: zodResolver(CustomerPatchSchema),
-    defaultValues: { name: customer.name, notes: customer.notes || undefined },
+    defaultValues: {
+      name: customer.name,
+      email: customer.email || undefined,
+      phone: customer.phone || undefined,
+      notes: customer.notes || undefined,
+    },
   });
 
-  const { register: regContact, handleSubmit: handleContactSubmit, reset: resetContact, formState: contactForm } =
-    useForm<ContactCreate>({
-      resolver: zodResolver(ContactCreateSchema),
-      defaultValues: { customer_id: customer.id },
-    });
+  const {
+    register: regContact,
+    handleSubmit: handleContactSubmit,
+    reset: resetContact,
+    formState: contactForm,
+  } = useForm<ContactCreate>({
+    resolver: zodResolver(ContactCreateSchema),
+    defaultValues: { customer_id: customer.id },
+  });
 
   const submitNewContact = (data: ContactCreate) => {
     onCreateContact({ ...data, customer_id: customer.id });
@@ -983,18 +1787,35 @@ function CustomerEditForm({
 
   return (
     <form id="edit-form" onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-      <div className="grid grid-cols-2 gap-4">
-        <div className="col-span-2">
+      <div className="space-y-4">
+        <div>
           <label className={LABEL}>Customer Name *</label>
           <input type="text" {...register('name')} disabled={isLoading} className={INPUT} />
           {formState.errors.name && (
             <p className="text-red-400 text-xs mt-1">{formState.errors.name.message}</p>
           )}
         </div>
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label className={LABEL}>Email</label>
+            <input type="email" {...register('email')} disabled={isLoading} className={INPUT} />
+            {formState.errors.email && (
+              <p className="text-red-400 text-xs mt-1">{formState.errors.email.message}</p>
+            )}
+          </div>
+          <div>
+            <label className={LABEL}>Phone</label>
+            <input type="text" {...register('phone')} disabled={isLoading} className={INPUT} />
+          </div>
+        </div>
         <div>
           <label className={LABEL}>Created</label>
           <div className="px-3 py-2 bg-zinc-800/50 border border-zinc-700 rounded-lg text-sm text-zinc-300">
-            {customer.created_at.toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+            {new Date(customer.created_at).toLocaleDateString('en-US', {
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric',
+            })}
           </div>
         </div>
       </div>
@@ -1016,10 +1837,27 @@ function CustomerEditForm({
           <div key={contact.id} className="px-3 py-2.5 bg-zinc-800 rounded-lg">
             {confirmDeleteContact === contact.id ? (
               <div className="flex items-center justify-between">
-                <span className="text-xs text-zinc-300">Delete {contact.name}? This cannot be undone.</span>
+                <span className="text-xs text-zinc-300">
+                  Delete {contact.name}? This cannot be undone.
+                </span>
                 <div className="flex gap-2">
-                  <button type="button" onClick={() => setConfirmDeleteContact(null)} className="px-2 py-0.5 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
-                  <button type="button" onClick={() => { onDeleteContact(contact.id); setConfirmDeleteContact(null); }} className="px-2 py-0.5 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Yes, delete</button>
+                  <button
+                    type="button"
+                    onClick={() => setConfirmDeleteContact(null)}
+                    className="px-2 py-0.5 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      onDeleteContact(contact.id);
+                      setConfirmDeleteContact(null);
+                    }}
+                    className="px-2 py-0.5 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
+                  >
+                    Yes, delete
+                  </button>
                 </div>
               </div>
             ) : (
@@ -1027,14 +1865,19 @@ function CustomerEditForm({
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-white truncate">{contact.name}</span>
-                    {contact.role && <span className="text-xs text-zinc-300">{contact.role}</span>}
+                    {contact.role && (
+                      <span className="text-xs text-zinc-300">{contact.role}</span>
+                    )}
                   </div>
                   <div className="flex gap-3 mt-0.5">
-                    {contact.email && <span className="text-xs text-zinc-300">{contact.email}</span>}
-                    {contact.phone && <span className="text-xs text-zinc-300">{contact.phone}</span>}
+                    {contact.email && (
+                      <span className="text-xs text-zinc-300">{contact.email}</span>
+                    )}
+                    {contact.phone && (
+                      <span className="text-xs text-zinc-300">{contact.phone}</span>
+                    )}
                   </div>
                 </div>
-                {/* Primary toggle */}
                 <button
                   type="button"
                   onClick={() => onSetPrimary(contact.id, !contact.is_primary)}
@@ -1047,7 +1890,6 @@ function CustomerEditForm({
                 >
                   Primary
                 </button>
-                {/* Deassociate */}
                 <button
                   type="button"
                   onClick={() => onDissociateContact(contact.id)}
@@ -1056,7 +1898,6 @@ function CustomerEditForm({
                 >
                   <X className="w-3 h-3" />
                 </button>
-                {/* Delete */}
                 <button
                   type="button"
                   onClick={() => setConfirmDeleteContact(contact.id)}
@@ -1070,27 +1911,59 @@ function CustomerEditForm({
           </div>
         ))}
 
-        {/* Add new contact inline form */}
         {addMode === 'new' && (
           <div className="border border-zinc-700 rounded-lg p-3 space-y-2 bg-zinc-800/50">
             <p className="text-xs font-medium text-zinc-300">New contact</p>
             <div className="grid grid-cols-2 gap-2">
               <div>
-                <input {...regContact('name')} placeholder="Name *" className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500" />
-                {contactForm.errors.name && <p className="text-red-400 text-xs mt-0.5">{contactForm.errors.name.message}</p>}
+                <input
+                  {...regContact('name')}
+                  placeholder="Name *"
+                  className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                />
+                {contactForm.errors.name && (
+                  <p className="text-red-400 text-xs mt-0.5">{contactForm.errors.name.message}</p>
+                )}
               </div>
-              <input {...regContact('role')} placeholder="Role" className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500" />
-              <input {...regContact('email')} type="email" placeholder="Email" className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500" />
-              <input {...regContact('phone')} placeholder="Phone" className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500" />
+              <input
+                {...regContact('role')}
+                placeholder="Role"
+                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+              />
+              <input
+                {...regContact('email')}
+                type="email"
+                placeholder="Email"
+                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+              />
+              <input
+                {...regContact('phone')}
+                placeholder="Phone"
+                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+              />
             </div>
             <div className="flex gap-2 justify-end">
-              <button type="button" onClick={() => { setAddMode('none'); resetContact({ customer_id: customer.id }); }} className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
-              <button type="button" onClick={handleContactSubmit(submitNewContact)} className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded transition-colors">Add</button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAddMode('none');
+                  resetContact({ customer_id: customer.id });
+                }}
+                className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleContactSubmit(submitNewContact)}
+                className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded transition-colors"
+              >
+                Add
+              </button>
             </div>
           </div>
         )}
 
-        {/* Associate existing contact picker */}
         {addMode === 'existing' && (
           <div className="border border-zinc-700 rounded-lg p-3 space-y-2 bg-zinc-800/50">
             <p className="text-xs font-medium text-zinc-300">Associate existing contact</p>
@@ -1102,7 +1975,10 @@ function CustomerEditForm({
                   <button
                     key={c.id}
                     type="button"
-                    onClick={() => { onAssociateContact(c.id); setAddMode('none'); }}
+                    onClick={() => {
+                      onAssociateContact(c.id);
+                      setAddMode('none');
+                    }}
                     className="w-full text-left px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
                   >
                     <span className="text-sm text-white">{c.name}</span>
@@ -1112,11 +1988,16 @@ function CustomerEditForm({
                 ))}
               </div>
             )}
-            <button type="button" onClick={() => setAddMode('none')} className="text-xs text-zinc-400 hover:text-zinc-200 transition-colors">Cancel</button>
+            <button
+              type="button"
+              onClick={() => setAddMode('none')}
+              className="text-xs text-zinc-400 hover:text-zinc-200 transition-colors"
+            >
+              Cancel
+            </button>
           </div>
         )}
 
-        {/* Action buttons */}
         {addMode === 'none' && (
           <div className="flex gap-3">
             <button
@@ -1143,155 +2024,290 @@ function CustomerEditForm({
 
       <div className="space-y-2">
         <SectionDivider label="Account Manager" />
-        <PlaceholderSection label="Account Manager" description="Assign one of your team members as account manager. Coming soon." />
+        <PlaceholderSection
+          label="Account Manager"
+          description="Assign one of your team members as account manager. Coming soon."
+        />
       </div>
 
       <div className="space-y-2">
         <SectionDivider label="Attachments" />
-        <PlaceholderSection label="Documents & Files" description="Attach contracts, legal documents, and other files here. Coming soon." />
+        <PlaceholderSection
+          label="Documents & Files"
+          description="Attach contracts, legal documents, and other files here. Coming soon."
+        />
       </div>
 
       <div className="space-y-2">
         <SectionDivider label="History" />
-        <PlaceholderSection label="Campaign History" description="Performance history and past campaigns will appear here. Coming soon." />
+        <PlaceholderSection
+          label="Campaign History"
+          description="Performance history and past campaigns will appear here. Coming soon."
+        />
       </div>
     </form>
   );
 }
 
-function ContractEditForm({
-  contract,
+function CampaignEditForm({
+  campaign,
+  customers,
+  allCampaigns,
   onSubmit,
   isLoading,
 }: {
-  contract: Contract & { customer_name: string };
-  onSubmit: (patch: ContractPatch) => void;
+  campaign: Campaign & { customer_name: string };
+  customers: Customer[];
+  allCampaigns: (Campaign & { customer_name: string })[];
+  onSubmit: (patch: CampaignPatch) => void;
   isLoading: boolean;
 }) {
-  const { register, handleSubmit, formState } = useForm<ContractPatch>({
-    resolver: zodResolver(ContractPatchSchema),
+  const queryClient = useQueryClient();
+
+  const { data: pacing } = useQuery({
+    queryKey: ['campaign-pacing', campaign.id],
+    queryFn: () => fetchCampaignPacing(campaign.id),
+  });
+
+  const { data: campaignMedia = [] } = useQuery({
+    queryKey: ['campaign-media', campaign.id],
+    queryFn: () => fetchCampaignMedia(campaign.id),
+  });
+
+  const { control, register, handleSubmit, formState } = useForm<CampaignPatch>({
+    resolver: zodResolver(CampaignPatchSchema),
     defaultValues: {
-      name: contract.name,
-      starts_on: contract.starts_on,
-      ends_on: contract.ends_on,
-      plays_per_month: contract.plays_per_month,
-      priority: contract.priority,
-      interval: contract.interval ?? undefined,
-      industry: contract.industry ?? undefined,
-      first_slot: contract.first_slot ?? false,
-      notes: contract.notes || undefined,
-      active: contract.active,
+      name: campaign.name,
+      starts_on: campaign.starts_on,
+      ends_on: campaign.ends_on,
+      plays_per_month: campaign.plays_per_month,
+      max_plays_per_day: campaign.max_plays_per_day ?? undefined,
+      sweeps_per_month: campaign.sweeps_per_month ?? undefined,
+      max_sweeps_per_day: campaign.max_sweeps_per_day ?? undefined,
+      priority: campaign.priority,
+      first_in_slot: campaign.first_in_slot,
+      first_in_slot_mode: campaign.first_in_slot_mode ?? 'always',
+      advertiser_separation_spots: campaign.advertiser_separation_spots,
+      competing_exclusions: campaign.competing_exclusions,
+      notes: campaign.notes || undefined,
+      active: campaign.active,
     },
   });
 
+  const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
+  const sweepsPerMonth = useWatch({ control, name: 'sweeps_per_month' });
+  const firstInSlot = useWatch({ control, name: 'first_in_slot' });
+  const [mediaError, setMediaError] = useState<string | null>(null);
+
+  // Clear media error whenever clips change (user added/removed a clip)
+  useEffect(() => { setMediaError(null); }, [campaignMedia.length]);
+
+  const doSubmit = async (data: CampaignPatch) => {
+    const sweepClips = campaignMedia.filter((m) => m.play_as_sweep);
+    const sweepsGoingAway = !data.sweeps_per_month && campaign.sweeps_per_month;
+
+    // Remove sweep-designated clips if sweeps are being cleared
+    if (sweepsGoingAway && sweepClips.length > 0) {
+      await Promise.all(sweepClips.map((c) => removeCampaignMedia(c.id)));
+      queryClient.invalidateQueries({ queryKey: ['campaign-media', campaign.id] });
+    }
+
+    // Effective clip state after potential cleanup
+    const remainingClips = sweepsGoingAway
+      ? campaignMedia.filter((m) => !m.play_as_sweep)
+      : campaignMedia;
+    const remainingSweepClips = sweepsGoingAway ? [] : sweepClips;
+
+    // Cross-field validation
+    const isActive = data.active !== undefined ? data.active : campaign.active;
+    if (isActive && remainingClips.length === 0) {
+      setMediaError('Active campaigns must have at least one media clip.');
+      return;
+    }
+    if (data.sweeps_per_month && remainingSweepClips.length === 0) {
+      setMediaError('Sweeps are configured but no clips are designated as Sweep.');
+      return;
+    }
+
+    setMediaError(null);
+    onSubmit(data);
+  };
+
   return (
-    <form id="edit-form" onSubmit={handleSubmit(onSubmit)} className="space-y-5">
-      {/* Basic info */}
+    <form id="edit-form" onSubmit={handleSubmit(doSubmit)} className="space-y-5">
       <div>
-        <label className={LABEL}>Contract Name *</label>
+        <label className={LABEL}>Customer</label>
+        <div className="px-3 py-2 bg-zinc-800/50 border border-zinc-700 rounded-lg text-sm text-zinc-300">
+          {campaign.customer_name}
+        </div>
+      </div>
+
+      <div>
+        <label className={LABEL}>Campaign Name *</label>
         <input type="text" {...register('name')} disabled={isLoading} className={INPUT} />
-        {formState.errors.name && (
-          <p className="text-red-400 text-xs mt-1">{formState.errors.name.message}</p>
-        )}
+        {formState.errors.name && <p className="text-red-400 text-xs mt-1">{formState.errors.name.message}</p>}
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={LABEL}>Start Date *</label>
+          <label className={LABEL}>
+            Start Date *
+            <HelpTooltip text="The first date this campaign is eligible to air." />
+          </label>
           <input type="date" {...register('starts_on')} disabled={isLoading} className={INPUT} />
         </div>
         <div>
-          <label className={LABEL}>End Date *</label>
+          <label className={LABEL}>
+            End Date *
+            <HelpTooltip text="The last date this campaign is eligible to air. No plays are scheduled after this date." />
+          </label>
           <input type="date" {...register('ends_on')} disabled={isLoading} className={INPUT} />
         </div>
       </div>
 
       <div className="grid grid-cols-2 gap-3">
         <div>
-          <label className={LABEL}>Plays / Month *</label>
+          <label className={LABEL}>
+            Plays / Month *
+            <HelpTooltip text="Target number of airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
+          </label>
+          <input type="number" {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+          {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
+        </div>
+        <div>
+          <label className={LABEL}>
+            Max Plays / Day
+            <HelpTooltip text="Hard cap on how many times this spot can air in a single day. Leave blank for no daily limit." />
+          </label>
           <input
             type="number"
-            {...register('plays_per_month', { valueAsNumber: true })}
+            min={1}
+            placeholder="No limit"
+            {...register('max_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
             disabled={isLoading}
             className={INPUT}
           />
-          {formState.errors.plays_per_month && (
-            <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>
-          )}
-        </div>
-        <div>
-          <label className={LABEL}>Priority</label>
-          <select {...register('priority')} disabled={isLoading} className={INPUT}>
-            <option value="soft">Soft</option>
-            <option value="standard">Standard</option>
-            <option value="hard">Hard</option>
-          </select>
         </div>
       </div>
 
-      {/* Scheduling */}
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className={LABEL}>
+            Sweeps / Month
+            <HelpTooltip text="Number of times per month to air the sweep (long-form) version of this spot. Leave blank to disable sweeps for this campaign." />
+          </label>
+          <input
+            type="number"
+            min={0}
+            placeholder="No sweeps"
+            {...register('sweeps_per_month', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+            disabled={isLoading}
+            className={INPUT}
+          />
+        </div>
+        <div>
+          <label className={LABEL}>
+            Max Sweeps / Day
+            <HelpTooltip text="Hard cap on sweep plays per day. Only available when sweeps are configured." />
+          </label>
+          <input
+            type="number"
+            min={1}
+            placeholder="No limit"
+            {...register('max_sweeps_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+            disabled={isLoading || !sweepsPerMonth}
+            className={INPUT + (!sweepsPerMonth ? ' opacity-40' : '')}
+          />
+        </div>
+      </div>
+
+      {pacing && (
+        <div className="space-y-1">
+          <label className={LABEL}>Pacing this month</label>
+          <div className="flex items-center gap-3">
+            <div className="flex-1 bg-zinc-700 rounded-full h-2">
+              <div className={`h-2 rounded-full ${pacing.on_track ? 'bg-green-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(pacing.pct, 100)}%` }} />
+            </div>
+            <span className="text-xs text-zinc-300 whitespace-nowrap">{pacing.plays_this_month} / {pacing.target} ({pacing.pct}%)</span>
+            <span className={`text-xs ${pacing.on_track ? 'text-green-400' : 'text-amber-400'}`}>{pacing.on_track ? 'On track' : 'Behind'}</span>
+          </div>
+        </div>
+      )}
+
       <div className="space-y-3">
-        <SectionDivider label="Scheduling" />
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Placement</p>
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className={LABEL}>Interval</label>
-            <select {...register('interval')} disabled={isLoading} className={INPUT}>
-              <option value="">— Any —</option>
-              {INTERVAL_OPTIONS.map((v) => (
-                <option key={v} value={v}>
-                  {v === 'prime' ? 'Prime Time' : v === 'regular' ? 'Regular' : 'Night'}
-                </option>
-              ))}
+            <label className={LABEL}>
+              Priority
+              <HelpTooltip text="Hard: the scheduler must hit the monthly play target, bumping best-effort campaigns when there isn't room. Best Effort: plays are distributed opportunistically." />
+            </label>
+            <select {...register('priority')} disabled={isLoading} className={INPUT}>
+              <option value="best_effort">Best Effort</option>
+              <option value="hard">Hard</option>
             </select>
           </div>
           <div>
-            <label className={LABEL}>Industry</label>
-            <select {...register('industry')} disabled={isLoading} className={INPUT}>
-              <option value="">— None —</option>
-              <option value="retail">Retail</option>
-              <option value="automotive">Automotive</option>
-              <option value="food_beverage">Food & Beverage</option>
-              <option value="healthcare">Healthcare</option>
+            <label className={LABEL}>
+              Intra-break Separation
+              <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
+            </label>
+            <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3 items-end">
+          <div className="flex items-center gap-2 pb-2">
+            <input type="checkbox" {...register('first_in_slot')} disabled={isLoading} className="rounded border-zinc-700 text-indigo-600 h-4 w-4 flex-shrink-0" />
+            <label className="text-sm font-medium text-zinc-300 flex items-center gap-0">
+              First in slot
+              <HelpTooltip text="This campaign's spot should open the commercial break rather than appear mid-break." />
+            </label>
+          </div>
+          <div>
+            <label className={LABEL + (!firstInSlot ? ' opacity-40' : '')}>
+              First-in-slot rule
+              <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day. Once daily + preferred: one opening per day guaranteed, and the scheduler prefers first position for remaining plays too." />
+            </label>
+            <select
+              {...register('first_in_slot_mode', { setValueAs: v => v === '' ? null : v })}
+              disabled={isLoading || !firstInSlot}
+              className={INPUT + (!firstInSlot ? ' opacity-40' : '')}
+            >
+              <option value="always">Every play</option>
+              <option value="at_least_one">At least once daily</option>
+              <option value="at_least_one_preferred">Once daily + preferred</option>
             </select>
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            {...register('first_slot')}
+        <div>
+          <label className={LABEL}>
+            Competing Exclusions
+            <HelpTooltip text="Campaigns that cannot air in the same commercial break as this one. Use for direct competitors or exclusivity agreements." />
+          </label>
+          <CampaignExclusionPicker
+            allCampaigns={allCampaigns}
+            excludeId={campaign.id}
+            value={exclusionsField.value ?? []}
+            onChange={exclusionsField.onChange}
             disabled={isLoading}
-            className="rounded border-zinc-700 text-indigo-600 h-4 w-4"
           />
-          <label className="text-sm font-medium text-zinc-300">First slot in interval</label>
-          <span className="text-xs text-zinc-300">— spot plays first in the break</span>
         </div>
       </div>
 
-      {/* Placeholders */}
       <div className="space-y-3">
-        <SectionDivider label="Assignment" />
+        <SectionDivider label="Media" />
+        <CampaignMediaSection campaignId={campaign.id} sweepsPerMonth={sweepsPerMonth ?? null} />
+        {mediaError && (
+          <p className="text-red-400 text-xs">{mediaError}</p>
+        )}
+      </div>
 
-        <div>
-          <label className={LABEL}>Show</label>
-          <input
-            type="text"
-            disabled
-            placeholder="Show assignment — coming soon"
-            className={INPUT + ' cursor-not-allowed'}
-          />
-        </div>
-
-        <div>
-          <label className={LABEL}>Associated Elements</label>
-          <input
-            type="text"
-            disabled
-            placeholder="Full commercial, short jingle — coming soon"
-            className={INPUT + ' cursor-not-allowed'}
-          />
-        </div>
+      <div className="space-y-3">
+        <SectionDivider label="Billing" />
+        <PlaceholderSection label="Campaign Total" description="Price calculation based on spots × rate card. Coming soon." />
       </div>
 
       <div>
@@ -1301,162 +2317,10 @@ function ContractEditForm({
 
       <div className="flex items-center gap-2">
         <input type="checkbox" {...register('active')} disabled={isLoading} className="rounded border-zinc-700 text-indigo-600 h-4 w-4" />
-        <label className="text-sm font-medium text-zinc-300">Active</label>
-      </div>
-    </form>
-  );
-}
-
-function CreateContractForm({
-  customerId,
-  onSubmit,
-  onCancel,
-  isLoading,
-}: {
-  customerId: number;
-  onSubmit: (data: ContractCreate) => void;
-  onCancel: () => void;
-  isLoading: boolean;
-}) {
-  const { register, handleSubmit, formState } = useForm<ContractCreate>({
-    resolver: zodResolver(ContractCreateSchema),
-    defaultValues: {
-      customer_id: customerId,
-      plays_per_month: 30,
-      separation_minutes: 90,
-      advertiser_separation_min: 30,
-      priority: 'standard',
-    },
-  });
-
-  return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
-      <div className="grid grid-cols-4 gap-2">
-        <div className="col-span-2">
-          <input
-            type="text"
-            {...register('name')}
-            placeholder="Contract name *"
-            className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-          />
-          {formState.errors.name && (
-            <p className="text-red-400 text-xs mt-0.5">{formState.errors.name.message}</p>
-          )}
-        </div>
-        <input
-          type="date"
-          {...register('starts_on')}
-          title="Start date"
-          className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-        />
-        <input
-          type="date"
-          {...register('ends_on')}
-          title="End date"
-          className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-        />
-      </div>
-      <div className="grid grid-cols-4 gap-2">
-        <div>
-          <input
-            type="number"
-            {...register('plays_per_month', { valueAsNumber: true })}
-            placeholder="Plays/month *"
-            className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-          />
-          {formState.errors.plays_per_month && (
-            <p className="text-red-400 text-xs mt-0.5">{formState.errors.plays_per_month.message}</p>
-          )}
-        </div>
-        <select
-          {...register('priority')}
-          className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-        >
-          <option value="soft">Soft</option>
-          <option value="standard">Standard</option>
-          <option value="hard">Hard</option>
-        </select>
-        <div className="col-span-2 flex gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="flex-1 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-xs rounded transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors disabled:opacity-50"
-          >
-            {isLoading ? 'Creating…' : 'Create'}
-          </button>
-        </div>
-      </div>
-    </form>
-  );
-}
-
-function CreateContactForm({
-  customerId,
-  onSubmit,
-  onCancel,
-  isLoading,
-}: {
-  customerId: number;
-  onSubmit: (data: ContactCreate) => void;
-  onCancel: () => void;
-  isLoading: boolean;
-}) {
-  const { register, handleSubmit, formState } = useForm<ContactCreate>({
-    resolver: zodResolver(ContactCreateSchema),
-    defaultValues: { customer_id: customerId },
-  });
-
-  return (
-    <form onSubmit={handleSubmit(onSubmit)} className="space-y-2">
-      <div className="grid grid-cols-4 gap-2">
-        <div>
-          <input
-            type="text"
-            {...register('name')}
-            placeholder="Name *"
-            className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-          />
-          {formState.errors.name && (
-            <p className="text-red-400 text-xs mt-0.5">{formState.errors.name.message}</p>
-          )}
-        </div>
-        <input
-          type="text"
-          {...register('role')}
-          placeholder="Role"
-          className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-        />
-        <input
-          type="email"
-          {...register('email')}
-          placeholder="Email"
-          className="w-full px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-        />
-        <div className="flex gap-2">
-          <button
-            type="button"
-            onClick={onCancel}
-            disabled={isLoading}
-            className="flex-1 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-xs rounded transition-colors disabled:opacity-50"
-          >
-            Cancel
-          </button>
-          <button
-            type="submit"
-            disabled={isLoading}
-            className="flex-1 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded transition-colors disabled:opacity-50"
-          >
-            {isLoading ? 'Creating…' : 'Create'}
-          </button>
-        </div>
+        <label className="text-sm font-medium text-zinc-300 flex items-center gap-0">
+          Active
+          <HelpTooltip text="Inactive campaigns are excluded from scheduling. At least one media clip must be uploaded before activating." />
+        </label>
       </div>
     </form>
   );
@@ -1471,6 +2335,11 @@ function ContactEditForm({
   onSubmit: (patch: ContactPatch) => void;
   isLoading: boolean;
 }) {
+  const { data: associatedCustomers = [] } = useQuery({
+    queryKey: ['contact-customers', contact.id],
+    queryFn: () => fetchContactCustomers(contact.id),
+  });
+
   const { register, handleSubmit, formState } = useForm<ContactPatch>({
     resolver: zodResolver(ContactPatchSchema),
     defaultValues: {
@@ -1508,13 +2377,38 @@ function ContactEditForm({
 
       <div>
         <label className={LABEL}>Role</label>
-        <input type="text" {...register('role')} disabled={isLoading} placeholder="e.g. Account Manager" className={INPUT} />
+        <input
+          type="text"
+          {...register('role')}
+          disabled={isLoading}
+          placeholder="e.g. Account Manager"
+          className={INPUT}
+        />
       </div>
 
       <div>
         <label className={LABEL}>Notes</label>
         <textarea {...register('notes')} disabled={isLoading} rows={2} className={INPUT} />
       </div>
+
+      {associatedCustomers.length > 0 && (
+        <div className="space-y-2">
+          <SectionDivider label="Associated Customers" />
+          <div className="space-y-1">
+            {associatedCustomers.map((c) => (
+              <div
+                key={c.id}
+                className="px-3 py-2 bg-zinc-800 rounded-lg text-sm text-zinc-300"
+              >
+                {c.name}
+              </div>
+            ))}
+          </div>
+          <p className="text-xs text-zinc-500">
+            Manage associations from the customer edit form.
+          </p>
+        </div>
+      )}
     </form>
   );
 }

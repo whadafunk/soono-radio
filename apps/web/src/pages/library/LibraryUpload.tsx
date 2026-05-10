@@ -2,6 +2,17 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Loader, UploadCloud, Check, AlertCircle, X } from 'lucide-react';
 import { MEDIA_CATEGORIES, MediaCategory, IngestJob } from '@radio/shared';
+
+const CATEGORY_LABELS: Record<MediaCategory, string> = {
+  music: 'Music',
+  jingle: 'Jingle',
+  promo: 'Promo',
+  intro: 'Intro',
+  outro: 'Outro',
+  bed: 'Bed',
+  spot: 'Spot',
+  recording: 'Recording',
+};
 import { fetchIngestJobs, uploadLibraryFiles } from '../../api';
 
 interface ActiveUpload {
@@ -128,7 +139,7 @@ export function LibraryUpload() {
         >
           {MEDIA_CATEGORIES.map((c) => (
             <option key={c} value={c}>
-              {c}
+              {CATEGORY_LABELS[c]}
             </option>
           ))}
         </select>
@@ -278,7 +289,7 @@ function JobRow({ job }: { job: IngestJob }) {
       <td className="px-4 py-2 text-zinc-200 truncate max-w-xs" title={job.uploaded_filename}>
         {job.uploaded_filename}
       </td>
-      <td className="px-4 py-2 text-zinc-400">{job.category}</td>
+      <td className="px-4 py-2 text-zinc-400">{CATEGORY_LABELS[job.category]}</td>
       <td className={`px-4 py-2 ${statusColor}`}>
         <span className="flex items-center gap-1.5">
           {statusIcon}

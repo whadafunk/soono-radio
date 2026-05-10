@@ -78,7 +78,7 @@ export function ShowDetailPage() {
         host:             show.host ?? '',
         producer:         show.producer ?? '',
         type:             show.type,
-        clock_id:         show.clock_id,
+        default_clock_id: show.default_clock_id,
         duration_minutes: show.duration_minutes,
         color:            show.color,
         notes:            show.notes ?? '',
@@ -244,7 +244,7 @@ export function ShowDetailPage() {
             <Field label="Default Clock">
               <Controller
                 control={control}
-                name="clock_id"
+                name="default_clock_id"
                 render={({ field }) => (
                   <select
                     value={field.value ?? ''}

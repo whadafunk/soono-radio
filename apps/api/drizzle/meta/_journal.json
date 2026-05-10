@@ -15,6 +15,34 @@
       "when": 1777410374978,
       "tag": "0001_icy_rocket_raccoon",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1746614400000,
+      "tag": "0002_category_rename",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "6",
+      "when": 1778241356972,
+      "tag": "0003_strange_gargoyle",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "6",
+      "when": 1778300000000,
+      "tag": "0004_campaign_first_in_slot",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "6",
+      "when": 1778400000000,
+      "tag": "0005_first_in_slot_mode",
+      "breakpoints": true
     }
   ]
 }

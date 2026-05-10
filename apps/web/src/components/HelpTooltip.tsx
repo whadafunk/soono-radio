@@ -1,5 +1,5 @@
 import { HelpCircle } from 'lucide-react';
-import { useState } from 'react';
+import { useState, useRef } from 'react';
 
 interface HelpTooltipProps {
   text: string;
@@ -7,12 +7,23 @@ interface HelpTooltipProps {
 
 export function HelpTooltip({ text }: HelpTooltipProps) {
   const [showTooltip, setShowTooltip] = useState(false);
+  const [openAbove, setOpenAbove] = useState(true);
+  const buttonRef = useRef<HTMLButtonElement>(null);
+
+  const handleShow = () => {
+    if (buttonRef.current) {
+      const { top } = buttonRef.current.getBoundingClientRect();
+      setOpenAbove(top > 160);
+    }
+    setShowTooltip(true);
+  };
 
   return (
     <div className="relative inline-block">
       <button
+        ref={buttonRef}
         type="button"
-        onMouseEnter={() => setShowTooltip(true)}
+        onMouseEnter={handleShow}
         onMouseLeave={() => setShowTooltip(false)}
         onClick={() => setShowTooltip(!showTooltip)}
         className="ml-1 inline-flex items-center justify-center w-4 h-4 text-zinc-400 hover:text-indigo-400 transition-colors"
@@ -21,7 +32,11 @@ export function HelpTooltip({ text }: HelpTooltipProps) {
       </button>
 
       {showTooltip && (
-        <div className="absolute left-0 bottom-full mb-2 w-48 bg-zinc-800 border border-zinc-700 rounded-lg p-2 text-xs text-zinc-200 shadow-lg z-10 pointer-events-none">
+        <div
+          className={`absolute left-0 w-48 bg-zinc-800 border border-zinc-700 rounded-lg p-2 text-xs text-zinc-200 shadow-lg z-10 pointer-events-none ${
+            openAbove ? 'bottom-full mb-2' : 'top-full mt-2'
+          }`}
+        >
           {text}
         </div>
       )}
