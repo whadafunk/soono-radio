@@ -1,21 +1,19 @@
 import { z } from 'zod';
 
-// ============ DELAY POLICY ============
+// ============ TIMING POLICY ============
 
-export const DelayPolicySchema = z.discriminatedUnion('type', [
+export const StartPolicySchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hard') }),
   z.object({
     type: z.literal('soft'),
     plus_seconds: z.number().int().nonnegative().default(30),
     minus_seconds: z.number().int().nonnegative().default(0),
   }),
-  z.object({
-    type: z.literal('postpone'),
-    max_plus_seconds: z.number().int().positive(),
-    minus_seconds: z.number().int().nonnegative().default(0),
-  }),
 ]);
-export type DelayPolicy = z.infer<typeof DelayPolicySchema>;
+export type StartPolicy = z.infer<typeof StartPolicySchema>;
+
+export const TRAILING_TIME_STRATEGIES = ['skip_events', 'fill', 'early_handover', 'hard_cut_with_jingle'] as const;
+export type TrailingTimeStrategy = (typeof TRAILING_TIME_STRATEGIES)[number];
 
 // ============ SWEEP CONFIG ============
 
@@ -24,7 +22,7 @@ export type SweepSource = (typeof SWEEP_SOURCES)[number];
 
 export const SweepConfigSchema = z.object({
   per_hour: z.number().int().min(0).max(20),
-  over: z.array(z.enum(['music', 'commercial', 'jingle', 'promo', 'news', 'live', 'silence'])),
+  over: z.array(z.enum(['music', 'stop_set', 'news', 'voice_track', 'bulletin', 'live', 'live_audience'])),
   min_gap_minutes: z.number().int().min(1),
   sources: z.array(z.enum(SWEEP_SOURCES)),
 });
@@ -36,7 +34,7 @@ export const SEGMENT_SOURCE_TYPES = [
   'show_playlist',
   'show_jingles',
   'show_beds',
-  'show_promos',
+  'promos',
   'playlist',
   'campaigns',
   'live',
@@ -44,33 +42,46 @@ export const SEGMENT_SOURCE_TYPES = [
 ] as const;
 export type SegmentSourceType = (typeof SEGMENT_SOURCE_TYPES)[number];
 
-export const SegmentSourceSchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('show_playlist'), tier: z.string().optional() }),
-  z.object({ type: z.literal('show_jingles') }),
-  z.object({ type: z.literal('show_beds') }),
-  z.object({ type: z.literal('show_promos') }),
-  z.object({ type: z.literal('playlist'), playlist_id: z.number().int().positive() }),
+export const SegmentSourceEntrySchema = z.discriminatedUnion('type', [
+  z.object({ type: z.literal('show_playlist'), tier: z.string().optional(), weight: z.number().int().positive().default(1) }),
+  z.object({ type: z.literal('show_jingles'), weight: z.number().int().positive().default(1) }),
+  z.object({ type: z.literal('show_beds'), weight: z.number().int().positive().default(1) }),
+  z.object({ type: z.literal('promos'), weight: z.number().int().positive().default(1) }),
+  z.object({ type: z.literal('playlist'), playlist_id: z.number().int().positive(), weight: z.number().int().positive().default(1), hot_play: z.boolean().default(false), heavy_rotation: z.boolean().default(false) }),
   z.object({ type: z.literal('campaigns') }),
   z.object({ type: z.literal('live') }),
   z.object({ type: z.literal('recording') }),
 ]);
-export type SegmentSource = z.infer<typeof SegmentSourceSchema>;
+export type SegmentSourceEntry = z.infer<typeof SegmentSourceEntrySchema>;
 
 // ============ RECOVERY TACTICS ============
 
 export const RECOVERY_TACTICS = ['trim_outro', 'skip_song', 'drop_queued'] as const;
 export type RecoveryTactic = (typeof RECOVERY_TACTICS)[number];
 
+// ============ SWEEPERS & LIVE ============
+
+export const SWEEPER_TYPES = ['commercial', 'promo', 'station_id', 'jingle'] as const;
+export type SweeperType = (typeof SWEEPER_TYPES)[number];
+
+export const SILENCE_DETECTION_ACTIONS = [
+  'none',
+  'switch_to_music',
+  'alert',
+  'fade_and_switch',
+] as const;
+export type SilenceDetectionAction = (typeof SILENCE_DETECTION_ACTIONS)[number];
+
 // ============ CLOCKS ============
 
 export const CLOCK_SEGMENT_TYPES = [
   'music',
-  'commercial',
-  'jingle',
-  'promo',
-  'news',
   'live',
-  'silence',
+  'live_audience',
+  'stop_set',
+  'news',
+  'voice_track',
+  'bulletin',
 ] as const;
 export type ClockSegmentType = (typeof CLOCK_SEGMENT_TYPES)[number];
 
@@ -82,23 +93,23 @@ export const ClockSegmentSchema = z.object({
   type: z.enum(CLOCK_SEGMENT_TYPES),
   duration_seconds: z.number().int().positive(),
 
-  source_type: z.enum(SEGMENT_SOURCE_TYPES),
-  source_playlist_id: z.number().int().nullable(),
-  source_rotation_id: z.number().int().nullable(),
-  source_tier: z.string().nullable(),
+  sources: z.array(SegmentSourceEntrySchema).default([]),
 
-  filler_sources: z.array(SegmentSourceSchema).default([]),
-  mix_ratio: z.object({ every_n: z.number().int().positive(), from_filler_index: z.number().int().nonnegative() }).nullable(),
-  fallback_source: SegmentSourceSchema.nullable(),
+  filler_playlist_id: z.number().int().nullable(),
 
   start_clip_playlist_id: z.number().int().nullable(),
   end_clip_playlist_id: z.number().int().nullable(),
-
   bed_playlist_id: z.number().int().nullable(),
-  blocks_live_override: z.boolean(),
+  interstitial_jingle_playlist_id: z.number().int().nullable(),
+  jingle_every_n_tracks: z.number().int().positive().nullable(),
 
-  delay_policy: DelayPolicySchema,
+  start_policy: StartPolicySchema,
+  trailing_time: z.array(z.enum(TRAILING_TIME_STRATEGIES)).default([]),
   recovery_tactics: z.array(z.enum(RECOVERY_TACTICS)).default([]),
+
+  accept_live: z.boolean(),
+  accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
+  silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable(),
 });
 export type ClockSegment = z.infer<typeof ClockSegmentSchema>;
 
@@ -108,23 +119,23 @@ export const ClockSegmentCreateSchema = z.object({
   duration_seconds: z.number().int().positive('Duration must be at least 1 second'),
   sort_order: z.number().int().nonnegative().default(0),
 
-  source_type: z.enum(SEGMENT_SOURCE_TYPES),
-  source_playlist_id: z.number().int().positive().nullable().optional(),
-  source_rotation_id: z.number().int().positive().nullable().optional(),
-  source_tier: z.string().nullable().optional(),
+  sources: z.array(SegmentSourceEntrySchema).default([]),
 
-  filler_sources: z.array(SegmentSourceSchema).default([]),
-  mix_ratio: z.object({ every_n: z.number().int().positive(), from_filler_index: z.number().int().nonnegative() }).nullable().optional(),
-  fallback_source: SegmentSourceSchema.nullable().optional(),
+  filler_playlist_id: z.number().int().positive().nullable().optional(),
 
   start_clip_playlist_id: z.number().int().positive().nullable().optional(),
   end_clip_playlist_id: z.number().int().positive().nullable().optional(),
-
   bed_playlist_id: z.number().int().positive().nullable().optional(),
-  blocks_live_override: z.boolean().default(false),
+  interstitial_jingle_playlist_id: z.number().int().positive().nullable().optional(),
+  jingle_every_n_tracks: z.number().int().positive().nullable().optional(),
 
-  delay_policy: DelayPolicySchema.default({ type: 'soft', plus_seconds: 30, minus_seconds: 0 }),
+  start_policy: StartPolicySchema.default({ type: 'soft', plus_seconds: 30, minus_seconds: 0 }),
+  trailing_time: z.array(z.enum(TRAILING_TIME_STRATEGIES)).default([]),
   recovery_tactics: z.array(z.enum(RECOVERY_TACTICS)).default([]),
+
+  accept_live: z.boolean().default(true),
+  accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
+  silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable().optional(),
 });
 export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
 

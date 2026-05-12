@@ -247,12 +247,12 @@ export type ClockInsert = typeof clocks.$inferInsert;
 
 export const CLOCK_SEGMENT_TYPES = [
   'music',
-  'commercial',
-  'jingle',
-  'promo',
-  'news',
   'live',
-  'silence',
+  'live_audience',
+  'stop_set',
+  'news',
+  'voice_track',
+  'bulletin',
 ] as const;
 export type ClockSegmentType = (typeof CLOCK_SEGMENT_TYPES)[number];
 
@@ -260,7 +260,7 @@ export const SEGMENT_SOURCE_TYPES = [
   'show_playlist',   // current show's playlist, optionally filtered by tier
   'show_jingles',    // current show's jingle pool
   'show_beds',       // current show's music bed pool
-  'show_promos',     // current show's promo pool
+  'promos',          // station/show promos pool
   'playlist',        // a specific playlist (source_playlist_id required)
   'campaigns',       // campaign spots via the ad algorithm
   'live',            // harbor input
@@ -270,6 +270,17 @@ export type SegmentSourceType = (typeof SEGMENT_SOURCE_TYPES)[number];
 
 export const RECOVERY_TACTICS = ['trim_outro', 'skip_song', 'drop_queued'] as const;
 export type RecoveryTactic = (typeof RECOVERY_TACTICS)[number];
+
+export const SWEEPER_TYPES = ['commercial', 'promo', 'station_id', 'jingle'] as const;
+export type SweeperType = (typeof SWEEPER_TYPES)[number];
+
+export const SILENCE_DETECTION_ACTIONS = [
+  'none',
+  'switch_to_music',
+  'alert',
+  'fade_and_switch',
+] as const;
+export type SilenceDetectionAction = (typeof SILENCE_DETECTION_ACTIONS)[number];
 
 export const clockSegments = sqliteTable(
   'clock_segments',
@@ -283,31 +294,19 @@ export const clockSegments = sqliteTable(
     type: text('type', { enum: CLOCK_SEGMENT_TYPES }).notNull(),
     duration_seconds: integer('duration_seconds').notNull(),
 
-    // ── Primary source ──────────────────────────────────────────────────────
-    source_type: text('source_type', { enum: SEGMENT_SOURCE_TYPES }).notNull(),
-    // FK populated when source_type = 'playlist'
-    source_playlist_id: integer('source_playlist_id').references(
+    // ── Sources ──────────────────────────────────────────────────────────────
+    // JSON array of { type, [tier], [playlist_id], [weight] } entries.
+    // Music: weighted draw across sources. Stop set: combined pool.
+    sources: text('sources', { mode: 'json' }).notNull().default('[]'),
+
+    // ── Filler ───────────────────────────────────────────────────────────────
+    // Short content to fill gaps created by the look-ahead algorithm.
+    filler_playlist_id: integer('filler_playlist_id').references(
       () => playlists.id,
       { onDelete: 'set null' },
     ),
-    // Rotation override for this segment (null = use playlist's default rotation)
-    source_rotation_id: integer('source_rotation_id').references(
-      () => rotations.id,
-      { onDelete: 'set null' },
-    ),
-    // Populated when source_type = 'show_playlist' to select hot/medium/cold tier
-    source_tier: text('source_tier'),
-
-    // ── Filler & mixing ──────────────────────────────────────────────────────
-    // Ordered array of source configs, tried when primary is exhausted
-    filler_sources: text('filler_sources', { mode: 'json' }).notNull().default('[]'),
-    // e.g. { every_n: 4, from_filler_index: 0 } for intentional blending
-    mix_ratio: text('mix_ratio', { mode: 'json' }),
-    // Last-resort source if all filler is exhausted
-    fallback_source: text('fallback_source', { mode: 'json' }),
 
     // ── Transition clips ─────────────────────────────────────────────────────
-    // Null = use current show's jingle pool automatically
     start_clip_playlist_id: integer('start_clip_playlist_id').references(
       () => playlists.id,
       { onDelete: 'set null' },
@@ -316,29 +315,36 @@ export const clockSegments = sqliteTable(
       () => playlists.id,
       { onDelete: 'set null' },
     ),
-
-    // ── Live / bed ───────────────────────────────────────────────────────────
-    // Only relevant when source_type = 'live'. Null = use show's bed pool.
+    // Bed audio played under harbor input (live / live_audience segments only)
     bed_playlist_id: integer('bed_playlist_id').references(
       () => playlists.id,
       { onDelete: 'set null' },
     ),
-    // True for commercial, jingle, promo — harbor input is muted during these
-    blocks_live_override: integer('blocks_live_override', { mode: 'boolean' })
-      .notNull()
-      .default(false),
+    // Interstitial jingles — played between tracks within a music segment
+    interstitial_jingle_playlist_id: integer('interstitial_jingle_playlist_id').references(
+      () => playlists.id,
+      { onDelete: 'set null' },
+    ),
+    // Insert a jingle every N tracks (null = disabled); music segments only
+    jingle_every_n_tracks: integer('jingle_every_n_tracks'),
 
     // ── Timing ───────────────────────────────────────────────────────────────
     // { type: 'hard' } | { type: 'soft', plus_seconds, minus_seconds }
-    // | { type: 'postpone', max_plus_seconds, minus_seconds }
-    delay_policy: text('delay_policy', { mode: 'json' })
+    start_policy: text('start_policy', { mode: 'json' })
       .notNull()
       .default('{"type":"soft","plus_seconds":30,"minus_seconds":0}'),
-
-    // ── Drift recovery ───────────────────────────────────────────────────────
-    // Ordered tactics applied when this segment is running behind schedule.
-    // Empty array = no recovery (e.g. commercial blocks).
+    // Ordered gap-management strategies: skip_events, fill, early_handover
+    trailing_time: text('trailing_time', { mode: 'json' }).notNull().default('[]'),
+    // Applied (in order) when this segment runs over before a hard-start successor
     recovery_tactics: text('recovery_tactics', { mode: 'json' }).notNull().default('[]'),
+
+    // ── Sweepers & Live ──────────────────────────────────────────────────────
+    // Whether the harbor (DJ mic) is open during this segment
+    accept_live: integer('accept_live', { mode: 'boolean' }).notNull().default(true),
+    // Sweeper types allowed to play as overlays during this segment
+    accept_sweepers: text('accept_sweepers', { mode: 'json' }).notNull().default('[]'),
+    // Only for live / live_audience: action when silence is detected on harbor
+    silence_detection_action: text('silence_detection_action'),
   },
   (t) => ({
     clockIdx: index('clock_segments_clock_idx').on(t.clock_id),
