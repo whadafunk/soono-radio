@@ -1,0 +1,246 @@
+import { FastifyInstance } from 'fastify';
+import { eq, asc, inArray, and, or, like, gte, lte, between, sql, SQL } from 'drizzle-orm';
+import {
+  PlaylistCreateSchema,
+  PlaylistPatchSchema,
+  PlaylistMediaAddSchema,
+  PlaylistTracksReorderSchema,
+  DynamicRulesSchema,
+  MediaTagsUpdateSchema,
+  type DynamicRuleCondition,
+  type DynamicRules,
+} from '@radio/shared';
+import { db } from '../db/index.js';
+import { playlists, playlistMedia, media, mediaTags, MEDIA_CATEGORIES } from '../db/schema.js';
+
+// ── Dynamic rule → SQL ────────────────────────────────────────────────────────
+
+function conditionToSQL(cond: DynamicRuleCondition): SQL | null {
+  const { field, op, value } = cond;
+
+  if (field === 'tags') {
+    const tags = Array.isArray(value) ? (value as string[]) : [String(value)];
+    if (op === 'any_of') {
+      return sql`EXISTS (SELECT 1 FROM media_tags mt WHERE mt.media_id = ${media.id} AND mt.tag IN (${sql.join(tags.map((t) => sql`${t}`), sql`, `)}))`;
+    }
+    if (op === 'all_of') {
+      return sql`(SELECT COUNT(*) FROM media_tags mt WHERE mt.media_id = ${media.id} AND mt.tag IN (${sql.join(tags.map((t) => sql`${t}`), sql`, `)})) = ${tags.length}`;
+    }
+    return null;
+  }
+
+  const col = (() => {
+    switch (field) {
+      case 'category':       return media.category;
+      case 'genre':          return media.genre;
+      case 'artist':         return media.artist;
+      case 'album':          return media.album;
+      case 'year':           return media.year;
+      case 'duration_seconds': return media.duration_seconds;
+      case 'loudness_lufs':  return media.loudness_lufs;
+      default: return null;
+    }
+  })();
+  if (!col) return null;
+
+  switch (op) {
+    case 'eq':       return eq(col, value as string | number);
+    case 'contains': return like(col, `%${value}%`);
+    case 'in':       return inArray(col, Array.isArray(value) ? value as string[] : [value as string]);
+    case 'gte':      return gte(col, value as number);
+    case 'lte':      return lte(col, value as number);
+    case 'between': {
+      const [lo, hi] = value as [number, number];
+      return between(col, lo, hi);
+    }
+    default: return null;
+  }
+}
+
+function rulesToWhere(rules: DynamicRules): SQL | undefined {
+  const clauses = rules.conditions
+    .map(conditionToSQL)
+    .filter((c): c is SQL => c !== null);
+  if (clauses.length === 0) return undefined;
+  return rules.match === 'all' ? and(...clauses) : or(...clauses);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+
+export async function playlistRoutes(fastify: FastifyInstance) {
+
+  // ── Playlist CRUD ──────────────────────────────────────────────────────────
+
+  fastify.get('/playlists', async (_req, reply) => {
+    const rows = await db.select().from(playlists).orderBy(asc(playlists.name));
+    return reply.send(rows);
+  });
+
+  fastify.post<{ Body: unknown }>('/playlists', async (request, reply) => {
+    const parsed = PlaylistCreateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const { name, description, type, kind, rules } = parsed.data;
+    const [row] = await db.insert(playlists).values({
+      name,
+      description: description ?? null,
+      type,
+      kind,
+      rules: kind === 'dynamic' ? (rules ?? { match: 'all', conditions: [] }) : null,
+    }).returning();
+    return reply.status(201).send(row);
+  });
+
+  fastify.get<{ Params: { id: string } }>('/playlists/:id', async (request, reply) => {
+    const id = Number(request.params.id);
+    const [playlist] = await db.select().from(playlists).where(eq(playlists.id, id));
+    if (!playlist) return reply.status(404).send({ error: 'Playlist not found' });
+    return reply.send(playlist);
+  });
+
+  fastify.patch<{ Params: { id: string }; Body: unknown }>('/playlists/:id', async (request, reply) => {
+    const id = Number(request.params.id);
+    const parsed = PlaylistPatchSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const [updated] = await db.update(playlists)
+      .set({ ...parsed.data, updated_at: sql`(unixepoch())` })
+      .where(eq(playlists.id, id))
+      .returning();
+    if (!updated) return reply.status(404).send({ error: 'Playlist not found' });
+    return reply.send(updated);
+  });
+
+  fastify.delete<{ Params: { id: string } }>('/playlists/:id', async (request, reply) => {
+    const id = Number(request.params.id);
+    await db.delete(playlists).where(eq(playlists.id, id));
+    return reply.status(204).send();
+  });
+
+  // ── Static playlist tracks ─────────────────────────────────────────────────
+
+  fastify.get<{ Params: { id: string } }>('/playlists/:id/tracks', async (request, reply) => {
+    const id = Number(request.params.id);
+    const rows = await db
+      .select({
+        id: playlistMedia.id,
+        playlist_id: playlistMedia.playlist_id,
+        media_id: playlistMedia.media_id,
+        sort_order: playlistMedia.sort_order,
+        weight: playlistMedia.weight,
+        title: media.title,
+        artist: media.artist,
+        duration_seconds: media.duration_seconds,
+        category: media.category,
+        original_filename: media.original_filename,
+      })
+      .from(playlistMedia)
+      .innerJoin(media, eq(playlistMedia.media_id, media.id))
+      .where(eq(playlistMedia.playlist_id, id))
+      .orderBy(asc(playlistMedia.sort_order));
+    return reply.send(rows);
+  });
+
+  fastify.post<{ Params: { id: string }; Body: unknown }>('/playlists/:id/tracks', async (request, reply) => {
+    const id = Number(request.params.id);
+    const parsed = PlaylistMediaAddSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+
+    // Place at end if no sort_order given
+    const sort_order = parsed.data.sort_order ?? await (async () => {
+      const rows = await db.select({ c: sql<number>`COUNT(*)` }).from(playlistMedia).where(eq(playlistMedia.playlist_id, id));
+      return rows[0]?.c ?? 0;
+    })();
+
+    const [row] = await db.insert(playlistMedia).values({
+      playlist_id: id,
+      media_id: parsed.data.media_id,
+      sort_order,
+      weight: parsed.data.weight,
+    }).returning();
+    return reply.status(201).send(row);
+  });
+
+  fastify.delete<{ Params: { id: string; trackId: string } }>('/playlists/:id/tracks/:trackId', async (request, reply) => {
+    const trackId = Number(request.params.trackId);
+    await db.delete(playlistMedia).where(eq(playlistMedia.id, trackId));
+    return reply.status(204).send();
+  });
+
+  // Full reorder: body is array of { id, sort_order }
+  fastify.put<{ Params: { id: string }; Body: unknown }>('/playlists/:id/tracks/reorder', async (request, reply) => {
+    const parsed = PlaylistTracksReorderSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    await Promise.all(
+      parsed.data.map(({ id, sort_order }) =>
+        db.update(playlistMedia).set({ sort_order }).where(eq(playlistMedia.id, id)),
+      ),
+    );
+    return reply.status(204).send();
+  });
+
+  // ── Dynamic playlist preview ───────────────────────────────────────────────
+
+  fastify.post<{ Params: { id: string } }>('/playlists/:id/preview', async (request, reply) => {
+    const id = Number(request.params.id);
+    const [playlist] = await db.select().from(playlists).where(eq(playlists.id, id));
+    if (!playlist) return reply.status(404).send({ error: 'Playlist not found' });
+    if (playlist.kind !== 'dynamic') return reply.status(400).send({ error: 'Not a dynamic playlist' });
+
+    const parsed = DynamicRulesSchema.safeParse(playlist.rules ?? { match: 'all', conditions: [] });
+    if (!parsed.success) return reply.status(400).send({ error: 'Invalid rules' });
+
+    const where = rulesToWhere(parsed.data);
+    const [{ total }] = await db
+      .select({ total: sql<number>`COUNT(*)` })
+      .from(media)
+      .where(where);
+
+    const sample = await db
+      .select({ id: media.id, title: media.title, artist: media.artist, duration_seconds: media.duration_seconds, category: media.category })
+      .from(media)
+      .where(where)
+      .orderBy(sql`RANDOM()`)
+      .limit(5);
+
+    return reply.send({ count: total, sample });
+  });
+
+  // Preview rules without saving (for the rule builder live preview)
+  fastify.post<{ Body: unknown }>('/playlists/preview', async (request, reply) => {
+    const parsed = DynamicRulesSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+
+    const where = rulesToWhere(parsed.data);
+    const [{ total }] = await db
+      .select({ total: sql<number>`COUNT(*)` })
+      .from(media)
+      .where(where);
+
+    const sample = await db
+      .select({ id: media.id, title: media.title, artist: media.artist, duration_seconds: media.duration_seconds, category: media.category })
+      .from(media)
+      .where(where)
+      .orderBy(sql`RANDOM()`)
+      .limit(5);
+
+    return reply.send({ count: total, sample });
+  });
+
+  // ── Media tags ─────────────────────────────────────────────────────────────
+
+  fastify.get<{ Params: { mediaId: string } }>('/media/:mediaId/tags', async (request, reply) => {
+    const mediaId = Number(request.params.mediaId);
+    const rows = await db.select({ tag: mediaTags.tag }).from(mediaTags).where(eq(mediaTags.media_id, mediaId));
+    return reply.send(rows.map((r) => r.tag));
+  });
+
+  fastify.put<{ Params: { mediaId: string }; Body: unknown }>('/media/:mediaId/tags', async (request, reply) => {
+    const mediaId = Number(request.params.mediaId);
+    const parsed = MediaTagsUpdateSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    await db.delete(mediaTags).where(eq(mediaTags.media_id, mediaId));
+    if (parsed.data.tags.length > 0) {
+      await db.insert(mediaTags).values(parsed.data.tags.map((tag) => ({ media_id: mediaId, tag })));
+    }
+    return reply.send(parsed.data.tags);
+  });
+}

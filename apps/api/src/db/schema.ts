@@ -150,6 +150,9 @@ export type PlayHistoryInsert = typeof playHistory.$inferInsert;
 export const PLAYLIST_TYPES = ['music', 'jingle', 'bed', 'promo', 'spot'] as const;
 export type PlaylistType = (typeof PLAYLIST_TYPES)[number];
 
+export const PLAYLIST_KINDS = ['static', 'dynamic'] as const;
+export type PlaylistKind = (typeof PLAYLIST_KINDS)[number];
+
 export const playlists = sqliteTable(
   'playlists',
   {
@@ -157,6 +160,10 @@ export const playlists = sqliteTable(
     name: text('name').notNull(),
     description: text('description'),
     type: text('type', { enum: PLAYLIST_TYPES }).notNull(),
+    // 'static' = manual track list; 'dynamic' = rules-based query
+    kind: text('kind', { enum: PLAYLIST_KINDS }).notNull().default('static'),
+    // JSON rules for dynamic playlists: { match: 'all'|'any', conditions: [...] }
+    rules: text('rules', { mode: 'json' }),
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -166,6 +173,7 @@ export const playlists = sqliteTable(
   },
   (t) => ({
     typeIdx: index('playlists_type_idx').on(t.type),
+    kindIdx: index('playlists_kind_idx').on(t.kind),
   }),
 );
 
@@ -194,6 +202,22 @@ export const playlistMedia = sqliteTable(
 
 export type PlaylistMedia = typeof playlistMedia.$inferSelect;
 export type PlaylistMediaInsert = typeof playlistMedia.$inferInsert;
+
+export const mediaTags = sqliteTable(
+  'media_tags',
+  {
+    media_id: integer('media_id')
+      .notNull()
+      .references(() => media.id, { onDelete: 'cascade' }),
+    tag: text('tag').notNull(),
+  },
+  (t) => ({
+    pk: primaryKey({ columns: [t.media_id, t.tag] }),
+    tagIdx: index('media_tags_tag_idx').on(t.tag),
+  }),
+);
+
+export type MediaTag = typeof mediaTags.$inferSelect;
 
 // ─── Rotations ────────────────────────────────────────────────────────────────
 

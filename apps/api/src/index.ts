@@ -13,6 +13,7 @@ import { customerRoutes } from './routes/customers.js';
 import { scheduleRoutes } from './routes/schedule.js';
 import { rotationRoutes } from './routes/rotations.js';
 import { userRoutes } from './routes/users.js';
+import { playlistRoutes } from './routes/playlists.js';
 import { runMigrations } from './db/index.js';
 import { ingestQueue, recoverInterruptedJobs } from './services/ingest/queue.js';
 import { ensureDirs } from './services/ingest/paths.js';
@@ -46,6 +47,7 @@ fastify.register(customerRoutes);
 fastify.register(scheduleRoutes);
 fastify.register(rotationRoutes);
 fastify.register(userRoutes);
+fastify.register(playlistRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Radio API Server' };
