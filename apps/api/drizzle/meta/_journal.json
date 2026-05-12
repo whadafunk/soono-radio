@@ -43,6 +43,27 @@
       "when": 1778400000000,
       "tag": "0005_first_in_slot_mode",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "6",
+      "when": 1747008000000,
+      "tag": "0006_users",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "6",
+      "when": 1747094400000,
+      "tag": "0007_customer_account_manager",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "6",
+      "when": 1747180800000,
+      "tag": "0008_campaign_media_play_as_spot",
+      "breakpoints": true
     }
   ]
 }

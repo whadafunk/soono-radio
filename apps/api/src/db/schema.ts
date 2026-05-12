@@ -489,6 +489,26 @@ export const calendarEntries = sqliteTable(
 export type CalendarEntry = typeof calendarEntries.$inferSelect;
 export type CalendarEntryInsert = typeof calendarEntries.$inferInsert;
 
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+export const users = sqliteTable('users', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  first_name: text('first_name').notNull(),
+  last_name: text('last_name').notNull(),
+  account_name: text('account_name'),
+  email: text('email'),
+  title: text('title'),
+  created_at: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updated_at: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export type User = typeof users.$inferSelect;
+export type UserInsert = typeof users.$inferInsert;
+
 // ─── Customers ────────────────────────────────────────────────────────────────
 
 export const customers = sqliteTable(
@@ -500,6 +520,9 @@ export const customers = sqliteTable(
     phone: text('phone'),
     notes: text('notes'),
     active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    account_manager_id: integer('account_manager_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -560,7 +583,7 @@ export type CustomerContactInsert = typeof customerContacts.$inferInsert;
 export const PRIORITY_LEVELS = ['hard', 'best_effort'] as const;
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 
-export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one', 'at_least_one_preferred'] as const;
+export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one', 'at_least_one_shared'] as const;
 export type FirstInSlotMode = (typeof FIRST_IN_SLOT_MODES)[number];
 
 export const campaigns = sqliteTable(
@@ -617,6 +640,7 @@ export const campaignMedia = sqliteTable(
     media_id: integer('media_id')
       .notNull()
       .references(() => media.id, { onDelete: 'cascade' }),
+    play_as_spot: integer('play_as_spot', { mode: 'boolean' }).notNull().default(true),
     play_as_sweep: integer('play_as_sweep', { mode: 'boolean' }).notNull().default(false),
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()

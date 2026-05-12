@@ -19,49 +19,68 @@ function formatDuration(seconds: number): string {
   return `${mins}:${secs.toString().padStart(2, '0')}`;
 }
 
-function SweepToggle({
-  value,
+function SpotSweepPills({
+  playAsSpot,
+  playAsSweep,
+  showSweep,
   onChange,
   disabled,
 }: {
-  value: boolean;
-  onChange: (v: boolean) => void;
+  playAsSpot: boolean;
+  playAsSweep: boolean;
+  showSweep: boolean;
+  onChange: (spot: boolean, sweep: boolean) => void;
   disabled: boolean;
 }) {
   const active = 'bg-indigo-600/20 border-indigo-600 text-indigo-200';
   const inactive = 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-200';
+
+  function toggle(kind: 'spot' | 'sweep') {
+    if (kind === 'spot') {
+      const next = !playAsSpot;
+      if (!next && !playAsSweep) return; // must keep at least one
+      onChange(next, playAsSweep);
+    } else {
+      const next = !playAsSweep;
+      if (!next && !playAsSpot) return;
+      onChange(playAsSpot, next);
+    }
+  }
+
   return (
-    <div className="flex text-xs font-medium">
+    <div className="flex gap-1 text-xs font-medium">
       <button
         type="button"
-        onClick={() => onChange(false)}
+        onClick={() => toggle('spot')}
         disabled={disabled}
-        className={`px-2.5 py-1 border rounded-l-md transition-colors disabled:opacity-50 ${!value ? active : inactive}`}
+        className={`px-2.5 py-1 border rounded-md transition-colors disabled:opacity-50 ${playAsSpot ? active : inactive}`}
       >
-        Standalone
+        Spot
       </button>
-      <button
-        type="button"
-        onClick={() => onChange(true)}
-        disabled={disabled}
-        className={`px-2.5 py-1 border-t border-b border-r rounded-r-md transition-colors disabled:opacity-50 ${value ? active : inactive}`}
-      >
-        Sweep
-      </button>
+      {showSweep && (
+        <button
+          type="button"
+          onClick={() => toggle('sweep')}
+          disabled={disabled}
+          className={`px-2.5 py-1 border rounded-md transition-colors disabled:opacity-50 ${playAsSweep ? active : inactive}`}
+        >
+          Sweep
+        </button>
+      )}
     </div>
   );
 }
 
 function MediaClipRow({
   item,
-  showSweepToggle,
-  onToggleSweep,
+  hasSweeps,
+  onToggle,
   onRemove,
   isPending,
 }: {
   item: CampaignMediaWithMedia;
-  showSweepToggle: boolean;
-  onToggleSweep: (id: number, sweep: boolean) => void;
+  hasSweeps: boolean;
+  onToggle: (id: number, spot: boolean, sweep: boolean) => void;
   onRemove: (id: number) => void;
   isPending: boolean;
 }) {
@@ -79,13 +98,13 @@ function MediaClipRow({
       <span className="text-xs text-zinc-500 font-mono flex-shrink-0 w-10 text-right">
         {formatDuration(item.duration_seconds ?? 0)}
       </span>
-      {showSweepToggle && (
-        <SweepToggle
-          value={item.play_as_sweep}
-          onChange={(v) => onToggleSweep(item.id, v)}
-          disabled={isPending}
-        />
-      )}
+      <SpotSweepPills
+        playAsSpot={item.play_as_spot}
+        playAsSweep={item.play_as_sweep}
+        showSweep={hasSweeps}
+        onChange={(spot, sweep) => onToggle(item.id, spot, sweep)}
+        disabled={isPending}
+      />
       <button
         type="button"
         onClick={() => onRemove(item.id)}
@@ -167,12 +186,12 @@ function LibraryPickerModal({
           {items.length === 0 && !isLoading && (
             <p className="text-zinc-500 text-sm p-6 text-center">No spots found.</p>
           )}
-          {items.map((media) => {
-            const attachmentId = attachedByMediaId.get(media.id);
+          {items.map((mediaItem) => {
+            const attachmentId = attachedByMediaId.get(mediaItem.id);
             const isAttached = attachmentId !== undefined;
             return (
               <button
-                key={media.id}
+                key={mediaItem.id}
                 type="button"
                 disabled={isPending}
                 onClick={() => {
@@ -180,12 +199,13 @@ function LibraryPickerModal({
                     onRemove(attachmentId);
                   } else {
                     onAdd({
-                      media_id: media.id,
+                      media_id: mediaItem.id,
+                      play_as_spot: true,
                       play_as_sweep: false,
-                      title: media.title,
-                      artist: media.artist,
-                      duration_seconds: media.duration_seconds,
-                      original_filename: media.original_filename,
+                      title: mediaItem.title,
+                      artist: mediaItem.artist,
+                      duration_seconds: mediaItem.duration_seconds,
+                      original_filename: mediaItem.original_filename,
                     });
                   }
                 }}
@@ -197,16 +217,16 @@ function LibraryPickerModal({
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-zinc-200 truncate">
-                    {media.title ?? (
-                      <span className="italic text-zinc-500">{media.original_filename}</span>
+                    {mediaItem.title ?? (
+                      <span className="italic text-zinc-500">{mediaItem.original_filename}</span>
                     )}
                   </p>
-                  {media.artist && (
-                    <p className="text-xs text-zinc-500 truncate">{media.artist}</p>
+                  {mediaItem.artist && (
+                    <p className="text-xs text-zinc-500 truncate">{mediaItem.artist}</p>
                   )}
                 </div>
                 <span className="text-xs text-zinc-500 font-mono flex-shrink-0 w-10 text-right">
-                  {formatDuration(media.duration_seconds)}
+                  {formatDuration(mediaItem.duration_seconds)}
                 </span>
                 <span className={`flex items-center gap-1 text-xs flex-shrink-0 w-20 justify-end ${isAttached ? 'text-indigo-400' : 'text-zinc-600'}`}>
                   {isAttached ? (
@@ -252,8 +272,8 @@ export function CampaignMediaSection({
   });
 
   const toggleMutation = useMutation({
-    mutationFn: ({ id, play_as_sweep }: { id: number; play_as_sweep: boolean }) =>
-      updateCampaignMedia(id, { play_as_sweep }),
+    mutationFn: ({ id, play_as_spot, play_as_sweep }: { id: number; play_as_spot: boolean; play_as_sweep: boolean }) =>
+      updateCampaignMedia(id, { play_as_spot, play_as_sweep }),
     onSuccess: invalidate,
   });
 
@@ -266,8 +286,11 @@ export function CampaignMediaSection({
     addMutation.isPending || toggleMutation.isPending || removeMutation.isPending;
 
   const hasSweeps = !!sweepsPerMonth;
-  const sweepClipCount = clips.filter((c) => c.play_as_sweep).length;
-  const showSweepWarning = !hasSweeps && sweepClipCount > 0;
+
+  // warn when sweeps are disabled but clips are still tagged sweep
+  const sweepOnlyCount = clips.filter((c) => c.play_as_sweep && !c.play_as_spot).length;
+  const bothTaggedCount = clips.filter((c) => c.play_as_sweep && c.play_as_spot).length;
+  const showSweepWarning = !hasSweeps && (sweepOnlyCount > 0 || bothTaggedCount > 0);
 
   return (
     <>
@@ -276,7 +299,9 @@ export function CampaignMediaSection({
           <div className="flex items-start gap-2 px-3 py-2 bg-amber-900/20 border border-amber-800/50 rounded-lg text-amber-300 text-xs">
             <span className="flex-shrink-0 mt-0.5">⚠</span>
             <span>
-              {sweepClipCount} clip{sweepClipCount !== 1 ? 's' : ''} set as Sweep will be removed when you save.
+              Sweeps are disabled.
+              {sweepOnlyCount > 0 && ` ${sweepOnlyCount} sweep-only clip${sweepOnlyCount !== 1 ? 's' : ''} will be removed.`}
+              {bothTaggedCount > 0 && ` ${bothTaggedCount} clip${bothTaggedCount !== 1 ? 's' : ''} tagged for both will be demoted to spot-only.`}
             </span>
           </div>
         )}
@@ -292,8 +317,8 @@ export function CampaignMediaSection({
             <MediaClipRow
               key={item.id}
               item={item}
-              showSweepToggle={hasSweeps}
-              onToggleSweep={(id, sweep) => toggleMutation.mutate({ id, play_as_sweep: sweep })}
+              hasSweeps={hasSweeps}
+              onToggle={(id, spot, sweep) => toggleMutation.mutate({ id, play_as_spot: spot, play_as_sweep: sweep })}
               onRemove={(id) => removeMutation.mutate(id)}
               isPending={isPending}
             />

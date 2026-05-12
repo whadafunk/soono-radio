@@ -70,6 +70,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       email: parsed.data.email ?? null,
       phone: parsed.data.phone ?? null,
       notes: parsed.data.notes ?? null,
+      account_manager_id: parsed.data.account_manager_id ?? null,
     }).returning();
     return reply.status(201).send(customer);
   });
@@ -335,6 +336,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
         id: campaignMedia.id,
         campaign_id: campaignMedia.campaign_id,
         media_id: campaignMedia.media_id,
+        play_as_spot: campaignMedia.play_as_spot,
         play_as_sweep: campaignMedia.play_as_sweep,
         created_at: campaignMedia.created_at,
         title: media.title,
@@ -355,6 +357,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
     const [entry] = await db.insert(campaignMedia).values({
       campaign_id: campaignId,
       media_id: parsed.data.media_id,
+      play_as_spot: parsed.data.play_as_spot ?? true,
       play_as_sweep: parsed.data.play_as_sweep ?? false,
     }).returning();
     // Re-fetch with media join
@@ -363,6 +366,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
         id: campaignMedia.id,
         campaign_id: campaignMedia.campaign_id,
         media_id: campaignMedia.media_id,
+        play_as_spot: campaignMedia.play_as_spot,
         play_as_sweep: campaignMedia.play_as_sweep,
         created_at: campaignMedia.created_at,
         title: media.title,
@@ -376,12 +380,15 @@ export async function customerRoutes(fastify: FastifyInstance) {
     return reply.status(201).send(withMedia);
   });
 
-  fastify.patch<{ Params: { id: string }; Body: { play_as_sweep: boolean } }>(
+  fastify.patch<{ Params: { id: string }; Body: { play_as_spot?: boolean; play_as_sweep?: boolean } }>(
     '/campaign-media/:id',
     async (request, reply) => {
       const id = Number(request.params.id);
+      const patch: { play_as_spot?: boolean; play_as_sweep?: boolean } = {};
+      if (request.body.play_as_spot !== undefined) patch.play_as_spot = request.body.play_as_spot;
+      if (request.body.play_as_sweep !== undefined) patch.play_as_sweep = request.body.play_as_sweep;
       const [updated] = await db.update(campaignMedia)
-        .set({ play_as_sweep: request.body.play_as_sweep })
+        .set(patch)
         .where(eq(campaignMedia.id, id))
         .returning();
       if (!updated) return reply.status(404).send({ error: 'Campaign media not found' });

@@ -160,7 +160,7 @@ export type ClockPatch = z.infer<typeof ClockPatchSchema>;
 export const PRIORITY_LEVELS = ['hard', 'best_effort'] as const;
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 
-export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one', 'at_least_one_preferred'] as const;
+export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one', 'at_least_one_shared'] as const;
 export type FirstInSlotMode = (typeof FIRST_IN_SLOT_MODES)[number];
 
 export const CampaignSchema = z.object({
@@ -178,7 +178,7 @@ export const CampaignSchema = z.object({
   days_of_week: z.string().nullable(),
   advertiser_separation_spots: z.number().int().nonnegative().default(1),
   competing_exclusions: z.array(z.number().int()).default([]),
-  priority: z.enum(PRIORITY_LEVELS).default('best_effort'),
+  priority: z.enum(PRIORITY_LEVELS).default('hard'),
   first_in_slot: z.boolean().default(false),
   first_in_slot_mode: z.enum(FIRST_IN_SLOT_MODES).nullable(),
   notes: z.string().nullable(),
@@ -202,7 +202,7 @@ export const CampaignCreateSchema = z.object({
   days_of_week: z.string().nullable().optional(),
   advertiser_separation_spots: z.number().int().nonnegative().default(1),
   competing_exclusions: z.array(z.number().int()).default([]),
-  priority: z.enum(PRIORITY_LEVELS).default('best_effort'),
+  priority: z.enum(PRIORITY_LEVELS).default('hard'),
   first_in_slot: z.boolean().default(false),
   first_in_slot_mode: z.enum(FIRST_IN_SLOT_MODES).nullable().optional(),
   notes: z.string().nullable().optional(),
@@ -249,6 +249,7 @@ export const CampaignMediaSchema = z.object({
   id: z.number().int(),
   campaign_id: z.number().int(),
   media_id: z.number().int(),
+  play_as_spot: z.boolean().default(true),
   play_as_sweep: z.boolean().default(false),
   created_at: z.coerce.date(),
 });
@@ -256,6 +257,7 @@ export type CampaignMedia = z.infer<typeof CampaignMediaSchema>;
 
 export const CampaignMediaCreateSchema = z.object({
   media_id: z.number().int().positive(),
+  play_as_spot: z.boolean().default(true),
   play_as_sweep: z.boolean().default(false),
 });
 export type CampaignMediaCreate = z.infer<typeof CampaignMediaCreateSchema>;
@@ -277,6 +279,7 @@ export const CustomerSchema = z.object({
   phone: z.string().nullable(),
   notes: z.string().nullable(),
   active: z.boolean(),
+  account_manager_id: z.number().int().nullable(),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
@@ -287,6 +290,7 @@ export const CustomerCreateSchema = z.object({
   email: z.string().email().nullable().optional(),
   phone: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
+  account_manager_id: z.number().int().nullable().optional(),
 });
 export type CustomerCreate = z.infer<typeof CustomerCreateSchema>;
 
@@ -296,6 +300,7 @@ export const CustomerPatchSchema = z.object({
   phone: z.string().nullable().optional(),
   notes: z.string().nullable().optional(),
   active: z.boolean().optional(),
+  account_manager_id: z.number().int().nullable().optional(),
 });
 export type CustomerPatch = z.infer<typeof CustomerPatchSchema>;
 
@@ -488,3 +493,35 @@ export const RecordingSchema = z.object({
   updated_at: z.coerce.date(),
 });
 export type Recording = z.infer<typeof RecordingSchema>;
+
+// ============ USERS ============
+
+export const UserSchema = z.object({
+  id: z.number().int(),
+  first_name: z.string(),
+  last_name: z.string(),
+  account_name: z.string().nullable(),
+  email: z.string().email().nullable(),
+  title: z.string().nullable(),
+  created_at: z.coerce.date(),
+  updated_at: z.coerce.date(),
+});
+export type User = z.infer<typeof UserSchema>;
+
+export const UserCreateSchema = z.object({
+  first_name: z.string().min(1, 'First name is required'),
+  last_name: z.string().min(1, 'Last name is required'),
+  account_name: z.string().min(1, 'Account name is required'),
+  email: z.string().email('Invalid email').nullable().optional(),
+  title: z.string().nullable().optional(),
+});
+export type UserCreate = z.infer<typeof UserCreateSchema>;
+
+export const UserPatchSchema = z.object({
+  first_name: z.string().min(1).optional(),
+  last_name: z.string().min(1).optional(),
+  account_name: z.string().min(1).optional(),
+  email: z.string().email().nullable().optional(),
+  title: z.string().nullable().optional(),
+});
+export type UserPatch = z.infer<typeof UserPatchSchema>;

@@ -30,6 +30,7 @@ import {
   ContactCreateSchema,
   ContactPatch,
   ContactPatchSchema,
+  User,
 } from '@radio/shared';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
@@ -58,6 +59,8 @@ import {
   fetchCampaignPacing,
   fetchCampaignMedia,
   removeCampaignMedia,
+  updateCampaignMedia,
+  fetchUsers,
 } from '../../api';
 
 type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
@@ -156,6 +159,11 @@ export function CustomersList() {
   const { data: allContacts = [] } = useQuery({
     queryKey: ['contacts-all'],
     queryFn: fetchAllContacts,
+  });
+
+  const { data: allUsers = [] } = useQuery({
+    queryKey: ['users'],
+    queryFn: fetchUsers,
   });
 
   const customers = sortRows(rawCustomers, customerSort);
@@ -329,9 +337,26 @@ export function CustomersList() {
 
   const createContactMutation = useMutation({
     mutationFn: createContact,
-    onSuccess: () => {
+    onSuccess: (newContact) => {
+      // Append directly to 'contacts-all' so the "pick existing" list is
+      // immediately up-to-date without waiting for a network refetch.
+      queryClient.setQueryData<Contact[]>(['contacts-all'], (old = []) => [
+        ...old,
+        newContact,
+      ]);
+
+      // Append directly to the per-customer list so the form shows the new
+      // contact the moment the server confirms it.
+      if (newContact.customer_id !== null) {
+        const key = ['contacts', newContact.customer_id];
+        queryClient.setQueryData<(Contact & { is_primary: boolean })[]>(key, (old = []) => [
+          ...old,
+          { ...newContact, is_primary: old.length === 0 },
+        ]);
+      }
+
+      // Still invalidate so a background refetch reconciles any edge cases.
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
-      queryClient.invalidateQueries({ queryKey: ['contacts-all'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setIsCreatingContact(false);
       showToast('success', 'Contact added');
@@ -353,8 +378,8 @@ export function CustomersList() {
   });
 
   const associateContactMutation = useMutation({
-    mutationFn: ({ contactId, isPrimary }: { contactId: number; isPrimary?: boolean }) =>
-      associateContact(focusedCustomerId!, contactId, isPrimary),
+    mutationFn: ({ customerId, contactId, isPrimary }: { customerId: number; contactId: number; isPrimary?: boolean }) =>
+      associateContact(customerId, contactId, isPrimary),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
@@ -363,7 +388,8 @@ export function CustomersList() {
   });
 
   const dissociateContactMutation = useMutation({
-    mutationFn: (contactId: number) => dissociateContact(focusedCustomerId!, contactId),
+    mutationFn: ({ customerId, contactId }: { customerId: number; contactId: number }) =>
+      dissociateContact(customerId, contactId),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
@@ -902,6 +928,7 @@ export function CustomersList() {
       {isCreatingCustomer && (
         <CreateModal title="New Customer" onClose={() => setIsCreatingCustomer(false)}>
           <CreateCustomerForm
+            users={allUsers}
             onSubmit={(data) => createCustomerMutation.mutate(data)}
             onCancel={() => setIsCreatingCustomer(false)}
             isLoading={createCustomerMutation.isPending}
@@ -941,14 +968,17 @@ export function CustomersList() {
           campaigns={allCampaigns}
           contacts={filteredContacts}
           allContacts={allContacts}
+          users={allUsers}
           onClose={() => setEditTarget(null)}
           onUpdateCustomer={(id, patch) => updateCustomerMutation.mutate({ id, patch })}
           onDeleteCustomer={(id) => deleteCustomerMutation.mutate(id)}
           onCreateContact={(data) => createContactMutation.mutate(data)}
-          onAssociateContact={(contactId, isPrimary) =>
-            associateContactMutation.mutate({ contactId, isPrimary })
+          onAssociateContact={(customerId, contactId, isPrimary) =>
+            associateContactMutation.mutate({ customerId, contactId, isPrimary })
           }
-          onDissociateContact={(contactId) => dissociateContactMutation.mutate(contactId)}
+          onDissociateContact={(customerId, contactId) =>
+            dissociateContactMutation.mutate({ customerId, contactId })
+          }
           onSetPrimary={(customerId, contactId, isPrimary) =>
             setPrimaryMutation.mutate({ customerId, contactId, isPrimary })
           }
@@ -1050,10 +1080,12 @@ function CreateModal({
 }
 
 function CreateCustomerForm({
+  users,
   onSubmit,
   onCancel,
   isLoading,
 }: {
+  users: User[];
   onSubmit: (data: CustomerCreate) => void;
   onCancel: () => void;
   isLoading: boolean;
@@ -1090,6 +1122,22 @@ function CreateCustomerForm({
             <label className={LABEL}>Phone</label>
             <input type="text" {...register('phone')} disabled={isLoading} className={INPUT} />
           </div>
+        </div>
+        <div>
+          <label className={LABEL}>Account Manager</label>
+          <select
+            {...register('account_manager_id', { setValueAs: (v) => (v === '' ? null : Number(v)) })}
+            disabled={isLoading}
+            className={INPUT}
+          >
+            <option value="">— None —</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.first_name} {u.last_name}
+                {u.account_name ? ` (${u.account_name})` : ''}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className={LABEL}>Notes</label>
@@ -1209,7 +1257,7 @@ function CreateCampaignForm({
       plays_per_month: 30,
       advertiser_separation_spots: 1,
       competing_exclusions: [],
-      priority: 'best_effort',
+      priority: 'hard',
       first_in_slot: false,
       first_in_slot_mode: 'always',
     },
@@ -1255,59 +1303,65 @@ function CreateCampaignForm({
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={LABEL}>
-              Plays / Month *
-              <HelpTooltip text="Target number of airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
-            </label>
-            <input type="number" min={1} {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
-            {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
-          </div>
-          <div>
-            <label className={LABEL}>
-              Max Plays / Day
-              <HelpTooltip text="Hard cap on how many times this spot can air in a single day. Leave blank for no daily limit." />
-            </label>
-            <input
-              type="number"
-              min={1}
-              placeholder="No limit"
-              {...register('max_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-              disabled={isLoading}
-              className={INPUT}
-            />
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Spot Pacing</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>
+                Plays / Month *
+                <HelpTooltip text="Target number of spot airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
+              </label>
+              <input type="number" min={1} {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+              {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
+            </div>
+            <div>
+              <label className={LABEL}>
+                Max Plays / Day
+                <HelpTooltip text="Hard cap on how many times spots can air in a single day. Leave blank for no daily limit." />
+              </label>
+              <input
+                type="number"
+                min={1}
+                placeholder="No limit"
+                {...register('max_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+                disabled={isLoading}
+                className={INPUT}
+              />
+            </div>
           </div>
         </div>
 
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={LABEL}>
-              Sweeps / Month
-              <HelpTooltip text="Number of times per month to air the sweep (long-form) version of this spot. Leave blank to disable sweeps for this campaign." />
-            </label>
-            <input
-              type="number"
-              min={0}
-              placeholder="No sweeps"
-              {...register('sweeps_per_month', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-              disabled={isLoading}
-              className={INPUT}
-            />
-          </div>
-          <div>
-            <label className={LABEL}>
-              Max Sweeps / Day
-              <HelpTooltip text="Hard cap on sweep plays per day. Only available when sweeps are configured." />
-            </label>
-            <input
-              type="number"
-              min={1}
-              placeholder="No limit"
-              {...register('max_sweeps_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-              disabled={isLoading}
-              className={INPUT}
-            />
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Sweep Pacing</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>
+                Sweeps / Month
+                <HelpTooltip text="Target number of sweep airings per calendar month. Leave blank to disable sweeps for this campaign." />
+              </label>
+              <input
+                type="number"
+                min={0}
+                placeholder="No sweeps"
+                {...register('sweeps_per_month', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+                disabled={isLoading}
+                className={INPUT}
+              />
+            </div>
+            <div>
+              <label className={LABEL}>
+                Max Sweeps / Day
+                <HelpTooltip text="Hard cap on sweep plays per day. Only relevant when sweeps are configured." />
+              </label>
+              <input
+                type="number"
+                min={1}
+                placeholder="No limit"
+                {...register('max_sweeps_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+                disabled={isLoading}
+                className={INPUT}
+              />
+            </div>
           </div>
         </div>
 
@@ -1345,7 +1399,7 @@ function CreateCampaignForm({
             <div>
               <label className={LABEL + (!firstInSlot ? ' opacity-40' : '')}>
                 First-in-slot rule
-                <HelpTooltip text="Every play: all airings open the break. At least once: the scheduler guarantees at least one opening position per day. Once + preferred: one opening per day guaranteed, and the scheduler prefers first position for remaining plays too." />
+                <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day. Once daily + shared: one opening per day guaranteed; when multiple campaigns compete for the first slot, they share it across days." />
               </label>
               <select
                 {...register('first_in_slot_mode', { setValueAs: v => v === '' ? null : v })}
@@ -1354,7 +1408,7 @@ function CreateCampaignForm({
               >
                 <option value="always">Every play</option>
                 <option value="at_least_one">At least once daily</option>
-                <option value="at_least_one_preferred">Once daily + preferred</option>
+                <option value="at_least_one_shared">Once daily + shared</option>
               </select>
             </div>
           </div>
@@ -1523,6 +1577,7 @@ function EditModal({
   campaigns,
   contacts,
   allContacts,
+  users,
   onClose,
   onUpdateCustomer,
   onDeleteCustomer,
@@ -1542,12 +1597,13 @@ function EditModal({
   campaigns: (Campaign & { customer_name: string })[];
   contacts: (Contact & { is_primary: boolean })[];
   allContacts: Contact[];
+  users: User[];
   onClose: () => void;
   onUpdateCustomer: (id: number, patch: CustomerPatch) => void;
   onDeleteCustomer: (id: number) => void;
   onCreateContact: (data: ContactCreate) => void;
-  onAssociateContact: (contactId: number, isPrimary?: boolean) => void;
-  onDissociateContact: (contactId: number) => void;
+  onAssociateContact: (customerId: number, contactId: number, isPrimary?: boolean) => void;
+  onDissociateContact: (customerId: number, contactId: number) => void;
   onSetPrimary: (customerId: number, contactId: number, isPrimary: boolean) => void;
   onUpdateCampaign: (id: number, patch: CampaignPatch) => void;
   onDeleteCampaign: (id: number) => void;
@@ -1632,6 +1688,7 @@ function EditModal({
               customer={customers.find((c) => c.id === target.id)!}
               contacts={contacts}
               allContacts={allContacts}
+              users={users}
               onSubmit={(patch) => onUpdateCustomer(target.id, patch)}
               onCreateContact={onCreateContact}
               onAssociateContact={onAssociateContact}
@@ -1735,6 +1792,7 @@ function CustomerEditForm({
   customer,
   contacts,
   allContacts,
+  users,
   onSubmit,
   onCreateContact,
   onAssociateContact,
@@ -1746,10 +1804,11 @@ function CustomerEditForm({
   customer: Customer;
   contacts: (Contact & { is_primary: boolean })[];
   allContacts: Contact[];
+  users: User[];
   onSubmit: (patch: CustomerPatch) => void;
   onCreateContact: (data: ContactCreate) => void;
-  onAssociateContact: (contactId: number, isPrimary?: boolean) => void;
-  onDissociateContact: (contactId: number) => void;
+  onAssociateContact: (customerId: number, contactId: number, isPrimary?: boolean) => void;
+  onDissociateContact: (customerId: number, contactId: number) => void;
   onSetPrimary: (contactId: number, isPrimary: boolean) => void;
   onDeleteContact: (id: number) => void;
   isLoading: boolean;
@@ -1766,6 +1825,7 @@ function CustomerEditForm({
       email: customer.email || undefined,
       phone: customer.phone || undefined,
       notes: customer.notes || undefined,
+      account_manager_id: customer.account_manager_id ?? undefined,
     },
   });
 
@@ -1807,6 +1867,22 @@ function CustomerEditForm({
             <label className={LABEL}>Phone</label>
             <input type="text" {...register('phone')} disabled={isLoading} className={INPUT} />
           </div>
+        </div>
+        <div>
+          <label className={LABEL}>Account Manager</label>
+          <select
+            {...register('account_manager_id', { setValueAs: (v) => (v === '' ? null : Number(v)) })}
+            disabled={isLoading}
+            className={INPUT}
+          >
+            <option value="">— None —</option>
+            {users.map((u) => (
+              <option key={u.id} value={u.id}>
+                {u.first_name} {u.last_name}
+                {u.account_name ? ` (${u.account_name})` : ''}
+              </option>
+            ))}
+          </select>
         </div>
         <div>
           <label className={LABEL}>Created</label>
@@ -1892,7 +1968,7 @@ function CustomerEditForm({
                 </button>
                 <button
                   type="button"
-                  onClick={() => onDissociateContact(contact.id)}
+                  onClick={() => onDissociateContact(customer.id, contact.id)}
                   title="Remove association"
                   className="p-1 text-zinc-500 hover:text-amber-400 hover:bg-amber-900/20 rounded transition-colors"
                 >
@@ -1976,7 +2052,7 @@ function CustomerEditForm({
                     key={c.id}
                     type="button"
                     onClick={() => {
-                      onAssociateContact(c.id);
+                      onAssociateContact(customer.id, c.id);
                       setAddMode('none');
                     }}
                     className="w-full text-left px-3 py-2 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition-colors"
@@ -2022,13 +2098,6 @@ function CustomerEditForm({
         )}
       </div>
 
-      <div className="space-y-2">
-        <SectionDivider label="Account Manager" />
-        <PlaceholderSection
-          label="Account Manager"
-          description="Assign one of your team members as account manager. Coming soon."
-        />
-      </div>
 
       <div className="space-y-2">
         <SectionDivider label="Attachments" />
@@ -2103,29 +2172,36 @@ function CampaignEditForm({
   useEffect(() => { setMediaError(null); }, [campaignMedia.length]);
 
   const doSubmit = async (data: CampaignPatch) => {
-    const sweepClips = campaignMedia.filter((m) => m.play_as_sweep);
     const sweepsGoingAway = !data.sweeps_per_month && campaign.sweeps_per_month;
 
-    // Remove sweep-designated clips if sweeps are being cleared
-    if (sweepsGoingAway && sweepClips.length > 0) {
-      await Promise.all(sweepClips.map((c) => removeCampaignMedia(c.id)));
-      queryClient.invalidateQueries({ queryKey: ['campaign-media', campaign.id] });
+    if (sweepsGoingAway) {
+      // sweep-only clips removed; both-tagged clips demoted to spot-only
+      const sweepOnly = campaignMedia.filter((m) => m.play_as_sweep && !m.play_as_spot);
+      const bothTagged = campaignMedia.filter((m) => m.play_as_sweep && m.play_as_spot);
+      if (sweepOnly.length > 0 || bothTagged.length > 0) {
+        await Promise.all([
+          ...sweepOnly.map((c) => removeCampaignMedia(c.id)),
+          ...bothTagged.map((c) => updateCampaignMedia(c.id, { play_as_sweep: false })),
+        ]);
+        queryClient.invalidateQueries({ queryKey: ['campaign-media', campaign.id] });
+      }
     }
 
-    // Effective clip state after potential cleanup
-    const remainingClips = sweepsGoingAway
-      ? campaignMedia.filter((m) => !m.play_as_sweep)
+    // Effective clip state after cleanup
+    const effectiveClips = sweepsGoingAway
+      ? campaignMedia.filter((m) => m.play_as_spot)
       : campaignMedia;
-    const remainingSweepClips = sweepsGoingAway ? [] : sweepClips;
+    const effectiveSweepClips = sweepsGoingAway
+      ? []
+      : campaignMedia.filter((m) => m.play_as_sweep);
 
-    // Cross-field validation
     const isActive = data.active !== undefined ? data.active : campaign.active;
-    if (isActive && remainingClips.length === 0) {
-      setMediaError('Active campaigns must have at least one media clip.');
+    if (isActive && effectiveClips.filter((m) => m.play_as_spot).length === 0) {
+      setMediaError('Active campaigns must have at least one clip tagged as Spot.');
       return;
     }
-    if (data.sweeps_per_month && remainingSweepClips.length === 0) {
-      setMediaError('Sweeps are configured but no clips are designated as Sweep.');
+    if (data.sweeps_per_month && effectiveSweepClips.length === 0) {
+      setMediaError('Sweeps are configured but no clips are tagged as Sweep.');
       return;
     }
 
@@ -2165,59 +2241,65 @@ function CampaignEditForm({
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className={LABEL}>
-            Plays / Month *
-            <HelpTooltip text="Target number of airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
-          </label>
-          <input type="number" {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
-          {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
-        </div>
-        <div>
-          <label className={LABEL}>
-            Max Plays / Day
-            <HelpTooltip text="Hard cap on how many times this spot can air in a single day. Leave blank for no daily limit." />
-          </label>
-          <input
-            type="number"
-            min={1}
-            placeholder="No limit"
-            {...register('max_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-            disabled={isLoading}
-            className={INPUT}
-          />
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Spot Pacing</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Plays / Month *
+              <HelpTooltip text="Target number of spot airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
+            </label>
+            <input type="number" {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+            {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
+          </div>
+          <div>
+            <label className={LABEL}>
+              Max Plays / Day
+              <HelpTooltip text="Hard cap on how many times spots can air in a single day. Leave blank for no daily limit." />
+            </label>
+            <input
+              type="number"
+              min={1}
+              placeholder="No limit"
+              {...register('max_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading}
+              className={INPUT}
+            />
+          </div>
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div>
-          <label className={LABEL}>
-            Sweeps / Month
-            <HelpTooltip text="Number of times per month to air the sweep (long-form) version of this spot. Leave blank to disable sweeps for this campaign." />
-          </label>
-          <input
-            type="number"
-            min={0}
-            placeholder="No sweeps"
-            {...register('sweeps_per_month', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-            disabled={isLoading}
-            className={INPUT}
-          />
-        </div>
-        <div>
-          <label className={LABEL}>
-            Max Sweeps / Day
-            <HelpTooltip text="Hard cap on sweep plays per day. Only available when sweeps are configured." />
-          </label>
-          <input
-            type="number"
-            min={1}
-            placeholder="No limit"
-            {...register('max_sweeps_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-            disabled={isLoading || !sweepsPerMonth}
-            className={INPUT + (!sweepsPerMonth ? ' opacity-40' : '')}
-          />
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Sweep Pacing</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Sweeps / Month
+              <HelpTooltip text="Target number of sweep airings per calendar month. Leave blank to disable sweeps for this campaign." />
+            </label>
+            <input
+              type="number"
+              min={0}
+              placeholder="No sweeps"
+              {...register('sweeps_per_month', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading}
+              className={INPUT}
+            />
+          </div>
+          <div>
+            <label className={LABEL}>
+              Max Sweeps / Day
+              <HelpTooltip text="Hard cap on sweep plays per day. Only relevant when sweeps are configured." />
+            </label>
+            <input
+              type="number"
+              min={1}
+              placeholder="No limit"
+              {...register('max_sweeps_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading || !sweepsPerMonth}
+              className={INPUT + (!sweepsPerMonth ? ' opacity-40' : '')}
+            />
+          </div>
         </div>
       </div>
 
@@ -2268,7 +2350,7 @@ function CampaignEditForm({
           <div>
             <label className={LABEL + (!firstInSlot ? ' opacity-40' : '')}>
               First-in-slot rule
-              <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day. Once daily + preferred: one opening per day guaranteed, and the scheduler prefers first position for remaining plays too." />
+              <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day. Once daily + shared: one opening per day guaranteed; when multiple campaigns compete for the first slot, they share it across days." />
             </label>
             <select
               {...register('first_in_slot_mode', { setValueAs: v => v === '' ? null : v })}
@@ -2277,7 +2359,7 @@ function CampaignEditForm({
             >
               <option value="always">Every play</option>
               <option value="at_least_one">At least once daily</option>
-              <option value="at_least_one_preferred">Once daily + preferred</option>
+              <option value="at_least_one_shared">Once daily + shared</option>
             </select>
           </div>
         </div>

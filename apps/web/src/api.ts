@@ -20,6 +20,9 @@ import {
   NowPlayingSchema,
   RecentPlay,
   RecentPlaySchema,
+  User,
+  UserCreate,
+  UserPatch,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -657,10 +660,17 @@ export function fetchCampaignMedia(campaignId: number): Promise<CampaignMediaWit
 }
 
 export function addCampaignMedia(campaignId: number, data: CampaignMediaAdd): Promise<CampaignMediaWithMedia> {
-  return post(`/campaigns/${campaignId}/media`, { media_id: data.media_id, play_as_sweep: data.play_as_sweep ?? false });
+  return post(`/campaigns/${campaignId}/media`, {
+    media_id: data.media_id,
+    play_as_spot: data.play_as_spot ?? true,
+    play_as_sweep: data.play_as_sweep ?? false,
+  });
 }
 
-export function updateCampaignMedia(id: number, patch_: { play_as_sweep: boolean }): Promise<CampaignMediaWithMedia> {
+export function updateCampaignMedia(
+  id: number,
+  patch_: { play_as_spot?: boolean; play_as_sweep?: boolean },
+): Promise<CampaignMediaWithMedia> {
   return patch(`/campaign-media/${id}`, patch_);
 }
 
@@ -834,6 +844,28 @@ export function upsertTemplateClockEntry(data: TemplateClockEntryUpsert): Promis
 
 export function deleteTemplateClockEntry(id: number): Promise<void> {
   return del(`/template-clock-entries/${id}`);
+}
+
+// ─── Users ────────────────────────────────────────────────────────────────────
+
+export function fetchUsers(): Promise<User[]> {
+  return apiFetch('/users');
+}
+
+export function createUser(data: UserCreate): Promise<User> {
+  return post('/users', data);
+}
+
+export function updateUser(id: number, patch_: UserPatch): Promise<User> {
+  return patch(`/users/${id}`, patch_);
+}
+
+export function deleteUser(id: number): Promise<void> {
+  return del(`/users/${id}`);
+}
+
+export async function deleteUsers(ids: number[]): Promise<void> {
+  await Promise.all(ids.map((id) => del(`/users/${id}`)));
 }
 
 
