@@ -460,6 +460,45 @@ export async function fetchRecentPlays(limit = 20): Promise<RecentPlay[]> {
   return data.plays.map((p: unknown) => RecentPlaySchema.parse(p));
 }
 
+export interface AcoustIDCandidate {
+  acoustid: string;
+  score: number;
+  title: string | null;
+  artist: string | null;
+  album: string | null;
+  year: number | null;
+  source: 'acoustid' | 'musicbrainz' | 'filename';
+  fromFreeText?: boolean;
+}
+
+export interface BulkAcoustIDResult {
+  applied: { id: number; title: string | null; artist: string | null; album: string | null; year: number | null; score: number }[];
+  skipped: { id: number; reason: string }[];
+  failed: { id: number; error: string }[];
+}
+
+export async function lookupAcoustID(id: number): Promise<{ candidates: AcoustIDCandidate[]; auto_apply: boolean }> {
+  const res = await fetch(`${API_BASE}/library/${id}/acoustid`, { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || `Lookup failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function bulkLookupAcoustID(ids: number[]): Promise<BulkAcoustIDResult> {
+  const res = await fetch(`${API_BASE}/library/bulk-acoustid`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || `Bulk lookup failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
 export async function bulkReMeasure(ids: number[]): Promise<BulkResult> {
   const res = await fetch(`${API_BASE}/library/bulk-remeasure`, {
     method: 'POST',
@@ -514,6 +553,8 @@ export async function restartLiquidsoap(): Promise<{ success: boolean }> {
 }
 
 import {
+  IntegrationsConfig,
+  IntegrationsConfigSchema,
   Customer,
   CustomerCreate,
   CustomerPatch,
@@ -866,6 +907,17 @@ export function deleteUser(id: number): Promise<void> {
 
 export async function deleteUsers(ids: number[]): Promise<void> {
   await Promise.all(ids.map((id) => del(`/users/${id}`)));
+}
+
+// ─── Integrations ─────────────────────────────────────────────────────────────
+
+export async function fetchIntegrationsConfig(): Promise<IntegrationsConfig> {
+  const data = await apiFetch<unknown>('/integrations/config');
+  return IntegrationsConfigSchema.parse(data);
+}
+
+export async function updateIntegrationsConfig(config: IntegrationsConfig): Promise<void> {
+  await post<void>('/integrations/config', config);
 }
 
 

@@ -8,6 +8,7 @@ import { measureLoudness } from './loudnorm.js';
 import { decideTranscode, transcodeToMp3, TRANSCODE_DEFAULTS } from './transcode.js';
 import { sha256File } from './hash.js';
 import { ensureDirs, mediaPathForSha, stagingPathFor } from './paths.js';
+import { autoIdentifyOnIngest } from '../acoustid.js';
 
 export interface IngestOutcome {
   jobId: string;
@@ -136,12 +137,19 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       loudness_warning: loudness.warning,
       // title/artist/album/etc left null — the metadata-from-tags step lives
       // in Phase 6 (AcoustID). Operator can edit display fields in Phase 4.
+      notes: job.uploaded_filename,
     };
 
     const result = await db.insert(media).values(insert).returning({ id: media.id });
     const mediaId = result[0].id;
 
     await markJobCompleted(jobId, mediaId);
+
+    // For music tracks, attempt auto-identification in the background.
+    // Fire-and-forget — result does not affect ingest status.
+    if (job.category === 'music') {
+      autoIdentifyOnIngest(mediaId).catch(() => undefined);
+    }
 
     return { jobId, status: 'completed', mediaId, error: null, deduped: false };
   } catch (err) {

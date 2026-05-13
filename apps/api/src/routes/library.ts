@@ -13,6 +13,7 @@ import {
 } from '@radio/shared';
 import { inArray as inArrayOp } from 'drizzle-orm';
 import { deleteMedia, reMeasureMedia, reTranscodeMedia } from '../services/library.js';
+import { identifyMedia, isAutoApply } from '../services/acoustid.js';
 import { db } from '../db/index.js';
 import { ingestJobs, media, MEDIA_CATEGORIES } from '../db/schema.js';
 import type { MediaCategory } from '../db/schema.js';
@@ -283,10 +284,15 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     },
   );
 
-  fastify.post<{ Params: { id: string } }>('/library/:id/acoustid', async (_request, reply) => {
-    return reply.status(501).send({
-      error: 'AcoustID lookup is planned for Phase 6 of the library plan',
-    });
+  fastify.post<{ Params: { id: string } }>('/library/:id/acoustid', async (request, reply) => {
+    const id = parseInt(request.params.id, 10);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: 'Invalid id' });
+    try {
+      const candidates = await identifyMedia(id);
+      return reply.send({ candidates, auto_apply: isAutoApply(candidates) });
+    } catch (err) {
+      return reply.status(500).send({ error: (err as Error).message });
+    }
   });
 
   // Bulk operations.
@@ -347,10 +353,54 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     });
   });
 
-  fastify.post('/library/bulk-acoustid', async (_request, reply) => {
-    return reply.status(501).send({
-      error: 'AcoustID lookup is planned for Phase 6 of the library plan',
-    });
+  fastify.post<{ Body: unknown }>('/library/bulk-acoustid', async (request, reply) => {
+    const parsed = BulkIdsSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+
+    const results = {
+      applied: [] as { id: number; title: string | null; artist: string | null; album: string | null; year: number | null; score: number }[],
+      skipped: [] as { id: number; reason: string }[],
+      failed: [] as { id: number; error: string }[],
+    };
+
+    for (const mediaId of parsed.data.ids) {
+      try {
+        const candidates = await identifyMedia(mediaId);
+        if (candidates.length === 0 || !isAutoApply(candidates, { allowMusicBrainz: true })) {
+          let reason: string;
+          if (candidates.length === 0) {
+            reason = 'No matches found';
+          } else if (candidates[0].source === 'filename') {
+            reason = 'Cover detected — not in MusicBrainz. Use per-track Lookup ID to apply.';
+          } else if (candidates[0].source === 'musicbrainz' && candidates[0].fromFreeText) {
+            reason = 'Loose text match only — cannot auto-apply. Use per-track Lookup ID to verify.';
+          } else if (candidates[0].source === 'musicbrainz') {
+            reason = `Filename search — low confidence (${Math.round(candidates[0].score * 100)}%). Use per-track Lookup ID to pick manually.`;
+          } else {
+            reason = `Low confidence (${Math.round(candidates[0].score * 100)}%)`;
+          }
+          results.skipped.push({ id: mediaId, reason });
+          continue;
+        }
+        const top = candidates[0];
+        await db
+          .update(media)
+          .set({
+            title: top.title,
+            artist: top.artist,
+            album: top.album,
+            year: top.year,
+            notes: sql`COALESCE(${media.notes}, ${media.original_filename})`,
+            updated_at: new Date(),
+          })
+          .where(eq(media.id, mediaId));
+        results.applied.push({ id: mediaId, title: top.title, artist: top.artist, album: top.album, year: top.year, score: top.score });
+      } catch (err) {
+        results.failed.push({ id: mediaId, error: (err as Error).message });
+      }
+    }
+
+    return reply.send(results);
   });
 
   fastify.get<{ Params: { id: string } }>('/library/:id/audio', async (request, reply) => {

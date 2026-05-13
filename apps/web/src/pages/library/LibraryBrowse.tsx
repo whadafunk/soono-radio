@@ -45,6 +45,10 @@ import {
   bulkSetCategory,
   bulkSetFavorite,
   bulkReMeasure,
+  lookupAcoustID,
+  bulkLookupAcoustID,
+  AcoustIDCandidate,
+  BulkAcoustIDResult,
 } from '../../api';
 
 type ColumnId =
@@ -279,14 +283,13 @@ export function LibraryBrowse() {
         </button>
       </div>
 
-      {selection.size > 0 && (
-        <BulkActionBar
-          selection={selection}
-          onClear={() => setSelection(new Set())}
-          showToast={showToast}
-          onSuccess={invalidateAndClear}
-        />
-      )}
+      <BulkActionBar
+        selection={selection}
+        items={items}
+        onClear={() => setSelection(new Set())}
+        showToast={showToast}
+        onSuccess={invalidateAndClear}
+      />
 
       {error && (
         <div className="bg-red-900/20 border border-red-800 rounded-lg p-3 text-red-300 flex items-start gap-2">
@@ -342,19 +345,33 @@ export function LibraryBrowse() {
 
 function BulkActionBar({
   selection,
+  items,
   onClear,
   showToast,
   onSuccess,
 }: {
   selection: Set<number>;
+  items: Media[];
   onClear: () => void;
   showToast: (type: 'success' | 'error', message: string) => void;
   onSuccess: () => void;
 }) {
   const ids = useMemo(() => Array.from(selection), [selection]);
+  const hasNonMusic = useMemo(
+    () => ids.some((id) => { const item = items.find((m) => m.id === id); return item !== undefined && item.category !== 'music'; }),
+    [ids, items],
+  );
+  // IDs whose media item is visible on this page and already has a title set.
+  const alreadyIdentifiedIds = useMemo(
+    () => ids.filter((id) => { const item = items.find((m) => m.id === id); return item?.title != null; }),
+    [ids, items],
+  );
   const [busy, setBusy] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showCategory, setShowCategory] = useState(false);
+  const [acoustidReport, setAcoustidReport] = useState<BulkAcoustIDResult | null>(null);
+  // null = no confirm needed / not showing; 'pending' = showing the question
+  const [confirmReidentify, setConfirmReidentify] = useState<'pending' | null>(null);
 
   const wrap = async (label: string, fn: () => Promise<unknown>, summary: (r: any) => string) => {
     try {
@@ -370,6 +387,14 @@ function BulkActionBar({
       setShowCategory(false);
     }
   };
+
+  if (ids.length === 0) {
+    return (
+      <div className="bg-zinc-900/60 border border-zinc-800 rounded-lg px-4 py-3 flex items-center gap-2">
+        <span className="text-xs text-zinc-500">Select tracks above to use bulk actions.</span>
+      </div>
+    );
+  }
 
   return (
     <div className="bg-indigo-600/10 border border-indigo-700/50 rounded-lg px-4 py-3 flex flex-wrap items-center gap-2">
@@ -482,14 +507,68 @@ function BulkActionBar({
         <RefreshCcw className="w-3.5 h-3.5" />
         Re-transcode
       </button>
-      <button
-        disabled
-        title="AcoustID lookup arrives in Phase 6"
-        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 text-zinc-600 rounded cursor-not-allowed"
-      >
-        <Fingerprint className="w-3.5 h-3.5" />
-        Lookup ID
-      </button>
+      {confirmReidentify === 'pending' ? (
+        <div className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800/80 border border-zinc-700 rounded text-xs text-zinc-200">
+          <Fingerprint className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+          <span className="text-zinc-300">
+            {alreadyIdentifiedIds.length} of {ids.length} already identified —
+          </span>
+          <button
+            onClick={async () => {
+              setConfirmReidentify(null);
+              const skipIds = ids.filter((id) => !alreadyIdentifiedIds.includes(id));
+              if (skipIds.length === 0) { showToast('success', 'All selected tracks are already identified.'); return; }
+              try { setBusy('acoustid'); const result = await bulkLookupAcoustID(skipIds); setAcoustidReport(result); }
+              catch (err) { showToast('error', (err as Error).message); }
+              finally { setBusy(null); }
+            }}
+            className="text-indigo-300 hover:text-indigo-100 underline underline-offset-2"
+          >
+            skip them
+          </button>
+          <span className="text-zinc-600">/</span>
+          <button
+            onClick={async () => {
+              setConfirmReidentify(null);
+              try { setBusy('acoustid'); const result = await bulkLookupAcoustID(ids); setAcoustidReport(result); }
+              catch (err) { showToast('error', (err as Error).message); }
+              finally { setBusy(null); }
+            }}
+            className="text-indigo-300 hover:text-indigo-100 underline underline-offset-2"
+          >
+            re-identify all {ids.length}
+          </button>
+          <button onClick={() => setConfirmReidentify(null)} className="ml-1 text-zinc-500 hover:text-zinc-300">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      ) : (
+        <button
+          onClick={async () => {
+            if (hasNonMusic) return;
+            if (alreadyIdentifiedIds.length > 0) { setConfirmReidentify('pending'); return; }
+            try {
+              setBusy('acoustid');
+              const result = await bulkLookupAcoustID(ids);
+              setAcoustidReport(result);
+            } catch (err) {
+              showToast('error', (err as Error).message);
+            } finally {
+              setBusy(null);
+            }
+          }}
+          disabled={!!busy || hasNonMusic || ids.length === 0}
+          title={hasNonMusic ? 'Lookup ID only works for music tracks. Deselect non-music files to use this.' : undefined}
+          className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium border rounded transition-colors ${
+            hasNonMusic || ids.length === 0
+              ? 'bg-zinc-900 border-zinc-800 text-zinc-600 cursor-not-allowed'
+              : 'bg-zinc-900 border-zinc-700 text-zinc-200 hover:bg-zinc-800'
+          }`}
+        >
+          {busy === 'acoustid' ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Fingerprint className="w-3.5 h-3.5" />}
+          Lookup ID
+        </button>
+      )}
 
       <div className="ml-auto">
         <button
@@ -499,6 +578,125 @@ function BulkActionBar({
         >
           Clear selection
         </button>
+      </div>
+
+      {acoustidReport && (
+        <LookupIDReportModal
+          result={acoustidReport}
+          items={items}
+          onClose={() => {
+            setAcoustidReport(null);
+            onSuccess();
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function LookupIDReportModal({
+  result,
+  items,
+  onClose,
+}: {
+  result: BulkAcoustIDResult;
+  items: Media[];
+  onClose: () => void;
+}) {
+  const nameFor = (id: number) =>
+    items.find((m) => m.id === id)?.original_filename ?? `Track #${id}`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4" onClick={onClose}>
+      <div
+        className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl flex flex-col max-h-[80vh]"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Fingerprint className="w-4 h-4 text-indigo-400" />
+            <h3 className="text-base font-semibold text-white">Lookup ID Results</h3>
+          </div>
+          <button onClick={onClose} className="p-1 text-zinc-400 hover:text-white transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 py-4 space-y-5">
+          {result.applied.length > 0 && (
+            <section>
+              <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-green-400 mb-2">
+                <Check className="w-3.5 h-3.5" />
+                Applied ({result.applied.length})
+              </h4>
+              <ul className="space-y-2">
+                {result.applied.map((r) => (
+                  <li key={r.id} className="bg-zinc-800/60 rounded-lg px-3 py-2">
+                    <p className="text-[11px] text-zinc-500 truncate mb-1">{nameFor(r.id)}</p>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <p className="text-sm text-white font-medium truncate">{r.title ?? <span className="italic text-zinc-400">Unknown title</span>}</p>
+                        <p className="text-xs text-zinc-400 truncate">
+                          {r.artist ?? '—'}{r.album ? ` · ${r.album}` : ''}{r.year ? ` (${r.year})` : ''}
+                        </p>
+                      </div>
+                      <span className="flex-shrink-0 text-xs font-mono text-green-400 bg-green-900/30 border border-green-800/50 rounded px-1.5 py-0.5">
+                        {Math.round(r.score * 100)}%
+                      </span>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {result.skipped.length > 0 && (
+            <section>
+              <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-amber-400 mb-2">
+                <AlertTriangle className="w-3.5 h-3.5" />
+                Skipped ({result.skipped.length})
+              </h4>
+              <ul className="space-y-1.5">
+                {result.skipped.map((r) => (
+                  <li key={r.id} className="bg-zinc-800/60 rounded-lg px-3 py-2 flex items-start justify-between gap-3">
+                    <p className="text-sm text-zinc-300 truncate min-w-0">{nameFor(r.id)}</p>
+                    <span className="flex-shrink-0 text-xs text-amber-400">{r.reason}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {result.failed.length > 0 && (
+            <section>
+              <h4 className="flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-red-400 mb-2">
+                <AlertCircle className="w-3.5 h-3.5" />
+                Failed ({result.failed.length})
+              </h4>
+              <ul className="space-y-1.5">
+                {result.failed.map((r) => (
+                  <li key={r.id} className="bg-zinc-800/60 rounded-lg px-3 py-2 flex items-start justify-between gap-3">
+                    <p className="text-sm text-zinc-300 truncate min-w-0">{nameFor(r.id)}</p>
+                    <span className="flex-shrink-0 text-xs text-red-400 text-right max-w-[50%]">{r.error}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {result.applied.length === 0 && result.skipped.length === 0 && result.failed.length === 0 && (
+            <p className="text-sm text-zinc-500 text-center py-4">No tracks were processed.</p>
+          )}
+        </div>
+
+        <div className="px-5 py-4 border-t border-zinc-800 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white text-sm font-medium rounded-lg transition-colors"
+          >
+            Close
+          </button>
+        </div>
       </div>
     </div>
   );
@@ -921,6 +1119,7 @@ function DetailDrawer({
   const [error, setError] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showRetranscode, setShowRetranscode] = useState(false);
+  const [acoustidCandidates, setAcoustidCandidates] = useState<AcoustIDCandidate[] | null>(null);
 
   useEffect(() => {
     if (!data) return;
@@ -977,11 +1176,24 @@ function DetailDrawer({
     onError: (err) => showToast('error', (err as Error).message),
   });
 
+  const identifyMutation = useMutation({
+    mutationFn: () => lookupAcoustID(id),
+    onSuccess: ({ candidates }) => {
+      if (candidates.length === 0) {
+        showToast('error', 'No matches found for this track');
+        return;
+      }
+      setAcoustidCandidates(candidates);
+    },
+    onError: (err) => showToast('error', (err as Error).message),
+  });
+
   const busy =
     saveMutation.isPending ||
     deleteMutation.isPending ||
     remeasureMutation.isPending ||
-    retranscodeMutation.isPending;
+    retranscodeMutation.isPending ||
+    identifyMutation.isPending;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose}>
@@ -1023,11 +1235,16 @@ function DetailDrawer({
                 Re-transcode...
               </button>
               <button
-                disabled
-                title="AcoustID lookup arrives in Phase 6"
-                className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium bg-zinc-900 border border-zinc-800 text-zinc-600 rounded cursor-not-allowed"
+                onClick={() => data.category === 'music' && identifyMutation.mutate()}
+                disabled={busy || data.category !== 'music'}
+                title={data.category !== 'music' ? 'Lookup ID is only available for music tracks.' : undefined}
+                className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium border rounded transition-colors ${
+                  data.category !== 'music'
+                    ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                    : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-200 disabled:opacity-50'
+                }`}
               >
-                <Fingerprint className="w-3.5 h-3.5" />
+                {identifyMutation.isPending ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Fingerprint className="w-3.5 h-3.5" />}
                 Lookup Track ID
               </button>
               <button
@@ -1174,6 +1391,139 @@ function DetailDrawer({
             busy={retranscodeMutation.isPending}
           />
         )}
+
+        {acoustidCandidates && (
+          <AcoustIDPickerModal
+            candidates={acoustidCandidates}
+            onPick={(c) => {
+              setDraft((d) => ({
+                ...d,
+                title: c.title,
+                artist: c.artist,
+                album: c.album,
+                year: c.year,
+                notes: d.notes || data?.original_filename || null,
+              }));
+              setAcoustidCandidates(null);
+              showToast('success', 'Match applied — review fields and Save');
+            }}
+            onClose={() => setAcoustidCandidates(null)}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AcoustIDPickerModal({
+  candidates,
+  onPick,
+  onClose,
+}: {
+  candidates: AcoustIDCandidate[];
+  onPick: (c: AcoustIDCandidate) => void;
+  onClose: () => void;
+}) {
+  const top5 = candidates.slice(0, 5);
+  const top = top5[0];
+  const isRecommended = (c: AcoustIDCandidate, idx: number) =>
+    idx === 0 && c.source !== 'filename' && !c.fromFreeText && c.score >= 0.8;
+
+  return (
+    <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
+      <div
+        className="w-full max-w-lg bg-zinc-900 border border-zinc-800 rounded-lg shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between p-5 border-b border-zinc-800">
+          <div className="flex items-center gap-2">
+            <Fingerprint className="w-4 h-4 text-indigo-400" />
+            <h3 className="text-base font-semibold text-white">ID Results</h3>
+            {top && (
+              <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+                top.source === 'filename'
+                  ? 'bg-zinc-700/60 text-zinc-300 border border-zinc-600/60'
+                  : top.source === 'musicbrainz'
+                    ? 'bg-amber-900/40 text-amber-300 border border-amber-800/60'
+                    : 'bg-indigo-900/40 text-indigo-300 border border-indigo-800/60'
+              }`}>
+                {top.source === 'filename'
+                  ? 'Cover — from filename'
+                  : top.source === 'musicbrainz'
+                    ? 'Filename search'
+                    : 'Fingerprint'}
+              </span>
+            )}
+          </div>
+          <button onClick={onClose} className="p-1 text-zinc-400 hover:text-white">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        <div className="p-3 space-y-1">
+          {top5.map((c, i) => (
+            <button
+              key={`${c.acoustid}-${i}`}
+              onClick={() => onPick(c)}
+              className={`w-full text-left px-4 py-3 rounded-lg transition-colors group ${
+                isRecommended(c, i)
+                  ? 'bg-indigo-950/50 border border-indigo-800/50 hover:bg-indigo-950/80'
+                  : 'hover:bg-zinc-800'
+              }`}
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <p className="text-white font-medium truncate">{c.title ?? <span className="text-zinc-500 italic">Unknown title</span>}</p>
+                    {isRecommended(c, i) && (
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-700/50 text-indigo-300 font-medium flex-shrink-0">
+                        Recommended
+                      </span>
+                    )}
+                  </div>
+                  <p className="text-zinc-400 text-sm truncate mt-0.5">
+                    {c.artist ?? '—'}{c.album ? ` · ${c.album}` : ''}{c.year ? ` (${c.year})` : ''}
+                  </p>
+                  {c.source === 'filename' && (
+                    <p className="text-[10px] text-zinc-400 mt-0.5 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3 text-amber-500" />
+                      Cover not found in MusicBrainz — extracted from filename
+                    </p>
+                  )}
+                  {c.fromFreeText && (
+                    <p className="text-[10px] text-amber-500 mt-0.5 flex items-center gap-1">
+                      <AlertTriangle className="w-3 h-3" />
+                      Loose text match — verify before saving
+                    </p>
+                  )}
+                </div>
+                <div className="flex-shrink-0 flex flex-col items-end gap-1 pt-0.5">
+                  <span className={`text-xs font-mono ${isRecommended(c, i) ? 'text-indigo-300' : 'text-zinc-300'}`}>
+                    {c.source === 'filename' ? '—' : `${Math.round(c.score * 100)}%`}
+                  </span>
+                  {c.source !== 'filename' && (
+                    <div className="w-16 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
+                      <div
+                        className={`h-full rounded-full transition-colors ${
+                          c.source === 'musicbrainz'
+                            ? 'bg-amber-500 group-hover:bg-amber-400'
+                            : 'bg-indigo-500 group-hover:bg-indigo-400'
+                        }`}
+                        style={{ width: `${Math.round(c.score * 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+              </div>
+            </button>
+          ))}
+        </div>
+
+        <div className="px-5 py-3 border-t border-zinc-800 flex justify-end">
+          <button onClick={onClose} className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition-colors">
+            Skip
+          </button>
+        </div>
       </div>
     </div>
   );
