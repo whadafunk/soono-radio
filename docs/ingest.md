@@ -5,7 +5,10 @@ Handles uploading audio files and processing them into the media library.
 ## Pipeline Steps
 
 ```
-Upload (multipart) → Analyze (ffprobe) → [Transcode (ffmpeg)] → Move to Library → Insert DB Row → Complete
+Upload (multipart) → Analyze (ffprobe + loudness) → [Transcode (ffmpeg)] → Move to Library → Insert DB Row → Complete
+                                                                                                    ↓ fire-and-forget (music only)
+                                                                                         AcoustID identification
+                                                                                         Audio analysis (BPM/key/mood)
 ```
 
 ### 1. Upload
@@ -53,17 +56,43 @@ Job status → `'completed'`. The UI polls `ingest_jobs` every 2s while jobs are
 
 On failure at any step: status → `'failed'`, `error_message` set.
 
+### 7. AcoustID Identification (music only, background)
+For `category = 'music'`, after the media row is inserted the worker fires `autoIdentifyOnIngest` as a background task (fire-and-forget). It fingerprints the file via `fpcalc`, queries the AcoustID API, and if the match clears the confidence threshold it writes `title/artist/album/year` to the media row.
+
+Requires: `fpcalc` (Chromaprint) installed, AcoustID API key configured in Settings → Integrations.
+
+### 8. Audio Analysis (music only, background)
+Runs concurrently with step 7. Fires `autoAnalyseOnIngest` which spawns `analysis/analyse.py`. On completion it writes `bpm`, `musical_key`, `key_scale`, `mood_tags`, `energy`, and `danceability` to the media row. `analysis_status` tracks progress: `null` → `analysing` → `completed` (or `failed`).
+
+Can be triggered manually via `POST /library/:id/analyse` (returns 202, client polls `analysis_status`). Can be disabled via `audio_analysis_enabled = false` in Settings → Integrations.
+
+Requires: Python 3.11+, `pip install -r analysis/requirements.txt`, Essentia mood models (`./analysis/download_models.sh`).
+
 ---
 
 ## Key Files
 
 ```
 apps/api/src/services/ingest/
-  queue.ts       Job queue, worker management
-  transcode.ts   ffmpeg invocation + options
-  loudnorm.ts    EBU R128 loudness measurement + normalization
-  paths.ts       Staging dir, media dir, path construction
-  hash.ts        SHA256 computation
+  queue.ts           Job queue, worker management
+  worker.ts          Pipeline orchestration (runs all steps)
+  ffprobe.ts         ffprobe wrapper (format/duration/bitrate)
+  transcode.ts       ffmpeg invocation + options
+  loudnorm.ts        EBU R128 loudness measurement + normalization
+  paths.ts           Staging dir, media dir, path construction
+  hash.ts            SHA256 computation
+  fpcalc.ts          Chromaprint fingerprint generation
+  audioAnalysis.ts   Python script spawn wrapper (BPM/key/mood)
+
+apps/api/src/services/
+  acoustid.ts        AcoustID + MusicBrainz identification
+  audioAnalysis.ts   autoAnalyseOnIngest, analyseMedia (service layer)
+
+analysis/
+  analyse.py         Python analysis script (aubio BPM + Essentia key/mood)
+  requirements.txt   Python deps: aubio, essentia-tensorflow
+  download_models.sh Downloads Essentia TFLite mood models
+  models/            Downloaded model files (gitignored)
 ```
 
 ---

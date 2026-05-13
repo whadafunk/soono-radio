@@ -477,6 +477,14 @@ export interface BulkAcoustIDResult {
   failed: { id: number; error: string }[];
 }
 
+export async function analyseLibraryItem(id: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/library/${id}/analyse`, { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || `Analyse failed: ${res.statusText}`);
+  }
+}
+
 export async function lookupAcoustID(id: number): Promise<{ candidates: AcoustIDCandidate[]; auto_apply: boolean }> {
   const res = await fetch(`${API_BASE}/library/${id}/acoustid`, { method: 'POST' });
   if (!res.ok) {
@@ -497,6 +505,11 @@ export async function bulkLookupAcoustID(ids: number[]): Promise<BulkAcoustIDRes
     throw new Error((data as { error?: string }).error || `Bulk lookup failed: ${res.statusText}`);
   }
   return res.json();
+}
+
+export async function bulkAnalyse(ids: number[]): Promise<{ queued: number }> {
+  await Promise.all(ids.map((id) => analyseLibraryItem(id)));
+  return { queued: ids.length };
 }
 
 export async function bulkReMeasure(ids: number[]): Promise<BulkResult> {

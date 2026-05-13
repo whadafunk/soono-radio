@@ -1,0 +1,7 @@
+# Core — BPM + key + energy + danceability (all via essentia)
+essentia>=2.1b5
+numpy>=1.21
+
+# Optional — mood classification (TF models via essentia-tensorflow).
+# Not on PyPI; installed separately in setup.sh via Essentia's own package index.
+# Without this, mood_tags will be empty but all other analysis still runs.

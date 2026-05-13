@@ -57,6 +57,15 @@ export const media = sqliteTable(
     intro_seconds: real('intro_seconds'),
     outro_seconds: real('outro_seconds'),
 
+    bpm: real('bpm'),
+    musical_key: text('musical_key'),
+    key_scale: text('key_scale'),
+    mood_tags: text('mood_tags'),
+    energy: real('energy'),
+    danceability: real('danceability'),
+    analysis_status: text('analysis_status'),
+    analysis_error: text('analysis_error'),
+
     play_count: integer('play_count').notNull().default(0),
     last_played_at: integer('last_played_at', { mode: 'timestamp' }),
     favorite: integer('favorite', { mode: 'boolean' }).notNull().default(false),

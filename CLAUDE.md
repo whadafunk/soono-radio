@@ -5,8 +5,18 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## Quick Start for Development
 
 ```bash
-# Install dependencies (one time)
+# Install Node dependencies (one time)
 pnpm install
+
+# Install system tools (one time, if not present)
+brew install ffmpeg chromaprint python@3.11   # Mac
+# apt install ffmpeg libchromaprint-tools python3.11 python3-pip  # Ubuntu
+
+# Set up Python venv + install audio analysis deps (one time)
+./analysis/setup.sh
+
+# Download Essentia mood models (one time, ~200MB)
+./analysis/download_models.sh
 
 # Terminal 1: Start Icecast (streaming server)
 ./start-icecast.sh
@@ -22,9 +32,11 @@ pnpm type-check
 **API server**: http://localhost:3000  
 **Icecast**: http://localhost:8000  
 
-That's it! The frontend and backend both auto-reload on file changes.
+> Python + Essentia are optional for dev — audio analysis (BPM/key/mood) will be skipped gracefully if not installed.
 
 **First task?** Use `/plan` for non-trivial changes. Refer to "Development Workflow & SDLC" below.
+
+**Deploying?** See `docs/deployment.md` — covers Docker Compose (recommended) and Linux install. All system dependencies (ffmpeg, fpcalc, Python 3.11, essentia, mood models) are documented there.
 
 ## Project Overview
 

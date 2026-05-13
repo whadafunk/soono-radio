@@ -13,9 +13,18 @@ A modern, containerized radio automation and streaming server with a responsive 
 
 ### Prerequisites
 
-- Node.js 20+
-- pnpm (`npm install -g pnpm`)
-- Docker (for running Icecast)
+| Tool | Purpose | Install (Mac) | Install (Ubuntu) |
+|------|---------|--------------|-----------------|
+| Node.js 20+ | API + frontend runtime | `brew install node` | `nvm install 20` |
+| pnpm | Package manager | `npm install -g pnpm` | `npm install -g pnpm` |
+| Docker | Icecast + LiquidSoap containers | Docker Desktop | `apt install docker.io` |
+| ffmpeg / ffprobe | Audio probe, transcode, loudness | `brew install ffmpeg` | `apt install ffmpeg` |
+| fpcalc (Chromaprint) | AcoustID audio fingerprinting | `brew install chromaprint` | `apt install libchromaprint-tools` |
+| Python 3.11+ | Audio analysis runtime | `brew install python@3.11` | `apt install python3.11 python3-venv` |
+| aubio + essentia | BPM, key, mood analysis | `./analysis/setup.sh` | same |
+| Essentia mood models | ML mood classifiers | `./analysis/download_models.sh` | same |
+
+> **Note:** Python and Essentia are only required for the audio analysis pipeline (BPM/key/mood detection on ingested music). The app runs without them — analysis will be skipped with a warning. `setup.sh` creates an isolated virtual environment so it won't conflict with system Python.
 
 ### Development
 

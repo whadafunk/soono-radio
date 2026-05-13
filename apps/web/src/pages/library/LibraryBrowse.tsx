@@ -3,7 +3,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Loader, Search, Star, Play, Pause, X, Save, AlertCircle,
   Settings2, ChevronDown, ChevronUp, ChevronsUpDown, Filter, Check,
-  Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle,
+  Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle, Wand2,
 } from 'lucide-react';
 import { MEDIA_CATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
 
@@ -32,6 +32,13 @@ const TAB_LABELS: Record<LibraryTab, string> = {
   imaging: 'Imaging',
   production: 'Production',
 };
+
+const TAB_SEARCH_PLACEHOLDER: Record<LibraryTab, string> = {
+  all:        'Search title, artist, album, filename…',
+  music:      'Search title, artist, album, genre, filename…',
+  imaging:    'Search title, category, filename…',
+  production: 'Search title, filename…',
+};
 import {
   fetchLibrary,
   fetchLibraryItem,
@@ -47,6 +54,8 @@ import {
   bulkReMeasure,
   lookupAcoustID,
   bulkLookupAcoustID,
+  analyseLibraryItem,
+  bulkAnalyse,
   AcoustIDCandidate,
   BulkAcoustIDResult,
 } from '../../api';
@@ -56,6 +65,7 @@ type ColumnId =
   | 'artist'
   | 'album'
   | 'category'
+  | 'bpm'
   | 'duration_seconds'
   | 'bitrate_kbps'
   | 'loudness_lufs'
@@ -69,39 +79,45 @@ interface ColumnDef {
   label: string;
   sortable: boolean;
   align: 'left' | 'right';
-  defaultVisible: boolean;
 }
 
 const COLUMNS: ColumnDef[] = [
-  { id: 'title',            label: 'Title',         sortable: true,  align: 'left',  defaultVisible: true },
-  { id: 'artist',           label: 'Artist',        sortable: true,  align: 'left',  defaultVisible: true },
-  { id: 'album',            label: 'Album',         sortable: true,  align: 'left',  defaultVisible: false },
-  { id: 'category',         label: 'Category',      sortable: false, align: 'left',  defaultVisible: true },
-  { id: 'duration_seconds', label: 'Duration',      sortable: true,  align: 'right', defaultVisible: true },
-  { id: 'bitrate_kbps',     label: 'Bitrate',       sortable: true,  align: 'right', defaultVisible: true },
-  { id: 'loudness_lufs',    label: 'LUFS',          sortable: false, align: 'right', defaultVisible: false },
-  { id: 'play_count',       label: 'Plays',         sortable: true,  align: 'right', defaultVisible: true },
-  { id: 'year',             label: 'Year',          sortable: false, align: 'right', defaultVisible: false },
-  { id: 'created_at',       label: 'Added',         sortable: true,  align: 'right', defaultVisible: false },
-  { id: 'last_played_at',   label: 'Last Played',   sortable: true,  align: 'right', defaultVisible: false },
+  { id: 'title',            label: 'Title',       sortable: true,  align: 'left'  },
+  { id: 'artist',           label: 'Artist',      sortable: true,  align: 'left'  },
+  { id: 'album',            label: 'Album',       sortable: true,  align: 'left'  },
+  { id: 'category',         label: 'Category',    sortable: false, align: 'left'  },
+  { id: 'bpm',              label: 'BPM',         sortable: false, align: 'right' },
+  { id: 'duration_seconds', label: 'Duration',    sortable: true,  align: 'right' },
+  { id: 'bitrate_kbps',     label: 'Bitrate',     sortable: true,  align: 'right' },
+  { id: 'loudness_lufs',    label: 'LUFS',        sortable: false, align: 'right' },
+  { id: 'play_count',       label: 'Plays',       sortable: true,  align: 'right' },
+  { id: 'year',             label: 'Year',        sortable: false, align: 'right' },
+  { id: 'created_at',       label: 'Added',       sortable: true,  align: 'right' },
+  { id: 'last_played_at',   label: 'Last Played', sortable: true,  align: 'right' },
 ];
 
-const VISIBLE_COLS_KEY = 'library-visible-columns-v1';
+// Default visible columns per tab
+const TAB_DEFAULT_COLS: Record<LibraryTab, ColumnId[]> = {
+  all:        ['title', 'artist', 'category', 'duration_seconds', 'bitrate_kbps', 'play_count'],
+  music:      ['title', 'artist', 'bpm', 'duration_seconds', 'bitrate_kbps', 'play_count'],
+  imaging:    ['title', 'category', 'duration_seconds', 'bitrate_kbps', 'play_count'],
+  production: ['title', 'duration_seconds', 'bitrate_kbps', 'created_at'],
+};
 
-function loadVisibleCols(): Set<ColumnId> {
+function visibleColsKey(tab: LibraryTab) {
+  return `library-visible-columns-v2-${tab}`;
+}
+
+function loadVisibleCols(tab: LibraryTab): Set<ColumnId> {
   try {
-    const raw = localStorage.getItem(VISIBLE_COLS_KEY);
+    const raw = localStorage.getItem(visibleColsKey(tab));
     if (raw) {
       const arr: string[] = JSON.parse(raw);
-      const valid = arr.filter((id): id is ColumnId =>
-        COLUMNS.some((c) => c.id === id),
-      );
+      const valid = arr.filter((id): id is ColumnId => COLUMNS.some((c) => c.id === id));
       if (valid.length > 0) return new Set(valid);
     }
-  } catch {
-    /* fall through */
-  }
-  return new Set(COLUMNS.filter((c) => c.defaultVisible).map((c) => c.id));
+  } catch { /* fall through */ }
+  return new Set(TAB_DEFAULT_COLS[tab]);
 }
 
 export function LibraryBrowse() {
@@ -117,14 +133,14 @@ export function LibraryBrowse() {
   const [offset, setOffset] = useState(0);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [playingId, setPlayingId] = useState<number | null>(null);
-  const [visibleCols, setVisibleCols] = useState<Set<ColumnId>>(() => loadVisibleCols());
+  const [visibleCols, setVisibleCols] = useState<Set<ColumnId>>(() => loadVisibleCols('all'));
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const limit = 50;
 
   useEffect(() => {
-    localStorage.setItem(VISIBLE_COLS_KEY, JSON.stringify(Array.from(visibleCols)));
-  }, [visibleCols]);
+    localStorage.setItem(visibleColsKey(activeTab), JSON.stringify(Array.from(visibleCols)));
+  }, [visibleCols, activeTab]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedQ(q), 250);
@@ -147,6 +163,7 @@ export function LibraryBrowse() {
   const handleTabChange = (tab: LibraryTab) => {
     setActiveTab(tab);
     setCategorySet(new Set());
+    setVisibleCols(loadVisibleCols(tab));
   };
 
   const { data, isLoading, error } = useQuery<LibraryListResponse>({
@@ -257,7 +274,7 @@ export function LibraryBrowse() {
           <input
             value={q}
             onChange={(e) => setQ(e.target.value)}
-            placeholder="Search title, artist, album, filename..."
+            placeholder={TAB_SEARCH_PLACEHOLDER[activeTab]}
             className="w-full pl-10 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
           />
         </div>
@@ -370,8 +387,8 @@ function BulkActionBar({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showCategory, setShowCategory] = useState(false);
   const [acoustidReport, setAcoustidReport] = useState<BulkAcoustIDResult | null>(null);
-  // null = no confirm needed / not showing; 'pending' = showing the question
   const [confirmReidentify, setConfirmReidentify] = useState<'pending' | null>(null);
+  const musicIds = useMemo(() => ids.filter((id) => items.find((m) => m.id === id)?.category === 'music'), [ids, items]);
 
   const wrap = async (label: string, fn: () => Promise<unknown>, summary: (r: any) => string) => {
     try {
@@ -497,6 +514,26 @@ function BulkActionBar({
       >
         {busy === 'remeasure' ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Activity className="w-3.5 h-3.5" />}
         Re-measure Loudness
+      </button>
+
+      <button
+        onClick={() =>
+          wrap(
+            'analyse',
+            () => bulkAnalyse(musicIds),
+            (r: any) => `Queued analysis for ${r.queued} track${r.queued !== 1 ? 's' : ''}`,
+          )
+        }
+        disabled={!!busy || musicIds.length === 0}
+        title={musicIds.length === 0 ? 'Select music tracks to analyse' : undefined}
+        className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium border rounded transition-colors ${
+          musicIds.length === 0
+            ? 'bg-zinc-900 border-zinc-800 text-zinc-600 cursor-not-allowed'
+            : 'bg-zinc-900 border-zinc-700 text-zinc-200 hover:bg-zinc-800'
+        }`}
+      >
+        {busy === 'analyse' ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Wand2 className="w-3.5 h-3.5" />}
+        Analyse{musicIds.length > 0 && musicIds.length < ids.length ? ` (${musicIds.length})` : ''}
       </button>
 
       <button
@@ -889,7 +926,7 @@ function LibraryTable({
       <table className="w-full text-sm">
         <thead className="bg-zinc-950/50 border-b border-zinc-800">
           <tr>
-            <th className="w-10 px-2 py-2 text-center">
+            <th className="w-10 px-2 py-2 text-center border-r border-r-zinc-700 [box-shadow:1px_0_0_0_rgba(255,255,255,0.04)]">
               <input
                 type="checkbox"
                 checked={allSelected}
@@ -900,7 +937,7 @@ function LibraryTable({
                 className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
               />
             </th>
-            <th className="w-10"></th>
+            <th className="w-10 border-r border-r-zinc-700 [box-shadow:1px_0_0_0_rgba(255,255,255,0.04)]"></th>
             {visibleColumns.map((c) => (
               <SortHeader
                 key={c.id}
@@ -910,7 +947,7 @@ function LibraryTable({
                 onClick={() => onSortClick(c.id)}
               />
             ))}
-            <th className="w-10"></th>
+            <th className="w-10 border-r border-r-zinc-700 [box-shadow:1px_0_0_0_rgba(255,255,255,0.04)]"></th>
             <th className="w-10 text-right pr-2">
               <ColumnPicker visibleCols={visibleCols} setVisibleCols={setVisibleCols} />
             </th>
@@ -978,7 +1015,7 @@ function SortHeader({
   return (
     <th
       onClick={column.sortable ? onClick : undefined}
-      className={`text-xs font-medium uppercase tracking-wider px-3 py-2 ${align} ${
+      className={`text-xs font-medium uppercase tracking-wider px-3 py-2 border-r border-r-zinc-700 [box-shadow:1px_0_0_0_rgba(255,255,255,0.04)] last:border-r-0 last:shadow-none ${align} ${
         column.sortable ? 'cursor-pointer hover:text-white text-zinc-400 select-none' : 'text-zinc-400'
       }`}
     >
@@ -1042,6 +1079,12 @@ function Cell({
       return (
         <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>
           {media.bitrate_kbps}{media.was_transcoded ? '*' : ''}
+        </td>
+      );
+    case 'bpm':
+      return (
+        <td className={`${baseClass} text-zinc-400 font-mono text-xs`}>
+          {media.bpm !== null ? media.bpm : <span className="text-zinc-600">—</span>}
         </td>
       );
     case 'loudness_lufs':
@@ -1113,6 +1156,8 @@ function DetailDrawer({
   const { data, isLoading } = useQuery({
     queryKey: ['library-item', id],
     queryFn: () => fetchLibraryItem(id),
+    refetchInterval: (query) =>
+      query.state.data?.analysis_status === 'analysing' ? 2000 : false,
   });
 
   const [draft, setDraft] = useState<MediaPatch>({});
@@ -1176,6 +1221,14 @@ function DetailDrawer({
     onError: (err) => showToast('error', (err as Error).message),
   });
 
+  const analyseMutation = useMutation({
+    mutationFn: () => analyseLibraryItem(id),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['library-item', id] });
+    },
+    onError: (err) => showToast('error', (err as Error).message),
+  });
+
   const identifyMutation = useMutation({
     mutationFn: () => lookupAcoustID(id),
     onSuccess: ({ candidates }) => {
@@ -1193,7 +1246,8 @@ function DetailDrawer({
     deleteMutation.isPending ||
     remeasureMutation.isPending ||
     retranscodeMutation.isPending ||
-    identifyMutation.isPending;
+    identifyMutation.isPending ||
+    analyseMutation.isPending;
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end bg-black/40" onClick={onClose}>
@@ -1233,6 +1287,21 @@ function DetailDrawer({
               >
                 <RefreshCcw className="w-3.5 h-3.5" />
                 Re-transcode...
+              </button>
+              <button
+                onClick={() => data.category === 'music' && analyseMutation.mutate()}
+                disabled={busy || data.category !== 'music' || data.analysis_status === 'analysing'}
+                title={data.category !== 'music' ? 'Audio analysis is only available for music tracks.' : undefined}
+                className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium border rounded transition-colors ${
+                  data.category !== 'music'
+                    ? 'bg-zinc-800 border-zinc-700 text-zinc-500 cursor-not-allowed'
+                    : 'bg-zinc-800 hover:bg-zinc-700 border-zinc-700 text-zinc-200 disabled:opacity-50'
+                }`}
+              >
+                {data.analysis_status === 'analysing' || analyseMutation.isPending
+                  ? <Loader className="w-3.5 h-3.5 animate-spin" />
+                  : <Wand2 className="w-3.5 h-3.5" />}
+                {data.analysis_status === 'analysing' ? 'Analysing…' : 'Analyse'}
               </button>
               <button
                 onClick={() => data.category === 'music' && identifyMutation.mutate()}
@@ -1336,6 +1405,45 @@ function DetailDrawer({
               />
               <span className="text-sm text-zinc-200">Favorite</span>
             </label>
+
+            {data.category === 'music' && (
+              <div className="border-t border-zinc-800 pt-4 mt-4">
+                <p className="text-xs font-medium text-zinc-400 mb-2">Audio Analysis</p>
+                {data.analysis_status === 'analysing' && (
+                  <div className="flex items-center gap-2 text-xs text-zinc-400">
+                    <Loader className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                    Running analysis…
+                  </div>
+                )}
+                {data.analysis_status === 'failed' && (
+                  <p className="text-xs text-red-400">
+                    Failed: {data.analysis_error ?? 'unknown error'}
+                  </p>
+                )}
+                {data.analysis_status === 'completed' && (
+                  <div className="space-y-2">
+                    <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs">
+                      {data.bpm !== null && (
+                        <span><span className="text-zinc-400">BPM </span><span className="text-zinc-100 font-mono">{data.bpm}</span></span>
+                      )}
+                      {data.musical_key && (
+                        <span><span className="text-zinc-400">Key </span><span className="text-zinc-100 font-mono">{data.musical_key} {data.key_scale}</span></span>
+                      )}
+                      {data.energy !== null && (
+                        <span><span className="text-zinc-400">Energy </span><span className="text-zinc-100 font-mono">{Math.round(data.energy * 100)}%</span></span>
+                      )}
+                      {data.danceability !== null && (
+                        <span><span className="text-zinc-400">Dance </span><span className="text-zinc-100 font-mono">{Math.round(data.danceability * 100)}%</span></span>
+                      )}
+                    </div>
+                    <MoodTags raw={data.mood_tags} />
+                  </div>
+                )}
+                {!data.analysis_status && (
+                  <p className="text-xs text-zinc-500">Not analysed yet — click Analyse above.</p>
+                )}
+              </div>
+            )}
 
             <div className="border-t border-zinc-800 pt-4 mt-4 space-y-1 text-xs text-zinc-500">
               <p><span className="text-zinc-400">File:</span> <span className="font-mono">{data.original_filename}</span></p>
@@ -1639,6 +1747,36 @@ function RadioPill({
       <div className="text-xs font-medium">{label}</div>
       {hint && <div className="text-[10px] text-zinc-500 mt-0.5">{hint}</div>}
     </button>
+  );
+}
+
+const MOOD_COLORS: Record<string, string> = {
+  happy:      'bg-yellow-500/20 text-yellow-300 border-yellow-700/50',
+  party:      'bg-pink-500/20 text-pink-300 border-pink-700/50',
+  relaxed:    'bg-teal-500/20 text-teal-300 border-teal-700/50',
+  acoustic:   'bg-amber-500/20 text-amber-300 border-amber-700/50',
+  electronic: 'bg-blue-500/20 text-blue-300 border-blue-700/50',
+  aggressive: 'bg-red-500/20 text-red-300 border-red-700/50',
+  sad:        'bg-indigo-500/20 text-indigo-300 border-indigo-700/50',
+};
+
+function MoodTags({ raw }: { raw: string | null | undefined }) {
+  if (!raw) return null;
+  let tags: Array<{ tag: string; score: number }> = [];
+  try { tags = JSON.parse(raw); } catch { return null; }
+  const visible = tags.filter((t) => t.score >= 0.4);
+  if (visible.length === 0) return <p className="text-xs text-zinc-500">No strong mood detected.</p>;
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      {visible.map((t) => (
+        <span
+          key={t.tag}
+          className={`px-2 py-0.5 rounded-full text-[11px] font-medium border ${MOOD_COLORS[t.tag] ?? 'bg-zinc-700/40 text-zinc-300 border-zinc-600/50'}`}
+        >
+          {t.tag} <span className="opacity-60">{Math.round(t.score * 100)}%</span>
+        </span>
+      ))}
+    </div>
   );
 }
 

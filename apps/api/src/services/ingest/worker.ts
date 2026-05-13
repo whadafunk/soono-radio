@@ -9,6 +9,7 @@ import { decideTranscode, transcodeToMp3, TRANSCODE_DEFAULTS } from './transcode
 import { sha256File } from './hash.js';
 import { ensureDirs, mediaPathForSha, stagingPathFor } from './paths.js';
 import { autoIdentifyOnIngest } from '../acoustid.js';
+import { autoAnalyseOnIngest } from '../audioAnalysis.js';
 
 export interface IngestOutcome {
   jobId: string;
@@ -145,10 +146,11 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
 
     await markJobCompleted(jobId, mediaId);
 
-    // For music tracks, attempt auto-identification in the background.
-    // Fire-and-forget — result does not affect ingest status.
+    // For music tracks, attempt auto-identification and audio analysis in the
+    // background. Both are fire-and-forget — results do not affect ingest status.
     if (job.category === 'music') {
       autoIdentifyOnIngest(mediaId).catch(() => undefined);
+      autoAnalyseOnIngest(mediaId).catch(() => undefined);
     }
 
     return { jobId, status: 'completed', mediaId, error: null, deduped: false };

@@ -4,6 +4,7 @@ const tabs = [
   { label: 'Streaming Engine', path: '/settings/icecast' },
   { label: 'Mix Engine',       path: '/settings/liquidsoap' },
   { label: 'Supervisor',       path: '/settings/supervisor' },
+  { label: 'Integrations',    path: '/settings/integrations' },
 ];
 
 export function SettingsLayout() {

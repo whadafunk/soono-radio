@@ -59,6 +59,15 @@ export const MediaSchema = z.object({
   intro_seconds: z.number().nullable(),
   outro_seconds: z.number().nullable(),
 
+  bpm: z.number().nullable(),
+  musical_key: z.string().nullable(),
+  key_scale: z.string().nullable(),
+  mood_tags: z.string().nullable(),
+  energy: z.number().nullable(),
+  danceability: z.number().nullable(),
+  analysis_status: z.string().nullable(),
+  analysis_error: z.string().nullable(),
+
   play_count: z.number().int().nonnegative(),
   last_played_at: z.coerce.date().nullable(),
   favorite: z.boolean(),

@@ -14,10 +14,12 @@ import { scheduleRoutes } from './routes/schedule.js';
 import { rotationRoutes } from './routes/rotations.js';
 import { userRoutes } from './routes/users.js';
 import { playlistRoutes } from './routes/playlists.js';
+import { integrationsRoutes } from './routes/integrations.js';
 import { runMigrations } from './db/index.js';
 import { ingestQueue, recoverInterruptedJobs } from './services/ingest/queue.js';
 import { ensureDirs } from './services/ingest/paths.js';
 import * as supervisor from './services/supervisor/index.js';
+import { loadIntegrationsConfig } from './services/integrations/config.js';
 
 const fastify = Fastify({
   logger: true,
@@ -48,6 +50,7 @@ fastify.register(scheduleRoutes);
 fastify.register(rotationRoutes);
 fastify.register(userRoutes);
 fastify.register(playlistRoutes);
+fastify.register(integrationsRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Radio API Server' };
@@ -57,6 +60,7 @@ const start = async () => {
   try {
     await runMigrations();
     fastify.log.info('Database migrations applied');
+    await loadIntegrationsConfig();
     await ensureDirs();
     const recovered = await recoverInterruptedJobs();
     if (recovered > 0) {

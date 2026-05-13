@@ -64,6 +64,13 @@
       "when": 1747180800000,
       "tag": "0008_campaign_media_play_as_spot",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "6",
+      "when": 1778630400000,
+      "tag": "0013_audio_analysis",
+      "breakpoints": true
     }
   ]
 }

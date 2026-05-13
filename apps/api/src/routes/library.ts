@@ -14,6 +14,7 @@ import {
 import { inArray as inArrayOp } from 'drizzle-orm';
 import { deleteMedia, reMeasureMedia, reTranscodeMedia } from '../services/library.js';
 import { identifyMedia, isAutoApply } from '../services/acoustid.js';
+import { analyseMedia } from '../services/audioAnalysis.js';
 import { db } from '../db/index.js';
 import { ingestJobs, media, MEDIA_CATEGORIES } from '../db/schema.js';
 import type { MediaCategory } from '../db/schema.js';
@@ -293,6 +294,14 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     } catch (err) {
       return reply.status(500).send({ error: (err as Error).message });
     }
+  });
+
+  fastify.post<{ Params: { id: string } }>('/library/:id/analyse', async (request, reply) => {
+    const id = parseInt(request.params.id, 10);
+    if (!Number.isFinite(id)) return reply.status(400).send({ error: 'Invalid id' });
+    // Fire-and-forget — returns 202 immediately; client polls analysis_status on the media row.
+    analyseMedia(id).catch(() => undefined);
+    return reply.status(202).send({ queued: true });
   });
 
   // Bulk operations.
