@@ -5,3 +5,4 @@ export * from './schemas/supervisor';
 export * from './schemas/scheduling';
 export * from './schemas/playlists';
 export * from './schemas/integrations';
+export * from './schemas/activity';

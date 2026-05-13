@@ -25,6 +25,8 @@ import {
   UserPatch,
   FacetsResponse,
   FacetsResponseSchema,
+  BackgroundJob,
+  ActivityStats,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -510,11 +512,7 @@ export interface AcoustIDCandidate {
   fromFreeText?: boolean;
 }
 
-export interface BulkAcoustIDResult {
-  applied: { id: number; title: string | null; artist: string | null; album: string | null; year: number | null; score: number }[];
-  skipped: { id: number; reason: string }[];
-  failed: { id: number; error: string }[];
-}
+export type { BackgroundJob, ActivityStats };
 
 export async function analyseLibraryItem(id: number): Promise<void> {
   const res = await fetch(`${API_BASE}/library/${id}/analyse`, { method: 'POST' });
@@ -533,7 +531,7 @@ export async function lookupAcoustID(id: number): Promise<{ candidates: AcoustID
   return res.json();
 }
 
-export async function bulkLookupAcoustID(ids: number[]): Promise<BulkAcoustIDResult> {
+export async function bulkLookupAcoustID(ids: number[]): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/library/bulk-acoustid`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -546,9 +544,17 @@ export async function bulkLookupAcoustID(ids: number[]): Promise<BulkAcoustIDRes
   return res.json();
 }
 
-export async function bulkAnalyse(ids: number[]): Promise<{ queued: number }> {
-  await Promise.all(ids.map((id) => analyseLibraryItem(id)));
-  return { queued: ids.length };
+export async function bulkAnalyseAll(ids: number[]): Promise<{ job_id: string }> {
+  const res = await fetch(`${API_BASE}/library/bulk-analyse`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ids }),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error((data as { error?: string }).error || `Bulk analyse failed: ${res.statusText}`);
+  }
+  return res.json();
 }
 
 export async function bulkReMeasure(ids: number[]): Promise<BulkResult> {
@@ -972,4 +978,34 @@ export async function updateIntegrationsConfig(config: IntegrationsConfig): Prom
   await post<void>('/integrations/config', config);
 }
 
+// ─── Activity ─────────────────────────────────────────────────────────────────
+
+export function fetchActivityStats(): Promise<ActivityStats> {
+  return apiFetch('/activity/stats');
+}
+
+export function fetchActivityJobs(): Promise<BackgroundJob[]> {
+  return apiFetch<{ jobs: BackgroundJob[] }>('/activity').then((d) => d.jobs);
+}
+
+export function fetchActivityJob(id: string): Promise<BackgroundJob> {
+  return apiFetch(`/activity/${id}`);
+}
+
+export function resolveActivityItem(
+  jobId: string,
+  mediaId: number,
+  action: 'apply' | 'dismiss',
+  candidateIndex?: number,
+): Promise<{ remaining: number; status: string }> {
+  return post(`/activity/${jobId}/resolve`, { media_id: mediaId, action, candidate_index: candidateIndex });
+}
+
+export function dismissAllActivityItems(jobId: string): Promise<{ status: string }> {
+  return post(`/activity/${jobId}/dismiss-all`, {});
+}
+
+export function deleteActivityJob(jobId: string): Promise<void> {
+  return del(`/activity/${jobId}`);
+}
 

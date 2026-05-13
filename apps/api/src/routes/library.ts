@@ -10,6 +10,8 @@ import {
   BulkIdsSchema,
   BulkCategorySchema,
   BulkFavoriteSchema,
+  LookupIdResults,
+  AnalyseResults,
 } from '@radio/shared';
 import { inArray as inArrayOp } from 'drizzle-orm';
 import { deleteMedia, reMeasureMedia, reTranscodeMedia } from '../services/library.js';
@@ -20,6 +22,7 @@ import { ingestJobs, media, MEDIA_CATEGORIES } from '../db/schema.js';
 import type { MediaCategory } from '../db/schema.js';
 import { ensureDirs, STAGING_DIR, mediaPathForSha, stagingPathFor } from '../services/ingest/paths.js';
 import { ingestQueue } from '../services/ingest/queue.js';
+import { createJob, completeLookupIdJob, completeAnalyseJob, failJob, supersedePendingReviews } from '../services/backgroundJobs.js';
 
 const SORTABLE_FIELDS = [
   'title',
@@ -569,51 +572,20 @@ export async function libraryRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/library/bulk-acoustid', async (request, reply) => {
     const parsed = BulkIdsSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const ids = parsed.data.ids;
+    await supersedePendingReviews(ids);
+    const jobId = await createJob('lookup_id', `Lookup ID — ${ids.length} track${ids.length !== 1 ? 's' : ''}`, ids.length);
+    runBulkLookupId(jobId, ids).catch(() => undefined);
+    return reply.status(202).send({ job_id: jobId });
+  });
 
-    const results = {
-      applied: [] as { id: number; title: string | null; artist: string | null; album: string | null; year: number | null; score: number }[],
-      skipped: [] as { id: number; reason: string }[],
-      failed: [] as { id: number; error: string }[],
-    };
-
-    for (const mediaId of parsed.data.ids) {
-      try {
-        const candidates = await identifyMedia(mediaId);
-        if (candidates.length === 0 || !isAutoApply(candidates, { allowMusicBrainz: true })) {
-          let reason: string;
-          if (candidates.length === 0) {
-            reason = 'No matches found';
-          } else if (candidates[0].source === 'filename') {
-            reason = 'Cover detected — not in MusicBrainz. Use per-track Lookup ID to apply.';
-          } else if (candidates[0].source === 'musicbrainz' && candidates[0].fromFreeText) {
-            reason = 'Loose text match only — cannot auto-apply. Use per-track Lookup ID to verify.';
-          } else if (candidates[0].source === 'musicbrainz') {
-            reason = `Filename search — low confidence (${Math.round(candidates[0].score * 100)}%). Use per-track Lookup ID to pick manually.`;
-          } else {
-            reason = `Low confidence (${Math.round(candidates[0].score * 100)}%)`;
-          }
-          results.skipped.push({ id: mediaId, reason });
-          continue;
-        }
-        const top = candidates[0];
-        await db
-          .update(media)
-          .set({
-            title: top.title,
-            artist: top.artist,
-            album: top.album,
-            year: top.year,
-            notes: sql`COALESCE(${media.notes}, ${media.original_filename})`,
-            updated_at: new Date(),
-          })
-          .where(eq(media.id, mediaId));
-        results.applied.push({ id: mediaId, title: top.title, artist: top.artist, album: top.album, year: top.year, score: top.score });
-      } catch (err) {
-        results.failed.push({ id: mediaId, error: (err as Error).message });
-      }
-    }
-
-    return reply.send(results);
+  fastify.post<{ Body: unknown }>('/library/bulk-analyse', async (request, reply) => {
+    const parsed = BulkIdsSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const ids = parsed.data.ids;
+    const jobId = await createJob('analyse', `Audio analysis — ${ids.length} track${ids.length !== 1 ? 's' : ''}`, ids.length);
+    runBulkAnalyse(jobId, ids).catch(() => undefined);
+    return reply.status(202).send({ job_id: jobId });
   });
 
   fastify.get<{ Params: { id: string } }>('/library/:id/audio', async (request, reply) => {
@@ -663,6 +635,105 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     // we want to keep this query simple.
     return reply.send({ jobs: rows.reverse() });
   });
+}
+
+async function runBulkLookupId(jobId: string, ids: number[]): Promise<void> {
+  const results: LookupIdResults = { applied: [], skipped: [], failed: [] };
+  try {
+    const mediaRows = await db
+      .select({ id: media.id, original_filename: media.original_filename })
+      .from(media)
+      .where(inArrayOp(media.id, ids));
+    const filenameMap = new Map(mediaRows.map((r) => [r.id, r.original_filename]));
+
+    for (const mediaId of ids) {
+      const filename = filenameMap.get(mediaId) ?? `#${mediaId}`;
+      try {
+        const candidates = await identifyMedia(mediaId);
+        if (candidates.length === 0 || !isAutoApply(candidates, { allowMusicBrainz: true })) {
+          let reason: string;
+          if (candidates.length === 0) {
+            reason = 'No matches found';
+          } else if (candidates[0].source === 'filename') {
+            reason = 'Cover detected — not in MusicBrainz. Use per-track Lookup ID to apply.';
+          } else if (candidates[0].source === 'musicbrainz' && candidates[0].fromFreeText) {
+            reason = 'Loose text match only — cannot auto-apply. Use per-track Lookup ID to verify.';
+          } else if (candidates[0].source === 'musicbrainz') {
+            reason = `Filename search — low confidence (${Math.round(candidates[0].score * 100)}%). Use per-track Lookup ID to pick manually.`;
+          } else {
+            reason = `Low confidence (${Math.round(candidates[0].score * 100)}%)`;
+          }
+          results.skipped.push({
+            id: mediaId,
+            filename,
+            reason,
+            candidates: candidates.map((c) => ({
+              acoustid: c.acoustid,
+              score: c.score,
+              title: c.title,
+              artist: c.artist,
+              album: c.album,
+              year: c.year,
+              source: c.source,
+              fromFreeText: c.fromFreeText,
+            })),
+            resolved: false,
+          });
+        } else {
+          const top = candidates[0];
+          await db
+            .update(media)
+            .set({
+              title: top.title,
+              artist: top.artist,
+              album: top.album,
+              year: top.year,
+              notes: sql`COALESCE(${media.notes}, ${media.original_filename})`,
+              updated_at: new Date(),
+            })
+            .where(eq(media.id, mediaId));
+          results.applied.push({
+            id: mediaId,
+            filename,
+            title: top.title,
+            artist: top.artist,
+            album: top.album,
+            year: top.year,
+            score: top.score,
+          });
+        }
+      } catch (err) {
+        results.failed.push({ id: mediaId, filename, error: (err as Error).message });
+      }
+    }
+    await completeLookupIdJob(jobId, results);
+  } catch (err) {
+    await failJob(jobId, (err as Error).message);
+  }
+}
+
+async function runBulkAnalyse(jobId: string, ids: number[]): Promise<void> {
+  const results: AnalyseResults = { succeeded: [], failed: [] };
+  try {
+    const mediaRows = await db
+      .select({ id: media.id, original_filename: media.original_filename })
+      .from(media)
+      .where(inArrayOp(media.id, ids));
+    const filenameMap = new Map(mediaRows.map((r) => [r.id, r.original_filename]));
+
+    for (const mediaId of ids) {
+      const filename = filenameMap.get(mediaId) ?? `#${mediaId}`;
+      try {
+        await analyseMedia(mediaId);
+        results.succeeded.push({ id: mediaId, filename });
+      } catch (err) {
+        results.failed.push({ id: mediaId, filename, error: (err as Error).message });
+      }
+    }
+    await completeAnalyseJob(jobId, results);
+  } catch (err) {
+    await failJob(jobId, (err as Error).message);
+  }
 }
 
 async function safeUnlink(path: string): Promise<void> {

@@ -21,6 +21,7 @@ import { ShowsPage } from './pages/shows/ShowsPage';
 import { ShowDetailPage } from './pages/shows/ShowDetailPage';
 import { RotationsPage } from './pages/rotations/RotationsPage';
 import { PlaylistsPage } from './pages/playlists/PlaylistsPage';
+import { ActivityPage } from './pages/activity/ActivityPage';
 
 const queryClient = new QueryClient();
 
@@ -41,6 +42,7 @@ export function App() {
             <Route path="/library" element={<LibraryLayout />}>
               <Route index element={<LibraryBrowse />} />
               <Route path="upload" element={<LibraryUpload />} />
+              <Route path="activity" element={<ActivityPage />} />
             </Route>
             <Route path="/customers" element={<CustomersLayout />}>
               <Route index element={<CustomersList />} />

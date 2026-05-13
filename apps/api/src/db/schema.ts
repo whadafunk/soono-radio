@@ -693,6 +693,33 @@ export const campaignMedia = sqliteTable(
 export type CampaignMedia = typeof campaignMedia.$inferSelect;
 export type CampaignMediaInsert = typeof campaignMedia.$inferInsert;
 
+// ─── Background jobs ─────────────────────────────────────────────────────────
+
+export const JOB_TYPES = ['lookup_id', 'analyse', 're-transcode'] as const;
+export type JobType = (typeof JOB_TYPES)[number];
+
+export const JOB_STATUSES = ['running', 'completed', 'review_pending', 'done'] as const;
+export type JobStatus = (typeof JOB_STATUSES)[number];
+
+export const backgroundJobs = sqliteTable('background_jobs', {
+  id: text('id').primaryKey(),
+  type: text('type', { enum: JOB_TYPES }).notNull(),
+  label: text('label').notNull(),
+  status: text('status', { enum: JOB_STATUSES }).notNull().default('running'),
+  total: integer('total').notNull().default(0),
+  succeeded: integer('succeeded').notNull().default(0),
+  failed: integer('failed').notNull().default(0),
+  review_pending: integer('review_pending').notNull().default(0),
+  results_json: text('results_json'),
+  created_at: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  completed_at: integer('completed_at', { mode: 'timestamp' }),
+});
+
+export type BackgroundJob = typeof backgroundJobs.$inferSelect;
+export type BackgroundJobInsert = typeof backgroundJobs.$inferInsert;
+
 // ─── Recordings (stub — full workflow comes later) ────────────────────────────
 
 export const RECORDING_STATUSES = ['pending', 'ready', 'played'] as const;

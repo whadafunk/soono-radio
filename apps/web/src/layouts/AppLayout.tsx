@@ -1,10 +1,12 @@
 import { useState } from 'react';
 import { Outlet, Link, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   Menu, X, Radio,
   LayoutDashboard, Music2, Users, Calendar,
-  Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat,
+  Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat, Loader,
 } from 'lucide-react';
+import { fetchActivityStats } from '../api';
 
 const navItems = [
   { label: 'Dashboard',    path: '/',             icon: LayoutDashboard },
@@ -24,6 +26,13 @@ export function AppLayout() {
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const location = useLocation();
 
+  const { data: activityStats } = useQuery({
+    queryKey: ['activity-stats'],
+    queryFn: fetchActivityStats,
+    refetchInterval: 15_000,
+    staleTime: 10_000,
+  });
+
   return (
     <div className="flex h-screen bg-zinc-950">
       {/* Sidebar */}
@@ -39,19 +48,45 @@ export function AppLayout() {
           {navItems.map(({ label, path, icon: Icon }) => {
             const isActive =
               path === '/' ? location.pathname === '/' : location.pathname.startsWith(path);
+            const isLibrary = path === '/library';
+            const showRunning = isLibrary && (activityStats?.running ?? 0) > 0;
+            const showPending = isLibrary && !showRunning && (activityStats?.review_pending ?? 0) > 0;
             return (
               <Link
                 key={path}
                 to={path}
                 title={sidebarOpen ? undefined : label}
-                className={`flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
+                className={`relative flex items-center gap-3 px-3 py-2 rounded-lg transition-colors ${
                   isActive
                     ? 'bg-indigo-600 text-white'
                     : 'text-zinc-400 hover:text-white hover:bg-zinc-800'
                 }`}
               >
                 <Icon className="w-4 h-4 flex-shrink-0" />
-                {sidebarOpen && <span className="text-sm font-medium">{label}</span>}
+                {sidebarOpen ? (
+                  <>
+                    <span className="text-sm font-medium flex-1">{label}</span>
+                    {showRunning && <Loader className="w-3.5 h-3.5 animate-spin opacity-70" />}
+                    {showPending && (
+                      <span className="bg-amber-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+                        {activityStats!.review_pending}
+                      </span>
+                    )}
+                  </>
+                ) : (
+                  <>
+                    {showRunning && (
+                      <span className="absolute right-2 top-2">
+                        <Loader className="w-2.5 h-2.5 animate-spin text-blue-400" />
+                      </span>
+                    )}
+                    {showPending && (
+                      <span className="absolute right-1.5 top-1 bg-amber-500 text-black text-[9px] font-bold w-4 h-4 rounded-full flex items-center justify-center leading-none">
+                        {activityStats!.review_pending > 9 ? '9+' : activityStats!.review_pending}
+                      </span>
+                    )}
+                  </>
+                )}
               </Link>
             );
           })}
