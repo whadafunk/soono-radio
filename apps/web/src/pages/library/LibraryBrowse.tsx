@@ -173,15 +173,16 @@ export function LibraryBrowse() {
   };
 
   const facetParams = useMemo(() => ({
-    genre:      facetFilters.genres.length    ? facetFilters.genres.join(',')    : undefined,
-    artist:     facetFilters.artists.length   ? facetFilters.artists.join(',')   : undefined,
-    decade:     facetFilters.decades.length   ? facetFilters.decades.join(',')   : undefined,
-    dur_bucket: facetFilters.durBuckets.length? facetFilters.durBuckets.join(',') : undefined,
-    identified: facetFilters.identified !== 'all' ? facetFilters.identified : undefined,
-    bpm_min:    facetFilters.bpm_min ? parseFloat(facetFilters.bpm_min) || undefined : undefined,
-    bpm_max:    facetFilters.bpm_max ? parseFloat(facetFilters.bpm_max) || undefined : undefined,
-    mood:       facetFilters.moods.length     ? facetFilters.moods.join(',')     : undefined,
-    key:        facetFilters.keys.length      ? facetFilters.keys.join(',')      : undefined,
+    genre:         facetFilters.genres.length        ? facetFilters.genres.join(',')        : undefined,
+    artist:        facetFilters.artists.length       ? facetFilters.artists.join(',')       : undefined,
+    decade:        facetFilters.decades.length       ? facetFilters.decades.join(',')       : undefined,
+    dur_bucket:    facetFilters.durBuckets.length    ? facetFilters.durBuckets.join(',')    : undefined,
+    energy_bucket: facetFilters.energyBuckets.length ? facetFilters.energyBuckets.join(',') : undefined,
+    identified:    facetFilters.identified !== 'all' ? facetFilters.identified : undefined,
+    bpm_min:       facetFilters.bpm_min ? parseFloat(facetFilters.bpm_min) || undefined : undefined,
+    bpm_max:       facetFilters.bpm_max ? parseFloat(facetFilters.bpm_max) || undefined : undefined,
+    mood:          facetFilters.moods.length         ? facetFilters.moods.join(',')         : undefined,
+    key:           facetFilters.keys.length          ? facetFilters.keys.join(',')          : undefined,
   }), [facetFilters]);
 
   const { data, isLoading, error } = useQuery<LibraryListResponse>({

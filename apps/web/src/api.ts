@@ -295,6 +295,7 @@ export interface LibraryListParams {
   artist?: string;
   decade?: string;
   dur_bucket?: string;
+  energy_bucket?: string;
   identified?: 'yes' | 'no';
   bpm_min?: number;
   bpm_max?: number;
@@ -328,6 +329,7 @@ export async function fetchLibrary(params: LibraryListParams = {}): Promise<Libr
   if (params.artist) search.set('artist', params.artist);
   if (params.decade) search.set('decade', params.decade);
   if (params.dur_bucket) search.set('dur_bucket', params.dur_bucket);
+  if (params.energy_bucket) search.set('energy_bucket', params.energy_bucket);
   if (params.identified) search.set('identified', params.identified);
   if (params.bpm_min !== undefined) search.set('bpm_min', String(params.bpm_min));
   if (params.bpm_max !== undefined) search.set('bpm_max', String(params.bpm_max));

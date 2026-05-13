@@ -127,6 +127,7 @@ export const FacetsResponseSchema = z.object({
   keys: z.array(FacetValueSchema),
   moods: z.array(FacetValueSchema),
   bpm_range: z.object({ min: z.number().nullable(), max: z.number().nullable() }),
+  energy_buckets: z.array(z.object({ value: z.string(), label: z.string(), count: z.number().int() })),
 });
 export type FacetsResponse = z.infer<typeof FacetsResponseSchema>;
 

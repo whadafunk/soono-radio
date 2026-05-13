@@ -181,6 +181,7 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     artist?: string;
     decade?: string;
     dur_bucket?: string;
+    energy_bucket?: string;
     identified?: string;
     bpm_min?: string;
     bpm_max?: string;
@@ -188,7 +189,7 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     key?: string;
   }): SQL<unknown>[] {
     const filters: SQL<unknown>[] = [];
-    const { genre, artist, decade, dur_bucket, identified, bpm_min, bpm_max, mood, key } = params;
+    const { genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key } = params;
 
     if (genre) {
       const genres = genre.split(',').map((g) => g.trim()).filter(Boolean);
@@ -237,6 +238,14 @@ export async function libraryRoutes(fastify: FastifyInstance) {
       if (keys.length === 1) filters.push(eq(media.musical_key, keys[0]));
       else if (keys.length > 1) filters.push(inArray(media.musical_key, keys));
     }
+    if (energy_bucket) {
+      const buckets = energy_bucket.split(',').map((b) => b.trim());
+      const conds: SQL<unknown>[] = [];
+      if (buckets.includes('low'))    conds.push(sql`${media.energy} < 0.3`);
+      if (buckets.includes('medium')) conds.push(sql`(${media.energy} >= 0.3 AND ${media.energy} < 0.7)`);
+      if (buckets.includes('high'))   conds.push(sql`${media.energy} >= 0.7`);
+      if (conds.length > 0) filters.push(conds.length === 1 ? conds[0] : or(...conds)!);
+    }
     return filters;
   }
 
@@ -253,6 +262,7 @@ export async function libraryRoutes(fastify: FastifyInstance) {
       artist?: string;
       decade?: string;
       dur_bucket?: string;
+      energy_bucket?: string;
       identified?: string;
       bpm_min?: string;
       bpm_max?: string;
@@ -261,11 +271,11 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     };
   }>('/library', async (request, reply) => {
     const { q, category, favorite, sort, order, limit, offset,
-            genre, artist, decade, dur_bucket, identified, bpm_min, bpm_max, mood, key } = request.query;
+            genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key } = request.query;
 
     const filters = [
       ...buildBaseFilters({ q, category, favorite }),
-      ...buildFacetFilters({ genre, artist, decade, dur_bucket, identified, bpm_min, bpm_max, mood, key }),
+      ...buildFacetFilters({ genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key }),
     ];
     const whereClause = filters.length > 0 ? and(...filters) : undefined;
 
@@ -303,7 +313,7 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     const baseFilters = buildBaseFilters(request.query);
     const wc = baseFilters.length > 0 ? and(...baseFilters) : undefined;
 
-    const [genreRows, artistRows, yearRows, durRows, identRows, keyRows, moodRows, bpmRows] =
+    const [genreRows, artistRows, yearRows, durRows, identRows, keyRows, moodRows, bpmRows, energyRows] =
       await Promise.all([
         db.select({ value: media.genre, count: count() })
           .from(media)
@@ -355,6 +365,12 @@ export async function libraryRoutes(fastify: FastifyInstance) {
           min: sql<number | null>`MIN(${media.bpm})`,
           max: sql<number | null>`MAX(${media.bpm})`,
         }).from(media).where(and(wc, sql`${media.bpm} IS NOT NULL`)),
+
+        db.select({
+          low:    sql<number>`SUM(CASE WHEN ${media.energy} < 0.3 THEN 1 ELSE 0 END)`,
+          medium: sql<number>`SUM(CASE WHEN ${media.energy} >= 0.3 AND ${media.energy} < 0.7 THEN 1 ELSE 0 END)`,
+          high:   sql<number>`SUM(CASE WHEN ${media.energy} >= 0.7 THEN 1 ELSE 0 END)`,
+        }).from(media).where(and(wc, sql`${media.energy} IS NOT NULL`)),
       ]);
 
     // Group years by decade in JS
@@ -372,11 +388,11 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     const ident = identRows[0] ?? { yes: 0, no: 0 };
     const mood = moodRows[0] as Record<string, number> | undefined ?? {};
     const bpm = bpmRows[0] ?? { min: null, max: null };
+    const energy = energyRows[0] ?? { low: 0, medium: 0, high: 0 };
 
     const MOOD_KEYS = ['happy', 'sad', 'aggressive', 'relaxed', 'party', 'acoustic', 'electronic'];
     const moods = MOOD_KEYS
       .map((k) => ({ value: k, count: mood[k] ?? 0 }))
-      .filter((m) => m.count > 0)
       .sort((a, b) => b.count - a.count);
 
     return reply.send({
@@ -389,9 +405,14 @@ export async function libraryRoutes(fastify: FastifyInstance) {
         { value: 'long',   label: '> 5 min', count: dur.long   ?? 0 },
       ].filter((b) => b.count > 0),
       identified: { yes: ident.yes ?? 0, no: ident.no ?? 0 },
-      keys:   keyRows.map((r) => ({ value: r.value!, count: r.count })),
+      keys:    keyRows.map((r) => ({ value: r.value!, count: r.count })),
       moods,
       bpm_range: { min: bpm.min ?? null, max: bpm.max ?? null },
+      energy_buckets: [
+        { value: 'low',    label: 'Low (< 30%)',    count: energy.low    ?? 0 },
+        { value: 'medium', label: 'Medium (30–70%)', count: energy.medium ?? 0 },
+        { value: 'high',   label: 'High (> 70%)',    count: energy.high   ?? 0 },
+      ],
     });
   });
 

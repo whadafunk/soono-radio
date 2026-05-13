@@ -7,6 +7,7 @@ export interface FacetFilters {
   artists: string[];
   decades: number[];
   durBuckets: string[];
+  energyBuckets: string[];
   identified: 'all' | 'yes' | 'no';
   bpm_min: string;
   bpm_max: string;
@@ -19,6 +20,7 @@ export const EMPTY_FACET_FILTERS: FacetFilters = {
   artists: [],
   decades: [],
   durBuckets: [],
+  energyBuckets: [],
   identified: 'all',
   bpm_min: '',
   bpm_max: '',
@@ -32,6 +34,7 @@ export function countActiveFacets(f: FacetFilters): number {
     f.artists.length +
     f.decades.length +
     f.durBuckets.length +
+    f.energyBuckets.length +
     (f.identified !== 'all' ? 1 : 0) +
     (f.bpm_min ? 1 : 0) +
     (f.bpm_max ? 1 : 0) +
@@ -328,11 +331,28 @@ export function FacetDrawer({
           </Section>
         )}
 
-        {/* Mood */}
-        {(facets?.moods.length ?? 0) > 0 && (
-          <Section title="Mood" activeCount={filters.moods.length} defaultOpen={false}>
+        {/* Energy — always show; placeholder when no analysis data */}
+        <Section title="Energy" activeCount={filters.energyBuckets.length} defaultOpen={false}>
+          {facets && facets.energy_buckets.some((b) => b.count > 0) ? (
+            facets.energy_buckets.map((b) => (
+              <CheckItem
+                key={b.value}
+                label={b.label}
+                count={b.count}
+                checked={filters.energyBuckets.includes(b.value)}
+                onChange={() => onChange({ ...filters, energyBuckets: toggle(filters.energyBuckets, b.value) })}
+              />
+            ))
+          ) : (
+            <p className="px-3 pb-2 text-[11px] text-zinc-600 italic">Run audio analysis to use this filter</p>
+          )}
+        </Section>
+
+        {/* Mood — always show; placeholder when no analysis data */}
+        <Section title="Mood" activeCount={filters.moods.length} defaultOpen={false}>
+          {facets && facets.moods.some((m) => m.count > 0) ? (
             <div className="px-3 flex flex-wrap gap-1.5 pb-1">
-              {facets!.moods.map((m) => {
+              {facets.moods.map((m) => {
                 const active = filters.moods.includes(m.value);
                 const colorClass = MOOD_COLORS[m.value] ?? 'bg-zinc-700/20 text-zinc-300 border-zinc-600/50';
                 return (
@@ -351,8 +371,10 @@ export function FacetDrawer({
                 );
               })}
             </div>
-          </Section>
-        )}
+          ) : (
+            <p className="px-3 pb-2 text-[11px] text-zinc-600 italic">Run audio analysis to use this filter</p>
+          )}
+        </Section>
       </div>
     </div>
   );
