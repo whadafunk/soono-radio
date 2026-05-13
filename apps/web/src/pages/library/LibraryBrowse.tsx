@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
-  Loader, Search, Star, Play, Pause, X, Save, AlertCircle,
+  Loader, Search, Star, Play, Pause, Square, X, Save, AlertCircle,
   Settings2, ChevronDown, ChevronUp, ChevronsUpDown, Filter, Check,
   Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle, Wand2,
   SlidersHorizontal,
@@ -170,6 +170,7 @@ export function LibraryBrowse() {
     setCategorySet(new Set());
     setVisibleCols(loadVisibleCols(tab));
     setFacetFilters(EMPTY_FACET_FILTERS);
+    setSelection(new Set());
   };
 
   const facetParams = useMemo(() => ({
@@ -1038,7 +1039,7 @@ function LibraryTable({
                   className="p-1 text-zinc-400 hover:text-white transition-colors"
                   title={playingId === m.id ? 'Stop preview' : 'Play preview'}
                 >
-                  {playingId === m.id ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
+                  {playingId === m.id ? <Square className="w-4 h-4 fill-current" /> : <Play className="w-4 h-4" />}
                 </button>
               </td>
               {visibleColumns.map((c) => (
