@@ -23,6 +23,8 @@ import {
   User,
   UserCreate,
   UserPatch,
+  FacetsResponse,
+  FacetsResponseSchema,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -288,6 +290,22 @@ export interface LibraryListParams {
   order?: 'asc' | 'desc';
   limit?: number;
   offset?: number;
+  // Facet filters
+  genre?: string;
+  artist?: string;
+  decade?: string;
+  dur_bucket?: string;
+  identified?: 'yes' | 'no';
+  bpm_min?: number;
+  bpm_max?: number;
+  mood?: string;
+  key?: string;
+}
+
+export interface LibraryFacetsParams {
+  q?: string;
+  category?: string;
+  favorite?: boolean;
 }
 
 export interface LibraryListResponse {
@@ -306,6 +324,15 @@ export async function fetchLibrary(params: LibraryListParams = {}): Promise<Libr
   if (params.order) search.set('order', params.order);
   if (params.limit !== undefined) search.set('limit', String(params.limit));
   if (params.offset !== undefined) search.set('offset', String(params.offset));
+  if (params.genre) search.set('genre', params.genre);
+  if (params.artist) search.set('artist', params.artist);
+  if (params.decade) search.set('decade', params.decade);
+  if (params.dur_bucket) search.set('dur_bucket', params.dur_bucket);
+  if (params.identified) search.set('identified', params.identified);
+  if (params.bpm_min !== undefined) search.set('bpm_min', String(params.bpm_min));
+  if (params.bpm_max !== undefined) search.set('bpm_max', String(params.bpm_max));
+  if (params.mood) search.set('mood', params.mood);
+  if (params.key) search.set('key', params.key);
 
   const res = await fetch(`${API_BASE}/library?${search.toString()}`);
   if (!res.ok) throw new Error(`Failed to fetch library: ${res.statusText}`);
@@ -314,6 +341,16 @@ export async function fetchLibrary(params: LibraryListParams = {}): Promise<Libr
     ...data,
     items: data.items.map((i: unknown) => MediaSchema.parse(i)),
   };
+}
+
+export async function fetchLibraryFacets(params: LibraryFacetsParams = {}): Promise<FacetsResponse> {
+  const search = new URLSearchParams();
+  if (params.q) search.set('q', params.q);
+  if (params.category) search.set('category', params.category);
+  if (params.favorite !== undefined) search.set('favorite', String(params.favorite));
+  const res = await fetch(`${API_BASE}/library/facets?${search.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch library facets: ${res.statusText}`);
+  return FacetsResponseSchema.parse(await res.json());
 }
 
 export async function fetchLibraryItem(id: number): Promise<Media> {

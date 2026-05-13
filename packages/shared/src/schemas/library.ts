@@ -112,6 +112,24 @@ export const BulkFavoriteSchema = BulkIdsSchema.extend({
   favorite: z.boolean(),
 });
 
+export const FacetValueSchema = z.object({
+  value: z.string(),
+  count: z.number().int(),
+});
+export type FacetValue = z.infer<typeof FacetValueSchema>;
+
+export const FacetsResponseSchema = z.object({
+  genres: z.array(FacetValueSchema),
+  artists: z.array(FacetValueSchema),
+  decades: z.array(z.object({ value: z.number().int(), label: z.string(), count: z.number().int() })),
+  duration_buckets: z.array(z.object({ value: z.string(), label: z.string(), count: z.number().int() })),
+  identified: z.object({ yes: z.number().int(), no: z.number().int() }),
+  keys: z.array(FacetValueSchema),
+  moods: z.array(FacetValueSchema),
+  bpm_range: z.object({ min: z.number().nullable(), max: z.number().nullable() }),
+});
+export type FacetsResponse = z.infer<typeof FacetsResponseSchema>;
+
 export const IngestJobSchema = z.object({
   id: z.string(),
   status: IngestStatusSchema,

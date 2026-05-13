@@ -147,20 +147,11 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     return reply.send(row);
   });
 
-  fastify.get<{
-    Querystring: {
-      q?: string;
-      category?: string;
-      favorite?: string;
-      sort?: string;
-      order?: string;
-      limit?: string;
-      offset?: string;
-    };
-  }>('/library', async (request, reply) => {
-    const { q, category, favorite, sort, order, limit, offset } = request.query;
+  const VALID_MOODS = new Set(['happy', 'sad', 'aggressive', 'relaxed', 'party', 'acoustic', 'electronic']);
 
+  function buildBaseFilters(params: { q?: string; category?: string; favorite?: string }): SQL<unknown>[] {
     const filters: SQL<unknown>[] = [];
+    const { q, category, favorite } = params;
     if (category) {
       const categories = category
         .split(',')
@@ -182,6 +173,100 @@ export async function libraryRoutes(fastify: FastifyInstance) {
         )!,
       );
     }
+    return filters;
+  }
+
+  function buildFacetFilters(params: {
+    genre?: string;
+    artist?: string;
+    decade?: string;
+    dur_bucket?: string;
+    identified?: string;
+    bpm_min?: string;
+    bpm_max?: string;
+    mood?: string;
+    key?: string;
+  }): SQL<unknown>[] {
+    const filters: SQL<unknown>[] = [];
+    const { genre, artist, decade, dur_bucket, identified, bpm_min, bpm_max, mood, key } = params;
+
+    if (genre) {
+      const genres = genre.split(',').map((g) => g.trim()).filter(Boolean);
+      if (genres.length === 1) filters.push(eq(media.genre, genres[0]));
+      else if (genres.length > 1) filters.push(inArray(media.genre, genres));
+    }
+    if (artist) {
+      const artists = artist.split(',').map((a) => a.trim()).filter(Boolean);
+      if (artists.length === 1) filters.push(eq(media.artist, artists[0]));
+      else if (artists.length > 1) filters.push(inArray(media.artist, artists));
+    }
+    if (decade) {
+      const decades = decade.split(',').map((d) => parseInt(d.trim(), 10)).filter((d) => !isNaN(d));
+      if (decades.length > 0) {
+        const conds = decades.map((d) => sql`(${media.year} >= ${d} AND ${media.year} < ${d + 10})`);
+        filters.push(conds.length === 1 ? conds[0] : or(...conds)!);
+      }
+    }
+    if (dur_bucket) {
+      const buckets = dur_bucket.split(',').map((b) => b.trim());
+      const conds: SQL<unknown>[] = [];
+      if (buckets.includes('short'))  conds.push(sql`${media.duration_seconds} < 120`);
+      if (buckets.includes('medium')) conds.push(sql`(${media.duration_seconds} >= 120 AND ${media.duration_seconds} < 300)`);
+      if (buckets.includes('long'))   conds.push(sql`${media.duration_seconds} >= 300`);
+      if (conds.length > 0) filters.push(conds.length === 1 ? conds[0] : or(...conds)!);
+    }
+    if (identified === 'yes')  filters.push(sql`${media.title} IS NOT NULL`);
+    if (identified === 'no')   filters.push(sql`${media.title} IS NULL`);
+    if (bpm_min) {
+      const v = parseFloat(bpm_min);
+      if (!isNaN(v)) filters.push(sql`${media.bpm} >= ${v}`);
+    }
+    if (bpm_max) {
+      const v = parseFloat(bpm_max);
+      if (!isNaN(v)) filters.push(sql`${media.bpm} <= ${v}`);
+    }
+    if (mood) {
+      const moods = mood.split(',').map((m) => m.trim()).filter((m) => VALID_MOODS.has(m));
+      if (moods.length > 0) {
+        const conds = moods.map((m) => sql`json_extract(${media.mood_tags}, ${`$.${m}`}) >= 0.4`);
+        filters.push(conds.length === 1 ? conds[0] : or(...conds)!);
+      }
+    }
+    if (key) {
+      const keys = key.split(',').map((k) => k.trim()).filter(Boolean);
+      if (keys.length === 1) filters.push(eq(media.musical_key, keys[0]));
+      else if (keys.length > 1) filters.push(inArray(media.musical_key, keys));
+    }
+    return filters;
+  }
+
+  fastify.get<{
+    Querystring: {
+      q?: string;
+      category?: string;
+      favorite?: string;
+      sort?: string;
+      order?: string;
+      limit?: string;
+      offset?: string;
+      genre?: string;
+      artist?: string;
+      decade?: string;
+      dur_bucket?: string;
+      identified?: string;
+      bpm_min?: string;
+      bpm_max?: string;
+      mood?: string;
+      key?: string;
+    };
+  }>('/library', async (request, reply) => {
+    const { q, category, favorite, sort, order, limit, offset,
+            genre, artist, decade, dur_bucket, identified, bpm_min, bpm_max, mood, key } = request.query;
+
+    const filters = [
+      ...buildBaseFilters({ q, category, favorite }),
+      ...buildFacetFilters({ genre, artist, decade, dur_bucket, identified, bpm_min, bpm_max, mood, key }),
+    ];
     const whereClause = filters.length > 0 ? and(...filters) : undefined;
 
     const sortField: SortField = sort && isSortField(sort) ? sort : 'created_at';
@@ -209,6 +294,104 @@ export async function libraryRoutes(fastify: FastifyInstance) {
       total: totalRows[0]?.value ?? 0,
       limit: safeLimit,
       offset: safeOffset,
+    });
+  });
+
+  fastify.get<{
+    Querystring: { q?: string; category?: string; favorite?: string };
+  }>('/library/facets', async (request, reply) => {
+    const baseFilters = buildBaseFilters(request.query);
+    const wc = baseFilters.length > 0 ? and(...baseFilters) : undefined;
+
+    const [genreRows, artistRows, yearRows, durRows, identRows, keyRows, moodRows, bpmRows] =
+      await Promise.all([
+        db.select({ value: media.genre, count: count() })
+          .from(media)
+          .where(and(wc, sql`${media.genre} IS NOT NULL`))
+          .groupBy(media.genre)
+          .orderBy(sql`count(*) DESC`)
+          .limit(100),
+
+        db.select({ value: media.artist, count: count() })
+          .from(media)
+          .where(and(wc, sql`${media.artist} IS NOT NULL`))
+          .groupBy(media.artist)
+          .orderBy(sql`count(*) DESC`)
+          .limit(50),
+
+        db.select({ year: media.year, count: count() })
+          .from(media)
+          .where(and(wc, sql`${media.year} IS NOT NULL`))
+          .groupBy(media.year),
+
+        db.select({
+          short:  sql<number>`SUM(CASE WHEN ${media.duration_seconds} < 120 THEN 1 ELSE 0 END)`,
+          medium: sql<number>`SUM(CASE WHEN ${media.duration_seconds} >= 120 AND ${media.duration_seconds} < 300 THEN 1 ELSE 0 END)`,
+          long:   sql<number>`SUM(CASE WHEN ${media.duration_seconds} >= 300 THEN 1 ELSE 0 END)`,
+        }).from(media).where(wc),
+
+        db.select({
+          yes: sql<number>`SUM(CASE WHEN ${media.title} IS NOT NULL THEN 1 ELSE 0 END)`,
+          no:  sql<number>`SUM(CASE WHEN ${media.title} IS NULL THEN 1 ELSE 0 END)`,
+        }).from(media).where(wc),
+
+        db.select({ value: media.musical_key, count: count() })
+          .from(media)
+          .where(and(wc, sql`${media.musical_key} IS NOT NULL`))
+          .groupBy(media.musical_key)
+          .orderBy(sql`count(*) DESC`),
+
+        db.select({
+          happy:      sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.happy') >= 0.4 THEN 1 ELSE 0 END)`,
+          sad:        sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.sad') >= 0.4 THEN 1 ELSE 0 END)`,
+          aggressive: sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.aggressive') >= 0.4 THEN 1 ELSE 0 END)`,
+          relaxed:    sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.relaxed') >= 0.4 THEN 1 ELSE 0 END)`,
+          party:      sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.party') >= 0.4 THEN 1 ELSE 0 END)`,
+          acoustic:   sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.acoustic') >= 0.4 THEN 1 ELSE 0 END)`,
+          electronic: sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.electronic') >= 0.4 THEN 1 ELSE 0 END)`,
+        }).from(media).where(wc),
+
+        db.select({
+          min: sql<number | null>`MIN(${media.bpm})`,
+          max: sql<number | null>`MAX(${media.bpm})`,
+        }).from(media).where(and(wc, sql`${media.bpm} IS NOT NULL`)),
+      ]);
+
+    // Group years by decade in JS
+    const decadeMap = new Map<number, number>();
+    for (const r of yearRows) {
+      if (r.year == null) continue;
+      const decade = Math.floor(r.year / 10) * 10;
+      decadeMap.set(decade, (decadeMap.get(decade) ?? 0) + r.count);
+    }
+    const decades = [...decadeMap.entries()]
+      .sort(([a], [b]) => b - a)
+      .map(([value, cnt]) => ({ value, label: `${value}s`, count: cnt }));
+
+    const dur = durRows[0] ?? { short: 0, medium: 0, long: 0 };
+    const ident = identRows[0] ?? { yes: 0, no: 0 };
+    const mood = moodRows[0] as Record<string, number> | undefined ?? {};
+    const bpm = bpmRows[0] ?? { min: null, max: null };
+
+    const MOOD_KEYS = ['happy', 'sad', 'aggressive', 'relaxed', 'party', 'acoustic', 'electronic'];
+    const moods = MOOD_KEYS
+      .map((k) => ({ value: k, count: mood[k] ?? 0 }))
+      .filter((m) => m.count > 0)
+      .sort((a, b) => b.count - a.count);
+
+    return reply.send({
+      genres:           genreRows.map((r) => ({ value: r.value!, count: r.count })),
+      artists:          artistRows.map((r) => ({ value: r.value!, count: r.count })),
+      decades,
+      duration_buckets: [
+        { value: 'short',  label: '< 2 min', count: dur.short  ?? 0 },
+        { value: 'medium', label: '2–5 min', count: dur.medium ?? 0 },
+        { value: 'long',   label: '> 5 min', count: dur.long   ?? 0 },
+      ].filter((b) => b.count > 0),
+      identified: { yes: ident.yes ?? 0, no: ident.no ?? 0 },
+      keys:   keyRows.map((r) => ({ value: r.value!, count: r.count })),
+      moods,
+      bpm_range: { min: bpm.min ?? null, max: bpm.max ?? null },
     });
   });
 

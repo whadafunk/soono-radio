@@ -4,8 +4,10 @@ import {
   Loader, Search, Star, Play, Pause, X, Save, AlertCircle,
   Settings2, ChevronDown, ChevronUp, ChevronsUpDown, Filter, Check,
   Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle, Wand2,
+  SlidersHorizontal,
 } from 'lucide-react';
 import { MEDIA_CATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
+import { FacetDrawer, FacetFilters, EMPTY_FACET_FILTERS, countActiveFacets } from './FacetDrawer';
 
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
   music: 'Music',
@@ -41,6 +43,7 @@ const TAB_SEARCH_PLACEHOLDER: Record<LibraryTab, string> = {
 };
 import {
   fetchLibrary,
+  fetchLibraryFacets,
   fetchLibraryItem,
   updateLibraryItem,
   libraryAudioUrl,
@@ -136,6 +139,8 @@ export function LibraryBrowse() {
   const [visibleCols, setVisibleCols] = useState<Set<ColumnId>>(() => loadVisibleCols('all'));
   const [selection, setSelection] = useState<Set<number>>(new Set());
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [facetsOpen, setFacetsOpen] = useState(false);
+  const [facetFilters, setFacetFilters] = useState<FacetFilters>(EMPTY_FACET_FILTERS);
   const limit = 50;
 
   useEffect(() => {
@@ -149,7 +154,7 @@ export function LibraryBrowse() {
 
   useEffect(() => {
     setOffset(0);
-  }, [debouncedQ, categorySet, activeTab, favoriteOnly, sort, order]);
+  }, [debouncedQ, categorySet, activeTab, favoriteOnly, sort, order, facetFilters]);
 
   const categoryParam = useMemo(() => {
     const tabCats = TAB_CATEGORIES[activeTab];
@@ -164,10 +169,23 @@ export function LibraryBrowse() {
     setActiveTab(tab);
     setCategorySet(new Set());
     setVisibleCols(loadVisibleCols(tab));
+    setFacetFilters(EMPTY_FACET_FILTERS);
   };
 
+  const facetParams = useMemo(() => ({
+    genre:      facetFilters.genres.length    ? facetFilters.genres.join(',')    : undefined,
+    artist:     facetFilters.artists.length   ? facetFilters.artists.join(',')   : undefined,
+    decade:     facetFilters.decades.length   ? facetFilters.decades.join(',')   : undefined,
+    dur_bucket: facetFilters.durBuckets.length? facetFilters.durBuckets.join(',') : undefined,
+    identified: facetFilters.identified !== 'all' ? facetFilters.identified : undefined,
+    bpm_min:    facetFilters.bpm_min ? parseFloat(facetFilters.bpm_min) || undefined : undefined,
+    bpm_max:    facetFilters.bpm_max ? parseFloat(facetFilters.bpm_max) || undefined : undefined,
+    mood:       facetFilters.moods.length     ? facetFilters.moods.join(',')     : undefined,
+    key:        facetFilters.keys.length      ? facetFilters.keys.join(',')      : undefined,
+  }), [facetFilters]);
+
   const { data, isLoading, error } = useQuery<LibraryListResponse>({
-    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, sort, order, limit, offset }],
+    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, sort, order, limit, offset, facetParams }],
     queryFn: () =>
       fetchLibrary({
         q: debouncedQ || undefined,
@@ -177,7 +195,20 @@ export function LibraryBrowse() {
         order,
         limit,
         offset,
+        ...facetParams,
       }),
+  });
+
+  const { data: facets } = useQuery({
+    queryKey: ['library-facets', { q: debouncedQ, categoryParam, favoriteOnly }],
+    queryFn: () =>
+      fetchLibraryFacets({
+        q: debouncedQ || undefined,
+        category: categoryParam,
+        favorite: favoriteOnly ? true : undefined,
+      }),
+    enabled: facetsOpen,
+    staleTime: 30_000,
   });
 
   const items = data?.items ?? [];
@@ -279,6 +310,23 @@ export function LibraryBrowse() {
           />
         </div>
 
+        <button
+          onClick={() => setFacetsOpen((v) => !v)}
+          className={`relative flex items-center gap-1.5 px-3 py-2 border rounded-lg transition-colors ${
+            facetsOpen || countActiveFacets(facetFilters) > 0
+              ? 'bg-indigo-600/20 border-indigo-600 text-indigo-300'
+              : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+          }`}
+        >
+          <SlidersHorizontal className="w-4 h-4" />
+          Filters
+          {countActiveFacets(facetFilters) > 0 && (
+            <span className="ml-0.5 bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+              {countActiveFacets(facetFilters)}
+            </span>
+          )}
+        </button>
+
         {availableCategories.length > 1 && (
           <CategoryMultiSelect
             categories={availableCategories}
@@ -300,54 +348,67 @@ export function LibraryBrowse() {
         </button>
       </div>
 
-      <BulkActionBar
-        selection={selection}
-        items={items}
-        onClear={() => setSelection(new Set())}
-        showToast={showToast}
-        onSuccess={invalidateAndClear}
-      />
+      <div className="flex gap-4 items-start">
+        {facetsOpen && (
+          <FacetDrawer
+            facets={facets}
+            filters={facetFilters}
+            onChange={setFacetFilters}
+            onReset={() => setFacetFilters(EMPTY_FACET_FILTERS)}
+          />
+        )}
 
-      {error && (
-        <div className="bg-red-900/20 border border-red-800 rounded-lg p-3 text-red-300 flex items-start gap-2">
-          <AlertCircle className="w-4 h-4 mt-0.5" />
-          <p className="text-sm">{(error as Error).message}</p>
-        </div>
-      )}
+        <div className="flex-1 min-w-0 space-y-4">
+          <BulkActionBar
+            selection={selection}
+            items={items}
+            onClear={() => setSelection(new Set())}
+            showToast={showToast}
+            onSuccess={invalidateAndClear}
+          />
 
-      {isLoading && items.length === 0 ? (
-        <div className="flex items-center justify-center py-16">
-          <Loader className="w-6 h-6 animate-spin text-indigo-500" />
-        </div>
-      ) : items.length === 0 ? (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-zinc-400">
-          <p>No tracks match these filters.</p>
-        </div>
-      ) : (
-        <LibraryTable
-          items={items}
-          visibleColumns={visibleColumns}
-          sort={sort}
-          order={order}
-          onSortClick={handleSortClick}
-          playingId={playingId}
-          onTogglePlay={(id) => setPlayingId((cur) => (cur === id ? null : id))}
-          onSelect={(id) => setSelectedId(id)}
-          visibleCols={visibleCols}
-          setVisibleCols={setVisibleCols}
-          selection={selection}
-          toggleSelect={toggleSelect}
-          toggleSelectAll={toggleSelectAll}
-        />
-      )}
+          {error && (
+            <div className="bg-red-900/20 border border-red-800 rounded-lg p-3 text-red-300 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 mt-0.5" />
+              <p className="text-sm">{(error as Error).message}</p>
+            </div>
+          )}
 
-      <Pagination
-        total={total}
-        limit={limit}
-        offset={offset}
-        onPrev={() => setOffset((o) => Math.max(0, o - limit))}
-        onNext={() => setOffset((o) => o + limit)}
-      />
+          {isLoading && items.length === 0 ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader className="w-6 h-6 animate-spin text-indigo-500" />
+            </div>
+          ) : items.length === 0 ? (
+            <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-zinc-400">
+              <p>No tracks match these filters.</p>
+            </div>
+          ) : (
+            <LibraryTable
+              items={items}
+              visibleColumns={visibleColumns}
+              sort={sort}
+              order={order}
+              onSortClick={handleSortClick}
+              playingId={playingId}
+              onTogglePlay={(id) => setPlayingId((cur) => (cur === id ? null : id))}
+              onSelect={(id) => setSelectedId(id)}
+              visibleCols={visibleCols}
+              setVisibleCols={setVisibleCols}
+              selection={selection}
+              toggleSelect={toggleSelect}
+              toggleSelectAll={toggleSelectAll}
+            />
+          )}
+
+          <Pagination
+            total={total}
+            limit={limit}
+            offset={offset}
+            onPrev={() => setOffset((o) => Math.max(0, o - limit))}
+            onNext={() => setOffset((o) => o + limit)}
+          />
+        </div>
+      </div>
 
       {selectedId !== null && (
         <DetailDrawer
