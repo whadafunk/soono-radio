@@ -23,8 +23,7 @@ import {
   DYNAMIC_RULE_FIELDS,
   type Playlist, type PlaylistCreate,
   type DynamicRules, type DynamicRuleCondition, type DynamicRuleField, type DynamicRuleOp,
-  type PlaylistPreview,
-  MEDIA_CATEGORIES,
+  type PlaylistPreview, type MoodConditionValue,
 } from '@radio/shared';
 
 // ─── API base ─────────────────────────────────────────────────────────────────
@@ -96,37 +95,61 @@ interface MediaRow {
 // ─── Label maps ───────────────────────────────────────────────────────────────
 
 const FIELD_LABELS: Record<DynamicRuleField, string> = {
-  category: 'Category',
-  genre: 'Genre',
-  artist: 'Artist',
-  album: 'Album',
-  year: 'Year',
-  duration_seconds: 'Duration',
-  loudness_lufs: 'Loudness (LUFS)',
-  tags: 'Tags',
+  genre:             'Genre',
+  artist:            'Artist',
+  album:             'Album',
+  year:              'Year',
+  duration_seconds:  'Duration (s)',
+  bpm:               'BPM',
+  mood:              'Mood',
+  energy_level:      'Energy',
+  danceability_level:'Danceability',
+  tags:              'Tags',
 };
 
 const OP_LABELS: Record<DynamicRuleOp, string> = {
-  eq: 'is',
-  contains: 'contains',
-  in: 'is one of',
-  any_of: 'includes any of',
-  all_of: 'includes all of',
-  gte: '≥',
-  lte: '≤',
+  eq:      'is',
+  contains:'contains',
+  in:      'is one of',
+  any_of:  'includes any of',
+  all_of:  'includes all of',
+  gte:     '≥',
+  lte:     '≤',
   between: 'between',
 };
 
 // Valid ops per field
 const FIELD_OPS: Record<DynamicRuleField, DynamicRuleOp[]> = {
-  category:         ['in'],
-  genre:            ['eq', 'contains'],
-  artist:           ['eq', 'contains'],
-  album:            ['eq', 'contains'],
-  year:             ['eq', 'gte', 'lte', 'between'],
-  duration_seconds: ['gte', 'lte', 'between'],
-  loudness_lufs:    ['gte', 'lte', 'between'],
-  tags:             ['any_of', 'all_of'],
+  genre:             ['eq', 'contains'],
+  artist:            ['eq', 'contains'],
+  album:             ['eq', 'contains'],
+  year:              ['eq', 'gte', 'lte', 'between'],
+  duration_seconds:  ['gte', 'lte', 'between'],
+  bpm:               ['between', 'gte', 'lte'],
+  mood:              ['any_of'],
+  energy_level:      ['any_of'],
+  danceability_level:['any_of'],
+  tags:              ['any_of', 'all_of'],
+};
+
+const MOOD_LABELS: Record<string, string> = {
+  happy:      'Happy',
+  sad:        'Sad',
+  aggressive: 'Aggressive',
+  relaxed:    'Relaxed',
+  party:      'Party',
+  acoustic:   'Acoustic',
+  electronic: 'Electronic',
+};
+
+const MOOD_COLORS: Record<string, string> = {
+  happy:      'bg-yellow-500/20 text-yellow-300 border-yellow-700/50',
+  sad:        'bg-blue-500/20 text-blue-300 border-blue-700/50',
+  aggressive: 'bg-red-500/20 text-red-300 border-red-700/50',
+  relaxed:    'bg-teal-500/20 text-teal-300 border-teal-700/50',
+  party:      'bg-pink-500/20 text-pink-300 border-pink-700/50',
+  acoustic:   'bg-amber-500/20 text-amber-300 border-amber-700/50',
+  electronic: 'bg-violet-500/20 text-violet-300 border-violet-700/50',
 };
 
 const TYPE_LABELS: Record<(typeof PLAYLIST_TYPES)[number], string> = {
@@ -135,6 +158,14 @@ const TYPE_LABELS: Record<(typeof PLAYLIST_TYPES)[number], string> = {
   bed: 'Bed',
   promo: 'Promo',
   spot: 'Spot',
+};
+
+const TYPE_COLORS: Record<(typeof PLAYLIST_TYPES)[number], string> = {
+  music:  'bg-blue-600/20 text-blue-300 border border-blue-700/40',
+  jingle: 'bg-emerald-600/20 text-emerald-300 border border-emerald-700/40',
+  bed:    'bg-amber-600/20 text-amber-300 border border-amber-700/40',
+  promo:  'bg-violet-600/20 text-violet-300 border border-violet-700/40',
+  spot:   'bg-rose-600/20 text-rose-300 border border-rose-700/40',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -146,15 +177,143 @@ function fmtDuration(s: number): string {
   return `${m}:${sec.toString().padStart(2, '0')}`;
 }
 
+function fmtTotalDuration(s: number): string {
+  if (!Number.isFinite(s) || s <= 0) return '0:00';
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = Math.floor(s % 60);
+  if (h > 0) return `${h}h ${m}m`;
+  return `${m}:${sec.toString().padStart(2, '0')}`;
+}
+
 function defaultValueForField(field: DynamicRuleField, op: DynamicRuleOp): DynamicRuleCondition['value'] {
-  if (field === 'category') return [];
-  if (field === 'tags') return [];
-  if (op === 'between') return [0, 0];
+  if (field === 'mood') return { moods: [], min_score: 0.5 };
+  if (field === 'tags' || field === 'energy_level' || field === 'danceability_level') return [];
+  if (op === 'between') return field === 'bpm' ? [60, 180] : [0, 0];
   if (op === 'in') return [];
   if (op === 'gte' || op === 'lte' || op === 'eq') {
-    if (field === 'year' || field === 'duration_seconds' || field === 'loudness_lufs') return 0;
+    if (field === 'year' || field === 'duration_seconds' || field === 'bpm') return 0;
   }
   return '';
+}
+
+// ─── New Playlist Modal ───────────────────────────────────────────────────────
+
+function NewPlaylistModal({
+  onConfirm,
+  onCancel,
+  isPending,
+}: {
+  onConfirm: (name: string, type: (typeof PLAYLIST_TYPES)[number], kind: 'static' | 'dynamic') => void;
+  onCancel: () => void;
+  isPending: boolean;
+}) {
+  const [name, setName] = useState('');
+  const [type, setType] = useState<(typeof PLAYLIST_TYPES)[number]>('music');
+  const [kind, setKind] = useState<'static' | 'dynamic'>('static');
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => { inputRef.current?.focus(); }, []);
+
+  // Non-music types are always static
+  useEffect(() => {
+    if (type !== 'music') setKind('static');
+  }, [type]);
+
+  const submit = () => { if (name.trim()) onConfirm(name.trim(), type, kind); };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center">
+      <div className="absolute inset-0 bg-black/60" onClick={onCancel} />
+      <div className="relative bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-[460px] p-6 flex flex-col gap-5">
+        <h2 className="text-base font-semibold text-white">New Playlist</h2>
+
+        <div>
+          <label className="text-xs font-medium text-zinc-400 block mb-1.5">Name</label>
+          <input
+            ref={inputRef}
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') submit();
+              if (e.key === 'Escape') onCancel();
+            }}
+            placeholder="e.g. Morning Pop Hits"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
+          />
+        </div>
+
+        <div>
+          <label className="text-xs font-medium text-zinc-400 block mb-1.5">Content type</label>
+          <div className="grid grid-cols-5 gap-1.5">
+            {PLAYLIST_TYPES.map((t) => (
+              <button
+                key={t}
+                onClick={() => setType(t)}
+                className={`py-2 rounded-lg text-sm border transition-colors ${
+                  type === t
+                    ? 'bg-zinc-700 border-zinc-500 text-white font-medium'
+                    : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                }`}
+              >
+                {TYPE_LABELS[t]}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {type === 'music' && (
+          <div>
+            <label className="text-xs font-medium text-zinc-400 block mb-1.5">How it's built</label>
+            <div className="flex rounded-lg border border-zinc-700 overflow-hidden text-sm">
+              <button
+                onClick={() => setKind('static')}
+                className={`flex-1 px-4 py-1.5 transition-colors ${
+                  kind === 'static'
+                    ? 'bg-zinc-700 text-white'
+                    : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Static
+              </button>
+              <button
+                onClick={() => setKind('dynamic')}
+                className={`flex-1 px-4 py-1.5 transition-colors ${
+                  kind === 'dynamic'
+                    ? 'bg-indigo-600 text-white'
+                    : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                Dynamic
+              </button>
+            </div>
+            <p className="text-[11px] text-zinc-500 mt-1.5">
+              {kind === 'static'
+                ? 'Ordered track list you curate manually.'
+                : 'Tracks auto-matched by rules you define.'}
+            </p>
+          </div>
+        )}
+
+        <div className="flex gap-2 justify-end pt-1">
+          <button
+            onClick={onCancel}
+            className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={submit}
+            disabled={!name.trim() || isPending}
+            className="px-4 py-2 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+          >
+            {isPending && <Loader className="w-3.5 h-3.5 animate-spin" />}
+            Create playlist
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -163,11 +322,7 @@ export function PlaylistsPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
-
-  // New playlist inline form state
-  const [creatingKind, setCreatingKind] = useState<'static' | 'dynamic' | null>(null);
-  const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState<(typeof PLAYLIST_TYPES)[number]>('music');
+  const [isCreating, setIsCreating] = useState(false);
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -184,34 +339,30 @@ export function PlaylistsPage() {
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['playlists'] });
       setSelectedId(created.id);
-      setCreatingKind(null);
-      setNewName('');
-      setNewType('music');
+      setIsCreating(false);
       showToast('success', 'Playlist created');
     },
     onError: (e) => showToast('error', (e as Error).message),
   });
 
-  const handleCreateConfirm = () => {
-    if (!newName.trim() || !creatingKind) return;
-    createMutation.mutate({ name: newName.trim(), type: newType, kind: creatingKind });
-  };
-
-  const handleCreateCancel = () => {
-    setCreatingKind(null);
-    setNewName('');
-    setNewType('music');
-  };
-
   const selectedPlaylist = playlists.find((p) => p.id === selectedId) ?? null;
 
   return (
     <div className="h-full flex flex-col gap-4">
-      <div className="flex-shrink-0">
-        <h1 className="text-3xl font-bold text-white">Playlists</h1>
-        <p className="text-zinc-400 mt-1 text-sm">
-          Manage static track lists and smart dynamic playlists.
-        </p>
+      {/* ── Top ribbon ── */}
+      <div className="flex-shrink-0 flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold text-white">Playlists</h1>
+          <p className="text-zinc-400 mt-1 text-sm">
+            Manage static track lists and smart dynamic playlists.
+          </p>
+        </div>
+        <button
+          onClick={() => setIsCreating(true)}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+        >
+          <Plus className="w-4 h-4" /> New Playlist
+        </button>
       </div>
 
       {toast && (
@@ -228,105 +379,56 @@ export function PlaylistsPage() {
 
       <div className="flex-1 min-h-0 flex gap-4">
         {/* ── Left panel ── */}
-        <div className="w-64 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-          {/* Header with two create buttons */}
-          <div className="px-3 py-2.5 border-b border-zinc-800 flex items-center gap-1.5 flex-shrink-0">
+        <div className="w-72 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          <div className="px-3 py-2.5 border-b border-zinc-800 flex items-center gap-2 flex-shrink-0">
             <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex-1">Playlists</span>
-            <button
-              onClick={() => { setCreatingKind('static'); setNewName(''); setNewType('music'); }}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded transition-colors"
-              title="New static playlist"
-            >
-              <Plus className="w-3 h-3" /> Static
-            </button>
-            <button
-              onClick={() => { setCreatingKind('dynamic'); setNewName(''); setNewType('music'); }}
-              className="flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 bg-indigo-600/20 hover:bg-indigo-600/30 rounded transition-colors"
-              title="New dynamic playlist"
-            >
-              <Plus className="w-3 h-3" /> Dynamic
-            </button>
+            {playlists.length > 0 && (
+              <span className="text-xs text-zinc-600">{playlists.length}</span>
+            )}
           </div>
 
-          {/* Inline new-playlist form */}
-          {creatingKind !== null && (
-            <div className="px-3 py-2 border-b border-zinc-800 space-y-1.5 flex-shrink-0">
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') handleCreateConfirm();
-                  if (e.key === 'Escape') handleCreateCancel();
-                }}
-                placeholder="Playlist name…"
-                className="w-full px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
-              />
-              <select
-                value={newType}
-                onChange={(e) => setNewType(e.target.value as typeof newType)}
-                className="w-full px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-              >
-                {PLAYLIST_TYPES.map((t) => (
-                  <option key={t} value={t} className="bg-zinc-900">{TYPE_LABELS[t]}</option>
-                ))}
-              </select>
-              <div className="flex gap-1.5">
-                <button
-                  onClick={handleCreateConfirm}
-                  disabled={!newName.trim() || createMutation.isPending}
-                  className="flex-1 flex items-center justify-center gap-1 px-2 py-1 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50"
-                >
-                  <Check className="w-3 h-3" />
-                  {creatingKind === 'static' ? 'Static' : 'Dynamic'}
-                </button>
-                <button
-                  onClick={handleCreateCancel}
-                  className="px-2 py-1 text-xs text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded transition-colors"
-                >
-                  <X className="w-3 h-3" />
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* List */}
           <div className="flex-1 overflow-y-auto">
-            {playlists.length === 0 && creatingKind === null && (
-              <p className="px-4 py-6 text-xs text-zinc-400 text-center">
-                No playlists yet.<br />Create one to get started.
-              </p>
+            {playlists.length === 0 ? (
+              <div className="px-4 py-8 text-center">
+                <p className="text-xs text-zinc-500">No playlists yet.</p>
+                <p className="text-xs text-zinc-600 mt-1">Use the button above to create one.</p>
+              </div>
+            ) : (
+              PLAYLIST_TYPES.map((type) => {
+                const group = playlists.filter((p) => p.type === type);
+                if (group.length === 0) return null;
+                return (
+                  <div key={type}>
+                    <div className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 select-none">
+                      {TYPE_LABELS[type]}
+                    </div>
+                    {group.map((pl) => {
+                      const isSelected = pl.id === selectedId;
+                      return (
+                        <button
+                          key={pl.id}
+                          onClick={() => setSelectedId(pl.id)}
+                          className={`w-full text-left px-3 py-2 border-b border-zinc-800/40 transition-colors ${
+                            isSelected
+                              ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
+                              : 'hover:bg-zinc-800/50'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0">
+                            <span className="text-sm text-white truncate flex-1">{pl.name}</span>
+                            {pl.kind === 'dynamic' && (
+                              <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-indigo-600/30 text-indigo-300 font-medium">
+                                dynamic
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })
             )}
-            {playlists.map((pl) => {
-              const isSelected = pl.id === selectedId;
-              return (
-                <button
-                  key={pl.id}
-                  onClick={() => setSelectedId(pl.id)}
-                  className={`w-full text-left px-3 py-2.5 border-b border-zinc-800/60 transition-colors ${
-                    isSelected
-                      ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
-                      : 'hover:bg-zinc-800/50'
-                  }`}
-                >
-                  <div className="flex items-center gap-2 min-w-0">
-                    <span className="text-sm font-medium text-white truncate flex-1">{pl.name}</span>
-                    <span
-                      className={`flex-shrink-0 text-xs px-1.5 py-0.5 rounded font-medium ${
-                        pl.kind === 'dynamic'
-                          ? 'bg-indigo-600/30 text-indigo-300'
-                          : 'bg-zinc-700 text-zinc-400'
-                      }`}
-                    >
-                      {pl.kind}
-                    </span>
-                  </div>
-                  <div className="mt-0.5 flex items-center gap-1.5">
-                    <span className="text-xs text-zinc-500">{TYPE_LABELS[pl.type]}</span>
-                  </div>
-                </button>
-              );
-            })}
           </div>
         </div>
 
@@ -347,10 +449,24 @@ export function PlaylistsPage() {
           )
         ) : (
           <div className="flex-1 flex items-center justify-center bg-zinc-900 border border-zinc-800 rounded-lg">
-            <p className="text-zinc-400 text-sm">Select a playlist to edit it</p>
+            <div className="text-center">
+              <p className="text-zinc-400 text-sm">Select a playlist to edit it</p>
+              <p className="text-zinc-600 text-xs mt-1">or create a new one above</p>
+            </div>
           </div>
         )}
       </div>
+
+      {/* ── Modal ── */}
+      {isCreating && (
+        <NewPlaylistModal
+          onConfirm={(name, type, kind) =>
+            createMutation.mutate({ name, type, kind })
+          }
+          onCancel={() => setIsCreating(false)}
+          isPending={createMutation.isPending}
+        />
+      )}
     </div>
   );
 }
@@ -425,17 +541,15 @@ function PlaylistHeader({
             {playlist.name}
           </button>
         )}
-        <span
-          className={`flex-shrink-0 text-xs px-2 py-0.5 rounded font-medium ${
-            playlist.kind === 'dynamic'
-              ? 'bg-indigo-600/30 text-indigo-300'
-              : 'bg-zinc-700 text-zinc-400'
-          }`}
-        >
-          {playlist.kind}
-        </span>
-        <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-zinc-800 text-zinc-400">
+        <span className={`flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full font-medium ${TYPE_COLORS[playlist.type]}`}>
           {TYPE_LABELS[playlist.type]}
+        </span>
+        <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded font-medium ${
+          playlist.kind === 'dynamic'
+            ? 'bg-indigo-600/30 text-indigo-300'
+            : 'bg-zinc-800 text-zinc-500'
+        }`}>
+          {playlist.kind}
         </span>
       </div>
 
@@ -507,9 +621,9 @@ function StaticEditor({
     },
   });
 
-  const addTrackMutation = useMutation({
-    mutationFn: (mediaId: number) =>
-      apiPost<TrackRow>(`/playlists/${playlist.id}/tracks`, { media_id: mediaId }),
+  const addTracksMutation = useMutation({
+    mutationFn: (mediaIds: number[]) =>
+      apiPost<TrackRow[]>(`/playlists/${playlist.id}/tracks/bulk`, { media_ids: mediaIds }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playlist-tracks', playlist.id] });
     },
@@ -518,15 +632,6 @@ function StaticEditor({
 
   const removeTrackMutation = useMutation({
     mutationFn: (trackId: number) => apiDelete(`/playlists/${playlist.id}/tracks/${trackId}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['playlist-tracks', playlist.id] });
-    },
-    onError: (e) => showToast('error', (e as Error).message),
-  });
-
-  const updateWeightMutation = useMutation({
-    mutationFn: ({ trackId, weight }: { trackId: number; weight: number }) =>
-      apiPatch<TrackRow>(`/playlists/${playlist.id}/tracks/${trackId}`, { weight }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playlist-tracks', playlist.id] });
     },
@@ -548,48 +653,65 @@ function StaticEditor({
     );
   };
 
+  const totalSeconds = tracks.reduce((sum, t) => sum + t.duration_seconds, 0);
+
   return (
     <div className="flex-1 min-w-0 flex flex-col gap-4">
       <PlaylistHeader playlist={playlist} showToast={showToast} onDeleted={onDeleted} />
 
       {/* Track list */}
-      <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-5 py-3 border-b border-zinc-800 flex-shrink-0 flex items-center gap-2">
-          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Tracks</span>
-          <span className="text-xs text-zinc-500">({tracks.length})</span>
+      <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg">
+        {/* Search / add */}
+        <div className="flex-shrink-0 border-b border-zinc-800 px-4 py-3">
+          <LibrarySearch
+            category={playlist.type}
+            onAddMultiple={(ids) => addTracksMutation.mutate(ids)}
+            adding={addTracksMutation.isPending}
+          />
         </div>
 
         <div className="flex-1 min-h-0 overflow-y-auto">
           {tracks.length === 0 ? (
-            <p className="px-5 py-8 text-sm text-zinc-400 text-center">
-              No tracks yet — search below to add some.
+            <p className="px-5 py-10 text-sm text-zinc-500 text-center">
+              No tracks yet — search above to add some.
             </p>
           ) : (
             <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
               <SortableContext items={tracks.map((t) => t.id)} strategy={verticalListSortingStrategy}>
-                <div className="divide-y divide-zinc-800/60">
-                  {tracks.map((track, index) => (
-                    <SortableTrackRow
-                      key={track.id}
-                      track={track}
-                      index={index}
-                      onRemove={() => removeTrackMutation.mutate(track.id)}
-                      onWeightChange={(w) => updateWeightMutation.mutate({ trackId: track.id, weight: w })}
-                    />
-                  ))}
-                </div>
+                <table className="w-full text-sm">
+                  <thead className="sticky top-0 bg-zinc-900 border-b border-zinc-800 z-10">
+                    <tr>
+                      <th className="w-8 px-2 py-2" />
+                      <th className="w-8 px-1 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-zinc-600">#</th>
+                      <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Title</th>
+                      <th className="px-3 py-2 text-left text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Artist</th>
+                      <th className="px-3 py-2 text-right text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Duration</th>
+                      <th className="w-10 px-2 py-2" />
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tracks.map((track, index) => (
+                      <SortableTrackRow
+                        key={track.id}
+                        track={track}
+                        index={index}
+                        onRemove={() => removeTrackMutation.mutate(track.id)}
+                      />
+                    ))}
+                  </tbody>
+                </table>
               </SortableContext>
             </DndContext>
           )}
         </div>
 
-        {/* Search / add */}
-        <div className="flex-shrink-0 border-t border-zinc-800 px-5 py-4">
-          <LibrarySearch
-            onAdd={(mediaId) => addTrackMutation.mutate(mediaId)}
-            adding={addTrackMutation.isPending}
-          />
-        </div>
+        {tracks.length > 0 && (
+          <div className="flex-shrink-0 border-t border-zinc-800 px-4 py-2 flex items-center gap-2 text-xs text-zinc-500">
+            <span>{tracks.length} track{tracks.length !== 1 ? 's' : ''}</span>
+            <span className="text-zinc-700">·</span>
+            <span className="font-mono">{fmtTotalDuration(totalSeconds)}</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -598,12 +720,11 @@ function StaticEditor({
 // ─── Sortable track row ───────────────────────────────────────────────────────
 
 function SortableTrackRow({
-  track, index, onRemove, onWeightChange,
+  track, index, onRemove,
 }: {
   track: TrackRow;
   index: number;
   onRemove: () => void;
-  onWeightChange: (w: number) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: track.id });
 
@@ -611,68 +732,63 @@ function SortableTrackRow({
     transform: CSS.Transform.toString(transform),
     transition,
     opacity: isDragging ? 0.4 : 1,
-    position: 'relative' as const,
-    zIndex: isDragging ? 10 : undefined,
   };
 
   return (
-    <div ref={setNodeRef} style={style} className="flex items-center gap-2 px-3 py-2 group hover:bg-zinc-800/40">
-      <button
-        {...attributes}
-        {...listeners}
-        className="cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-400 transition-colors touch-none flex-shrink-0 p-0.5"
-      >
-        <GripVertical className="w-4 h-4" />
-      </button>
-
-      <span className="flex-shrink-0 w-6 text-right text-xs text-zinc-500 font-mono">{index + 1}</span>
-
-      <div className="flex-1 min-w-0">
-        <p className="text-sm text-white truncate">
+    <tr
+      ref={setNodeRef}
+      style={style}
+      className={`border-t border-zinc-800/60 group hover:bg-zinc-800/30 ${isDragging ? 'relative z-10' : ''}`}
+    >
+      <td className="w-8 px-2 py-2">
+        <button
+          {...attributes}
+          {...listeners}
+          className="cursor-grab active:cursor-grabbing text-zinc-700 hover:text-zinc-400 transition-colors touch-none p-0.5"
+        >
+          <GripVertical className="w-4 h-4" />
+        </button>
+      </td>
+      <td className="w-8 px-1 py-2 text-right text-xs text-zinc-600 font-mono">{index + 1}</td>
+      <td className="px-3 py-2 max-w-xs">
+        <p className="text-sm text-zinc-100 truncate">
           {track.title ?? <span className="italic text-zinc-500">{track.original_filename}</span>}
         </p>
-        {track.artist && (
-          <p className="text-xs text-zinc-400 truncate">{track.artist}</p>
-        )}
-      </div>
-
-      <span className="flex-shrink-0 text-xs text-zinc-400 font-mono w-10 text-right">
+      </td>
+      <td className="px-3 py-2 max-w-xs">
+        <p className="text-sm text-zinc-400 truncate">{track.artist ?? '—'}</p>
+      </td>
+      <td className="px-3 py-2 text-right text-xs text-zinc-400 font-mono whitespace-nowrap">
         {fmtDuration(track.duration_seconds)}
-      </span>
-
-      <div className="flex-shrink-0 flex items-center gap-1">
-        <span className="text-xs text-zinc-500">wt</span>
-        <input
-          type="number"
-          min={1}
-          max={10}
-          value={track.weight}
-          onChange={(e) => {
-            const v = parseInt(e.target.value, 10);
-            if (!isNaN(v) && v >= 1 && v <= 10) onWeightChange(v);
-          }}
-          className="w-12 px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
-          onClick={(e) => e.stopPropagation()}
-        />
-      </div>
-
-      <button
-        onClick={onRemove}
-        className="flex-shrink-0 p-1 text-zinc-500 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors opacity-0 group-hover:opacity-100"
-        title="Remove track"
-      >
-        <X className="w-3.5 h-3.5" />
-      </button>
-    </div>
+      </td>
+      <td className="w-10 px-2 py-2 text-center">
+        <button
+          onClick={onRemove}
+          className="p-1 text-zinc-600 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors opacity-0 group-hover:opacity-100"
+          title="Remove"
+        >
+          <X className="w-3.5 h-3.5" />
+        </button>
+      </td>
+    </tr>
   );
 }
 
 // ─── Library search (add-track input) ────────────────────────────────────────
 
-function LibrarySearch({ onAdd, adding }: { onAdd: (mediaId: number) => void; adding: boolean }) {
+function LibrarySearch({
+  category,
+  onAddMultiple,
+  adding,
+}: {
+  category: string;
+  onAddMultiple: (mediaIds: number[]) => void;
+  adding: boolean;
+}) {
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
   const [open, setOpen] = useState(false);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -680,16 +796,17 @@ function LibrarySearch({ onAdd, adding }: { onAdd: (mediaId: number) => void; ad
     return () => clearTimeout(t);
   }, [q]);
 
-  const { data, isFetching } = useQuery<{ data: MediaRow[] }>({
-    queryKey: ['library-search', debouncedQ],
-    queryFn: () => apiFetch(`/library?q=${encodeURIComponent(debouncedQ)}&limit=20`),
+  const { data, isFetching } = useQuery<{ items: MediaRow[] }>({
+    queryKey: ['library-search', debouncedQ, category],
+    queryFn: () =>
+      apiFetch(`/library?q=${encodeURIComponent(debouncedQ)}&category=${encodeURIComponent(category)}&limit=30`),
     enabled: debouncedQ.trim().length > 0,
   });
 
-  const results: MediaRow[] = data?.data ?? [];
+  const results: MediaRow[] = data?.items ?? [];
 
   useEffect(() => {
-    if (!open) return;
+    if (open) return;
     const handler = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
@@ -699,6 +816,24 @@ function LibrarySearch({ onAdd, adding }: { onAdd: (mediaId: number) => void; ad
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  const toggleSelect = (id: number) => {
+    setSelected((cur) => {
+      const next = new Set(cur);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  };
+
+  const handleAdd = () => {
+    if (selected.size === 0 || adding) return;
+    onAddMultiple(Array.from(selected));
+    setSelected(new Set());
+    setQ('');
+    setDebouncedQ('');
+    setOpen(false);
+  };
+
   return (
     <div ref={containerRef} className="relative">
       <div className="relative">
@@ -707,7 +842,7 @@ function LibrarySearch({ onAdd, adding }: { onAdd: (mediaId: number) => void; ad
           value={q}
           onChange={(e) => { setQ(e.target.value); setOpen(true); }}
           onFocus={() => { if (q.trim()) setOpen(true); }}
-          placeholder="Search library to add tracks…"
+          placeholder={`Search ${category} tracks to add…`}
           className="w-full pl-9 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
         />
         {isFetching && (
@@ -716,33 +851,67 @@ function LibrarySearch({ onAdd, adding }: { onAdd: (mediaId: number) => void; ad
       </div>
 
       {open && debouncedQ.trim().length > 0 && (
-        <div className="absolute bottom-full left-0 right-0 mb-1 z-20 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl max-h-60 overflow-y-auto">
-          {results.length === 0 && !isFetching ? (
-            <p className="px-4 py-3 text-sm text-zinc-500">No results</p>
-          ) : (
-            results.map((item) => (
-              <button
-                key={item.id}
-                onClick={() => {
-                  onAdd(item.id);
-                  setQ('');
-                  setDebouncedQ('');
-                  setOpen(false);
-                }}
-                disabled={adding}
-                className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors text-left disabled:opacity-50"
-              >
-                <div className="flex-1 min-w-0">
-                  <p className="text-sm text-white truncate">
-                    {item.title ?? <span className="italic text-zinc-500">{item.original_filename}</span>}
-                  </p>
-                  {item.artist && <p className="text-xs text-zinc-400 truncate">{item.artist}</p>}
-                </div>
-                <span className="flex-shrink-0 text-xs text-zinc-500 font-mono">
-                  {fmtDuration(item.duration_seconds)}
-                </span>
-              </button>
-            ))
+        <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl flex flex-col">
+          <div className="max-h-64 overflow-y-auto">
+            {results.length === 0 && !isFetching ? (
+              <p className="px-4 py-3 text-sm text-zinc-500">No results</p>
+            ) : (
+              results.map((item) => {
+                const isSelected = selected.has(item.id);
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => toggleSelect(item.id)}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors text-left ${
+                      isSelected ? 'bg-indigo-600/10' : ''
+                    }`}
+                  >
+                    <span
+                      className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                        isSelected ? 'bg-indigo-600 border-indigo-600' : 'border-zinc-600'
+                      }`}
+                    >
+                      {isSelected && <Check className="w-2.5 h-2.5 text-white" />}
+                    </span>
+                    <div className="flex-1 min-w-0">
+                      <p className="text-sm text-white truncate">
+                        {item.title ?? <span className="italic text-zinc-500">{item.original_filename}</span>}
+                      </p>
+                      {item.artist && <p className="text-xs text-zinc-400 truncate">{item.artist}</p>}
+                    </div>
+                    <span className="flex-shrink-0 text-xs text-zinc-500 font-mono">
+                      {fmtDuration(item.duration_seconds)}
+                    </span>
+                  </button>
+                );
+              })
+            )}
+          </div>
+
+          {selected.size > 0 && (
+            <div className="border-t border-zinc-800 px-4 py-2.5 flex items-center justify-between flex-shrink-0">
+              <span className="text-xs text-zinc-400">
+                {selected.size} selected
+              </span>
+              <div className="flex items-center gap-3">
+                <button
+                  onClick={() => setSelected(new Set())}
+                  className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  Clear
+                </button>
+                <button
+                  onClick={handleAdd}
+                  disabled={adding}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50"
+                >
+                  {adding
+                    ? <Loader className="w-3 h-3 animate-spin" />
+                    : <Plus className="w-3 h-3" />}
+                  Add {selected.size} track{selected.size !== 1 ? 's' : ''}
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -779,7 +948,7 @@ function DynamicEditor({
     const t = setTimeout(async () => {
       setPreviewLoading(true);
       try {
-        const result = await apiPost<PlaylistPreview>('/playlists/preview', rules);
+        const result = await apiPost<PlaylistPreview>(`/playlists/${playlist.id}/preview`, rules);
         setPreview(result);
       } catch {
         // silent
@@ -788,7 +957,7 @@ function DynamicEditor({
       }
     }, 500);
     return () => clearTimeout(t);
-  }, [rules]);
+  }, [rules, playlist.id]);
 
   const saveMutation = useMutation({
     mutationFn: () => apiPatch<Playlist>(`/playlists/${playlist.id}`, { rules }),
@@ -806,7 +975,7 @@ function DynamicEditor({
   };
 
   const addCondition = () => {
-    const field: DynamicRuleField = 'category';
+    const field: DynamicRuleField = 'genre';
     const op = FIELD_OPS[field][0];
     const value = defaultValueForField(field, op);
     updateRules({
@@ -831,6 +1000,15 @@ function DynamicEditor({
 
       {/* Rules builder */}
       <div className="flex-shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        {/* Implicit category constraint */}
+        <div className="px-5 py-2.5 border-b border-zinc-800 flex items-center gap-1.5 text-xs text-zinc-500">
+          <span>Always filters to</span>
+          <span className={`px-2 py-0.5 rounded-full font-medium ${TYPE_COLORS[playlist.type]}`}>
+            {TYPE_LABELS[playlist.type]}
+          </span>
+          <span>tracks · then apply:</span>
+        </div>
+
         {/* Match mode */}
         <div className="px-5 py-3 border-b border-zinc-800 flex items-center gap-3">
           <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Match</span>
@@ -862,7 +1040,7 @@ function DynamicEditor({
         <div className="divide-y divide-zinc-800/60">
           {rules.conditions.length === 0 && (
             <p className="px-5 py-4 text-sm text-zinc-500">
-              No conditions — playlist will match all tracks.
+              No conditions — playlist will match all {TYPE_LABELS[playlist.type].toLowerCase()} tracks.
             </p>
           )}
           {rules.conditions.map((cond, i) => (
@@ -968,16 +1146,18 @@ function ConditionRow({
         ))}
       </select>
 
-      {/* Op */}
-      <select
-        value={condition.op}
-        onChange={(e) => handleOpChange(e.target.value as DynamicRuleOp)}
-        className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500 flex-shrink-0"
-      >
-        {validOps.map((op) => (
-          <option key={op} value={op} className="bg-zinc-900">{OP_LABELS[op]}</option>
-        ))}
-      </select>
+      {/* Op — hidden when there is only one valid choice */}
+      {validOps.length > 1 && (
+        <select
+          value={condition.op}
+          onChange={(e) => handleOpChange(e.target.value as DynamicRuleOp)}
+          className="px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500 flex-shrink-0"
+        >
+          {validOps.map((op) => (
+            <option key={op} value={op} className="bg-zinc-900">{OP_LABELS[op]}</option>
+          ))}
+        </select>
+      )}
 
       {/* Value */}
       <div className="flex-1 min-w-0">
@@ -1004,28 +1184,89 @@ function ConditionValueInput({
 }) {
   const { field, op, value } = condition;
 
-  // Category → checkboxes
-  if (field === 'category' && op === 'in') {
+  // Mood → colored pill multi-select + confidence threshold
+  if (field === 'mood') {
+    const moodVal = (value && typeof value === 'object' && !Array.isArray(value))
+      ? (value as MoodConditionValue)
+      : { moods: [], min_score: 0.5 };
+    const selectedMoods = moodVal.moods ?? [];
+    const minScore = moodVal.min_score ?? 0.5;
+
+    const toggleMood = (m: string) => {
+      const next = selectedMoods.includes(m)
+        ? selectedMoods.filter((x) => x !== m)
+        : [...selectedMoods, m];
+      onChange({ moods: next, min_score: minScore });
+    };
+    const setThreshold = (v: number) => onChange({ moods: selectedMoods, min_score: v });
+
+    return (
+      <div className="flex flex-col gap-2 pt-0.5">
+        <div className="flex flex-wrap gap-1.5">
+          {Object.keys(MOOD_LABELS).map((m) => {
+            const active = selectedMoods.includes(m);
+            return (
+              <button
+                key={m}
+                onClick={() => toggleMood(m)}
+                className={`px-2.5 py-1 text-xs border rounded-full transition-colors ${
+                  active
+                    ? MOOD_COLORS[m] ?? 'bg-zinc-700 text-zinc-200 border-zinc-600'
+                    : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {MOOD_LABELS[m]}
+              </button>
+            );
+          })}
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="text-[11px] text-zinc-500 whitespace-nowrap">Min. confidence</span>
+          <input
+            type="range"
+            min={10} max={90} step={5}
+            value={Math.round(minScore * 100)}
+            onChange={(e) => setThreshold(parseInt(e.target.value) / 100)}
+            className="flex-1 h-1 accent-indigo-500 cursor-pointer"
+          />
+          <span className="text-[11px] font-mono text-zinc-300 w-8 text-right">
+            {Math.round(minScore * 100)}%
+          </span>
+        </div>
+      </div>
+    );
+  }
+
+  // Energy / Danceability → Low / Medium / High multi-select chips
+  if (field === 'energy_level' || field === 'danceability_level') {
+    const levels = ['low', 'medium', 'high'] as const;
+    const levelLabels = { low: 'Low', medium: 'Medium', high: 'High' };
+    const levelColors = {
+      low:    { active: 'bg-sky-600/30 text-sky-300 border-sky-700/60',    idle: 'bg-zinc-800 text-zinc-400 border-zinc-700' },
+      medium: { active: 'bg-amber-600/30 text-amber-300 border-amber-700/60', idle: 'bg-zinc-800 text-zinc-400 border-zinc-700' },
+      high:   { active: 'bg-rose-600/30 text-rose-300 border-rose-700/60',   idle: 'bg-zinc-800 text-zinc-400 border-zinc-700' },
+    };
     const selected = Array.isArray(value) ? (value as string[]) : [];
-    const toggle = (cat: string) => {
-      const next = selected.includes(cat)
-        ? selected.filter((c) => c !== cat)
-        : [...selected, cat];
+    const toggle = (l: string) => {
+      const next = selected.includes(l) ? selected.filter((x) => x !== l) : [...selected, l];
       onChange(next);
     };
     return (
-      <div className="flex flex-wrap gap-x-3 gap-y-1.5 pt-1">
-        {MEDIA_CATEGORIES.map((cat) => (
-          <label key={cat} className="flex items-center gap-1.5 cursor-pointer">
-            <input
-              type="checkbox"
-              checked={selected.includes(cat)}
-              onChange={() => toggle(cat)}
-              className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-            />
-            <span className="text-xs text-zinc-300 capitalize">{cat}</span>
-          </label>
-        ))}
+      <div className="flex items-center gap-1.5 pt-0.5">
+        {levels.map((l) => {
+          const active = selected.includes(l);
+          return (
+            <button
+              key={l}
+              onClick={() => toggle(l)}
+              className={`px-3 py-1 text-xs border rounded-full transition-colors ${
+                active ? levelColors[l].active : `${levelColors[l].idle} hover:border-zinc-500 hover:text-zinc-300`
+              }`}
+            >
+              {levelLabels[l]}
+            </button>
+          );
+        })}
       </div>
     );
   }
@@ -1041,36 +1282,43 @@ function ConditionValueInput({
     const arr = Array.isArray(value) ? (value as [number, number]) : [0, 0];
     const lo = typeof arr[0] === 'number' ? arr[0] : 0;
     const hi = typeof arr[1] === 'number' ? arr[1] : 0;
+    const placeholder = field === 'bpm' ? ['60', '180'] : ['min', 'max'];
     return (
       <div className="flex items-center gap-2">
         <input
           type="number"
           value={lo}
           onChange={(e) => onChange([parseFloat(e.target.value) || 0, hi])}
-          className="w-24 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
+          placeholder={placeholder[0]}
+          className="w-24 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center placeholder:text-zinc-600"
         />
         <span className="text-zinc-500 text-sm">–</span>
         <input
           type="number"
           value={hi}
           onChange={(e) => onChange([lo, parseFloat(e.target.value) || 0])}
-          className="w-24 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
+          placeholder={placeholder[1]}
+          className="w-24 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center placeholder:text-zinc-600"
         />
+        {field === 'bpm' && <span className="text-xs text-zinc-500">BPM</span>}
       </div>
     );
   }
 
-  // Numeric fields with gte/lte/eq
-  if ((field === 'year' || field === 'duration_seconds' || field === 'loudness_lufs')
+  // Numeric single value (gte / lte / eq)
+  if ((field === 'year' || field === 'duration_seconds' || field === 'bpm')
       && (op === 'gte' || op === 'lte' || op === 'eq')) {
     const num = typeof value === 'number' ? value : 0;
     return (
-      <input
-        type="number"
-        value={num}
-        onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
-        className="w-32 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-      />
+      <div className="flex items-center gap-2">
+        <input
+          type="number"
+          value={num}
+          onChange={(e) => onChange(parseFloat(e.target.value) || 0)}
+          className="w-32 px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+        />
+        {field === 'bpm' && <span className="text-xs text-zinc-500">BPM</span>}
+      </div>
     );
   }
 

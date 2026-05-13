@@ -232,7 +232,9 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     if (mood) {
       const moods = mood.split(',').map((m) => m.trim()).filter((m) => VALID_MOODS.has(m));
       if (moods.length > 0) {
-        const conds = moods.map((m) => sql`json_extract(${media.mood_tags}, ${`$.${m}`}) >= 0.4`);
+        const conds = moods.map((m) =>
+          sql`EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value, '$.tag') = ${m} AND json_extract(value, '$.score') >= 0.4)`
+        );
         filters.push(conds.length === 1 ? conds[0] : or(...conds)!);
       }
     }
@@ -355,13 +357,13 @@ export async function libraryRoutes(fastify: FastifyInstance) {
           .orderBy(sql`count(*) DESC`),
 
         db.select({
-          happy:      sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.happy') >= 0.4 THEN 1 ELSE 0 END)`,
-          sad:        sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.sad') >= 0.4 THEN 1 ELSE 0 END)`,
-          aggressive: sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.aggressive') >= 0.4 THEN 1 ELSE 0 END)`,
-          relaxed:    sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.relaxed') >= 0.4 THEN 1 ELSE 0 END)`,
-          party:      sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.party') >= 0.4 THEN 1 ELSE 0 END)`,
-          acoustic:   sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.acoustic') >= 0.4 THEN 1 ELSE 0 END)`,
-          electronic: sql<number>`SUM(CASE WHEN json_extract(${media.mood_tags}, '$.electronic') >= 0.4 THEN 1 ELSE 0 END)`,
+          happy:      sql<number>`SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value,'$.tag')='happy'      AND json_extract(value,'$.score')>=0.4) THEN 1 ELSE 0 END)`,
+          sad:        sql<number>`SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value,'$.tag')='sad'        AND json_extract(value,'$.score')>=0.4) THEN 1 ELSE 0 END)`,
+          aggressive: sql<number>`SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value,'$.tag')='aggressive' AND json_extract(value,'$.score')>=0.4) THEN 1 ELSE 0 END)`,
+          relaxed:    sql<number>`SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value,'$.tag')='relaxed'    AND json_extract(value,'$.score')>=0.4) THEN 1 ELSE 0 END)`,
+          party:      sql<number>`SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value,'$.tag')='party'      AND json_extract(value,'$.score')>=0.4) THEN 1 ELSE 0 END)`,
+          acoustic:   sql<number>`SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value,'$.tag')='acoustic'   AND json_extract(value,'$.score')>=0.4) THEN 1 ELSE 0 END)`,
+          electronic: sql<number>`SUM(CASE WHEN EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value,'$.tag')='electronic' AND json_extract(value,'$.score')>=0.4) THEN 1 ELSE 0 END)`,
         }).from(media).where(wc),
 
         db.select({

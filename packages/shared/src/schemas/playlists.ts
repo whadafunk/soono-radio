@@ -11,13 +11,21 @@ export type PlaylistKind = (typeof PLAYLIST_KINDS)[number];
 // ── Dynamic rule schema ───────────────────────────────────────────────────────
 
 export const DYNAMIC_RULE_FIELDS = [
-  'category', 'genre', 'artist', 'album', 'year',
-  'duration_seconds', 'loudness_lufs', 'tags',
+  'genre', 'artist', 'album', 'year',
+  'duration_seconds', 'bpm',
+  'mood', 'energy_level', 'danceability_level',
+  'tags',
 ] as const;
 export type DynamicRuleField = (typeof DYNAMIC_RULE_FIELDS)[number];
 
 export const DYNAMIC_RULE_OPS = ['eq', 'contains', 'in', 'any_of', 'all_of', 'between', 'gte', 'lte'] as const;
 export type DynamicRuleOp = (typeof DYNAMIC_RULE_OPS)[number];
+
+export const MoodConditionValue = z.object({
+  moods: z.array(z.string()),
+  min_score: z.number().min(0).max(1),
+});
+export type MoodConditionValue = z.infer<typeof MoodConditionValue>;
 
 export const DynamicRuleConditionSchema = z.object({
   field: z.enum(DYNAMIC_RULE_FIELDS),
@@ -26,6 +34,7 @@ export const DynamicRuleConditionSchema = z.object({
     z.string(),
     z.number(),
     z.array(z.union([z.string(), z.number()])),
+    MoodConditionValue,
   ]),
 });
 export type DynamicRuleCondition = z.infer<typeof DynamicRuleConditionSchema>;
@@ -97,6 +106,11 @@ export const PlaylistMediaAddSchema = z.object({
   weight: z.number().int().positive().default(1),
 });
 export type PlaylistMediaAdd = z.infer<typeof PlaylistMediaAddSchema>;
+
+export const PlaylistMediaBulkAddSchema = z.object({
+  media_ids: z.array(z.number().int().positive()).min(1).max(200),
+});
+export type PlaylistMediaBulkAdd = z.infer<typeof PlaylistMediaBulkAddSchema>;
 
 export const PlaylistMediaPatchSchema = z.object({
   sort_order: z.number().int().nonnegative().optional(),

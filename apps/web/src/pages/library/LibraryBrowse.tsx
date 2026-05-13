@@ -4,9 +4,9 @@ import {
   Loader, Search, Star, Play, Pause, Square, X, Save, AlertCircle,
   Settings2, ChevronDown, ChevronUp, ChevronsUpDown, Filter, Check,
   Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle, Wand2,
-  SlidersHorizontal,
+  SlidersHorizontal, ListPlus, Plus,
 } from 'lucide-react';
-import { MEDIA_CATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
+import { MEDIA_CATEGORIES, PLAYLIST_TYPES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
 import { FacetDrawer, FacetFilters, EMPTY_FACET_FILTERS, countActiveFacets } from './FacetDrawer';
 
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
@@ -59,6 +59,10 @@ import {
   bulkLookupAcoustID,
   analyseLibraryItem,
   bulkAnalyseAll,
+  fetchPlaylists,
+  createPlaylist,
+  addTracksToPlaylist,
+  PlaylistSummary,
   AcoustIDCandidate,
 } from '../../api';
 
@@ -422,6 +426,160 @@ export function LibraryBrowse() {
   );
 }
 
+const PLAYLIST_TYPES_SET = new Set<string>(PLAYLIST_TYPES);
+
+const PLAYLIST_TYPE_LABELS: Record<string, string> = {
+  music: 'Music', jingle: 'Jingle', bed: 'Bed', promo: 'Promo', spot: 'Spot',
+};
+
+function AddToPlaylistModal({
+  mediaIds,
+  category,
+  onClose,
+  showToast,
+}: {
+  mediaIds: number[];
+  category: string;
+  onClose: () => void;
+  showToast: (type: 'success' | 'error', msg: string) => void;
+}) {
+  const [search, setSearch] = useState('');
+  const [newName, setNewName] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  const { data: allPlaylists = [] } = useQuery<PlaylistSummary[]>({
+    queryKey: ['playlists'],
+    queryFn: fetchPlaylists,
+  });
+
+  const playlists = useMemo(
+    () => allPlaylists.filter(
+      (p) => p.kind === 'static' && p.type === category &&
+        p.name.toLowerCase().includes(search.toLowerCase()),
+    ),
+    [allPlaylists, category, search],
+  );
+
+  const addTo = async (playlistId: number, playlistName: string) => {
+    setBusy(true);
+    try {
+      await addTracksToPlaylist(playlistId, mediaIds);
+      showToast('success', `Added ${mediaIds.length} track${mediaIds.length !== 1 ? 's' : ''} to "${playlistName}"`);
+      onClose();
+    } catch (err) {
+      showToast('error', (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleCreate = async () => {
+    const name = newName.trim();
+    if (!name) return;
+    setBusy(true);
+    try {
+      const pl = await createPlaylist({ name, type: category, kind: 'static' });
+      await addTracksToPlaylist(pl.id, mediaIds);
+      showToast('success', `Created "${pl.name}" and added ${mediaIds.length} track${mediaIds.length !== 1 ? 's' : ''}`);
+      onClose();
+    } catch (err) {
+      showToast('error', (err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" onClick={(e) => { if (e.target === e.currentTarget) onClose(); }}>
+      <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-md flex flex-col" style={{ maxHeight: '80vh' }}>
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-zinc-800">
+          <div>
+            <h2 className="text-sm font-semibold text-white">Add to playlist</h2>
+            <p className="text-xs text-zinc-400 mt-0.5">
+              {mediaIds.length} track{mediaIds.length !== 1 ? 's' : ''} · {PLAYLIST_TYPE_LABELS[category] ?? category} playlists
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 text-zinc-400 hover:text-white rounded transition-colors">
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Search existing */}
+        <div className="px-4 pt-3 pb-2">
+          <div className="relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-zinc-500" />
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search playlists…"
+              className="w-full pl-9 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
+              autoFocus
+            />
+          </div>
+        </div>
+
+        {/* Playlist list */}
+        <div className="flex-1 overflow-y-auto px-2 pb-2">
+          {playlists.length === 0 && !creating && (
+            <p className="px-3 py-4 text-sm text-zinc-500 text-center">
+              {search ? 'No playlists match your search.' : `No static ${PLAYLIST_TYPE_LABELS[category] ?? category} playlists yet.`}
+            </p>
+          )}
+          {playlists.map((pl) => (
+            <button
+              key={pl.id}
+              onClick={() => addTo(pl.id, pl.name)}
+              disabled={busy}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg hover:bg-zinc-800 transition-colors text-left disabled:opacity-50"
+            >
+              <ListPlus className="w-4 h-4 text-zinc-500 flex-shrink-0" />
+              <span className="flex-1 text-sm text-zinc-200 truncate">{pl.name}</span>
+              {busy && <Loader className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />}
+            </button>
+          ))}
+        </div>
+
+        {/* Create new */}
+        <div className="border-t border-zinc-800 px-4 py-3">
+          {creating ? (
+            <div className="flex items-center gap-2">
+              <input
+                value={newName}
+                onChange={(e) => setNewName(e.target.value)}
+                onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setCreating(false); }}
+                placeholder="New playlist name…"
+                className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
+                autoFocus
+              />
+              <button
+                onClick={handleCreate}
+                disabled={busy || !newName.trim()}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50"
+              >
+                {busy ? <Loader className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                Create &amp; add
+              </button>
+              <button onClick={() => setCreating(false)} className="p-1.5 text-zinc-500 hover:text-zinc-300 rounded transition-colors">
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          ) : (
+            <button
+              onClick={() => setCreating(true)}
+              className="flex items-center gap-2 text-sm text-indigo-400 hover:text-indigo-300 transition-colors"
+            >
+              <Plus className="w-3.5 h-3.5" />
+              New playlist
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function BulkActionBar({
   selection,
   items,
@@ -449,7 +607,22 @@ function BulkActionBar({
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [showCategory, setShowCategory] = useState(false);
   const [confirmReidentify, setConfirmReidentify] = useState<'pending' | null>(null);
+  const [showAddToPlaylist, setShowAddToPlaylist] = useState(false);
   const musicIds = useMemo(() => ids.filter((id) => items.find((m) => m.id === id)?.category === 'music'), [ids, items]);
+
+  // For "Add to playlist": all selected must share one category that maps to a playlist type.
+  const selectedCategories = useMemo(() => {
+    const cats = new Set<string>();
+    ids.forEach((id) => { const item = items.find((m) => m.id === id); if (item) cats.add(item.category); });
+    return cats;
+  }, [ids, items]);
+  const commonCategory = selectedCategories.size === 1 ? Array.from(selectedCategories)[0] : null;
+  const canAddToPlaylist = commonCategory !== null && PLAYLIST_TYPES_SET.has(commonCategory);
+  const addToPlaylistTitle = !commonCategory
+    ? 'Selection contains mixed categories'
+    : !PLAYLIST_TYPES_SET.has(commonCategory)
+    ? `No playlist type for "${commonCategory}" tracks`
+    : undefined;
 
   const wrap = async (label: string, fn: () => Promise<unknown>, summary: (r: any) => string) => {
     try {
@@ -682,6 +855,20 @@ function BulkActionBar({
         </button>
       )}
 
+      <button
+        onClick={() => setShowAddToPlaylist(true)}
+        disabled={!!busy || !canAddToPlaylist}
+        title={addToPlaylistTitle}
+        className={`flex items-center gap-1 px-3 py-1.5 text-xs font-medium border rounded transition-colors ${
+          canAddToPlaylist
+            ? 'bg-zinc-900 border-zinc-700 text-zinc-200 hover:bg-zinc-800'
+            : 'bg-zinc-900 border-zinc-800 text-zinc-600 cursor-not-allowed'
+        }`}
+      >
+        <ListPlus className="w-3.5 h-3.5" />
+        Add to playlist
+      </button>
+
       <div className="ml-auto">
         <button
           onClick={onClear}
@@ -691,6 +878,15 @@ function BulkActionBar({
           Clear selection
         </button>
       </div>
+
+      {showAddToPlaylist && commonCategory && (
+        <AddToPlaylistModal
+          mediaIds={ids}
+          category={commonCategory}
+          onClose={() => setShowAddToPlaylist(false)}
+          showToast={showToast}
+        />
+      )}
     </div>
   );
 }

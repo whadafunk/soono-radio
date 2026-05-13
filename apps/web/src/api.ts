@@ -544,6 +544,38 @@ export async function bulkLookupAcoustID(ids: number[]): Promise<{ job_id: strin
   return res.json();
 }
 
+export interface PlaylistSummary {
+  id: number;
+  name: string;
+  type: string;
+  kind: string;
+}
+
+export async function fetchPlaylists(): Promise<PlaylistSummary[]> {
+  const res = await fetch(`${API_BASE}/playlists`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function createPlaylist(body: { name: string; type: string; kind: 'static' }): Promise<PlaylistSummary> {
+  const res = await fetch(`${API_BASE}/playlists`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
+}
+
+export async function addTracksToPlaylist(playlistId: number, mediaIds: number[]): Promise<void> {
+  const res = await fetch(`${API_BASE}/playlists/${playlistId}/tracks/bulk`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ media_ids: mediaIds }),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
 export async function bulkAnalyseAll(ids: number[]): Promise<{ job_id: string }> {
   const res = await fetch(`${API_BASE}/library/bulk-analyse`, {
     method: 'POST',

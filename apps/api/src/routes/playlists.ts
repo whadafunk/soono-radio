@@ -4,6 +4,7 @@ import {
   PlaylistCreateSchema,
   PlaylistPatchSchema,
   PlaylistMediaAddSchema,
+  PlaylistMediaBulkAddSchema,
   PlaylistTracksReorderSchema,
   DynamicRulesSchema,
   MediaTagsUpdateSchema,
@@ -29,15 +30,40 @@ function conditionToSQL(cond: DynamicRuleCondition): SQL | null {
     return null;
   }
 
+  if (field === 'mood') {
+    if (op !== 'any_of') return null;
+    const moodVal = value as { moods?: string[]; min_score?: number };
+    const moods = Array.isArray(moodVal?.moods) ? moodVal.moods : [];
+    const threshold = typeof moodVal?.min_score === 'number' ? moodVal.min_score : 0.5;
+    if (moods.length === 0) return null;
+    const clauses = moods.map((m) =>
+      sql`EXISTS (SELECT 1 FROM json_each(${media.mood_tags}) WHERE json_extract(value, '$.tag') = ${m} AND json_extract(value, '$.score') >= ${threshold})`
+    );
+    return clauses.length === 1 ? clauses[0] : or(...clauses)!;
+  }
+
+  if (field === 'energy_level' || field === 'danceability_level') {
+    if (op !== 'any_of') return null;
+    const col = field === 'energy_level' ? media.energy : media.danceability;
+    const levels = Array.isArray(value) ? (value as string[]) : [String(value)];
+    const clauses = levels.flatMap((level): SQL[] => {
+      if (level === 'low')    return [sql`${col} < 0.3`];
+      if (level === 'medium') return [sql`(${col} >= 0.3 AND ${col} < 0.7)`];
+      if (level === 'high')   return [sql`${col} >= 0.7`];
+      return [];
+    });
+    if (clauses.length === 0) return null;
+    return clauses.length === 1 ? clauses[0] : or(...clauses)!;
+  }
+
   const col = (() => {
     switch (field) {
-      case 'category':       return media.category;
-      case 'genre':          return media.genre;
-      case 'artist':         return media.artist;
-      case 'album':          return media.album;
-      case 'year':           return media.year;
+      case 'genre':            return media.genre;
+      case 'artist':           return media.artist;
+      case 'album':            return media.album;
+      case 'year':             return media.year;
       case 'duration_seconds': return media.duration_seconds;
-      case 'loudness_lufs':  return media.loudness_lufs;
+      case 'bpm':              return media.bpm;
       default: return null;
     }
   })();
@@ -159,6 +185,31 @@ export async function playlistRoutes(fastify: FastifyInstance) {
     return reply.status(201).send(row);
   });
 
+  fastify.post<{ Params: { id: string }; Body: unknown }>('/playlists/:id/tracks/bulk', async (request, reply) => {
+    const id = Number(request.params.id);
+    const parsed = PlaylistMediaBulkAddSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+
+    const rows = await db.transaction(async (tx) => {
+      const [maxRow] = await tx
+        .select({ max: sql<number>`COALESCE(MAX(sort_order), -1)` })
+        .from(playlistMedia)
+        .where(eq(playlistMedia.playlist_id, id));
+      const base = (maxRow?.max ?? -1) + 1;
+
+      return tx.insert(playlistMedia).values(
+        parsed.data.media_ids.map((mediaId: number, i: number) => ({
+          playlist_id: id,
+          media_id: mediaId,
+          sort_order: base + i,
+          weight: 1,
+        })),
+      ).onConflictDoNothing().returning();
+    });
+
+    return reply.status(201).send(rows);
+  });
+
   fastify.delete<{ Params: { id: string; trackId: string } }>('/playlists/:id/tracks/:trackId', async (request, reply) => {
     const trackId = Number(request.params.trackId);
     await db.delete(playlistMedia).where(eq(playlistMedia.id, trackId));
@@ -179,42 +230,25 @@ export async function playlistRoutes(fastify: FastifyInstance) {
 
   // ── Dynamic playlist preview ───────────────────────────────────────────────
 
-  fastify.post<{ Params: { id: string } }>('/playlists/:id/preview', async (request, reply) => {
+  // Accepts draft rules in the body for live preview; falls back to saved rules.
+  // Always adds an implicit category = playlist.type filter.
+  fastify.post<{ Params: { id: string }; Body: unknown }>('/playlists/:id/preview', async (request, reply) => {
     const id = Number(request.params.id);
     const [playlist] = await db.select().from(playlists).where(eq(playlists.id, id));
     if (!playlist) return reply.status(404).send({ error: 'Playlist not found' });
     if (playlist.kind !== 'dynamic') return reply.status(400).send({ error: 'Not a dynamic playlist' });
 
-    const parsed = DynamicRulesSchema.safeParse(playlist.rules ?? { match: 'all', conditions: [] });
+    const bodyHasRules = request.body != null && typeof request.body === 'object' && 'conditions' in (request.body as object);
+    const parsed = DynamicRulesSchema.safeParse(
+      bodyHasRules ? request.body : (playlist.rules ?? { match: 'all', conditions: [] }),
+    );
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid rules' });
 
-    const where = rulesToWhere(parsed.data);
-    const [{ total }] = await db
-      .select({ total: sql<number>`COUNT(*)` })
-      .from(media)
-      .where(where);
+    const categoryWhere = eq(media.category, playlist.type);
+    const rulesWhere = rulesToWhere(parsed.data);
+    const where = rulesWhere ? and(categoryWhere, rulesWhere) : categoryWhere;
 
-    const sample = await db
-      .select({ id: media.id, title: media.title, artist: media.artist, duration_seconds: media.duration_seconds, category: media.category })
-      .from(media)
-      .where(where)
-      .orderBy(sql`RANDOM()`)
-      .limit(5);
-
-    return reply.send({ count: total, sample });
-  });
-
-  // Preview rules without saving (for the rule builder live preview)
-  fastify.post<{ Body: unknown }>('/playlists/preview', async (request, reply) => {
-    const parsed = DynamicRulesSchema.safeParse(request.body);
-    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
-
-    const where = rulesToWhere(parsed.data);
-    const [{ total }] = await db
-      .select({ total: sql<number>`COUNT(*)` })
-      .from(media)
-      .where(where);
-
+    const [{ total }] = await db.select({ total: sql<number>`COUNT(*)` }).from(media).where(where);
     const sample = await db
       .select({ id: media.id, title: media.title, artist: media.artist, duration_seconds: media.duration_seconds, category: media.category })
       .from(media)
