@@ -7,7 +7,20 @@ import { clocks, clockSegments } from '../db/schema.js';
 
 export async function clockRoutes(fastify: FastifyInstance) {
   fastify.get('/clocks', async (_req, reply) => {
-    const rows = await db.select().from(clocks).orderBy(asc(clocks.name));
+    const rows = await db
+      .select({
+        id: clocks.id,
+        name: clocks.name,
+        description: clocks.description,
+        sweep_config: clocks.sweep_config,
+        duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
+        created_at: clocks.created_at,
+        updated_at: clocks.updated_at,
+      })
+      .from(clocks)
+      .leftJoin(clockSegments, eq(clockSegments.clock_id, clocks.id))
+      .groupBy(clocks.id)
+      .orderBy(asc(clocks.name));
     return reply.send(rows);
   });
 
@@ -24,7 +37,20 @@ export async function clockRoutes(fastify: FastifyInstance) {
 
   fastify.get<{ Params: { id: string } }>('/clocks/:id', async (request, reply) => {
     const id = Number(request.params.id);
-    const [clock] = await db.select().from(clocks).where(eq(clocks.id, id));
+    const [clock] = await db
+      .select({
+        id: clocks.id,
+        name: clocks.name,
+        description: clocks.description,
+        sweep_config: clocks.sweep_config,
+        duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
+        created_at: clocks.created_at,
+        updated_at: clocks.updated_at,
+      })
+      .from(clocks)
+      .leftJoin(clockSegments, eq(clockSegments.clock_id, clocks.id))
+      .where(eq(clocks.id, id))
+      .groupBy(clocks.id);
     if (!clock) return reply.status(404).send({ error: 'Clock not found' });
     return reply.send(clock);
   });

@@ -51,6 +51,7 @@ export function App() {
             <Route path="/users" element={<UsersSettings />} />
             <Route path="/schedule" element={<SchedulePage />} />
             <Route path="/clocks" element={<ClocksPage />} />
+            <Route path="/clocks/:id" element={<ClocksPage />} />
             <Route path="/shows" element={<ShowsPage />} />
             <Route path="/shows/:id" element={<ShowDetailPage />} />
             <Route path="/playlists" element={<PlaylistsPage />} />

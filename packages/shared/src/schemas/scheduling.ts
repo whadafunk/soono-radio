@@ -147,6 +147,7 @@ export const ClockSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   sweep_config: SweepConfigSchema.nullable(),
+  duration_seconds: z.number().int().nonnegative(),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });

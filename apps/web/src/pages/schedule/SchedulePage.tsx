@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic } from 'lucide-react';
 import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
@@ -637,14 +638,17 @@ function EntryBlock({ entry, show, onClick }: {
     >
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden">
-          <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300">
-            {show?.name ?? 'No show'}
-          </span>
+          <div className="flex items-center gap-1.5 min-w-0">
+            <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
+            <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300">
+              {show?.name ?? (entry.show_id ? 'Orphaned entry' : 'No show')}
+            </span>
+          </div>
           {height >= 60 && show?.host && (
-            <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5">{show.host}</span>
+            <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5 pl-[26px]">{show.host}</span>
           )}
           {height >= 44 && (
-            <span className="text-xs font-mono leading-none mt-auto pb-1.5 block" style={{ color: `${hex}99` }}>
+            <span className="text-xs font-mono leading-none mt-auto pb-1.5 block pl-[26px]" style={{ color: `${hex}99` }}>
               {entry.time_start}–{entry.time_end}
             </span>
           )}
@@ -665,20 +669,20 @@ function ClockOnlyBlock({ entry, clock, onClick }: {
 
   return (
     <div
-      className="absolute inset-x-1 rounded-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110"
-      style={{ top: top + 1, height, backgroundColor: '#1c1c26', border: '1px dashed #52525b' }}
+      className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110"
+      style={{ top: top + 1, height, left: '3px', backgroundColor: '#ffffff0a', borderLeft: '3px solid #ffffff' }}
       onClick={onClick}
     >
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden pb-[7px]">
           <div className="flex items-center gap-1.5 min-w-0">
-            <Clock className="w-2.5 h-2.5 text-zinc-500 flex-shrink-0" />
-            <span className={`text-[12px] font-medium leading-tight truncate ${clock ? 'text-zinc-400' : 'text-zinc-600 italic'}`}>
+            <Clock className="w-5 h-5 text-white flex-shrink-0" />
+            <span className={`text-[13px] font-semibold leading-tight truncate ${clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
               {clock?.name ?? 'No clock'}
             </span>
           </div>
           {height >= 44 && (
-            <span className="text-[11px] text-zinc-600 font-mono leading-none mt-auto pl-4">
+            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: '#ffffff60' }}>
               {entry.time_start}–{entry.time_end}
             </span>
           )}
@@ -709,14 +713,17 @@ function CalendarEntryBlock({ entry, show, onClick }: {
           {entry.is_override && (
             <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
           )}
-          <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300 pr-3">
-            {show?.name ?? 'No show'}
-          </span>
+          <div className="flex items-center gap-1.5 min-w-0 pr-3">
+            <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
+            <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300">
+              {show?.name ?? (entry.show_id ? 'Orphaned entry' : 'No show')}
+            </span>
+          </div>
           {height >= 60 && show?.host && (
-            <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5">{show.host}</span>
+            <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5 pl-[26px]">{show.host}</span>
           )}
           {height >= 44 && (
-            <span className="text-xs font-mono leading-none mt-auto pb-1.5 block" style={{ color: `${hex}99` }}>
+            <span className="text-xs font-mono leading-none mt-auto pb-1.5 block pl-[26px]" style={{ color: `${hex}99` }}>
               {entry.time_start}–{entry.time_end}
             </span>
           )}
@@ -737,8 +744,8 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
 
   return (
     <div
-      className="absolute inset-x-1 rounded-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110 z-[1]"
-      style={{ top: top + 1, height, backgroundColor: '#1c1c26', border: '1px dashed #52525b' }}
+      className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110 z-[1]"
+      style={{ top: top + 1, height, left: '3px', backgroundColor: '#ffffff0a', borderLeft: '3px solid #ffffff' }}
       onClick={onClick}
     >
       {height >= 22 && (
@@ -747,13 +754,13 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
             <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
           )}
           <div className="flex items-center gap-1.5 min-w-0 pr-3">
-            <Clock className="w-2.5 h-2.5 text-zinc-500 flex-shrink-0" />
-            <span className={`text-[12px] font-medium leading-tight truncate ${clock ? 'text-zinc-400' : 'text-zinc-600 italic'}`}>
+            <Clock className="w-5 h-5 text-white flex-shrink-0" />
+            <span className={`text-[13px] font-semibold leading-tight truncate ${clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
               {clock?.name ?? 'No clock'}
             </span>
           </div>
           {height >= 44 && (
-            <span className="text-[11px] text-zinc-600 font-mono leading-none mt-auto pl-4">
+            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: '#ffffff60' }}>
               {entry.time_start}–{entry.time_end}
             </span>
           )}
@@ -815,7 +822,7 @@ function SlotPicker({
           </button>
         ))}
 
-        {tab === 'clocks' && clocks.map((clock) => (
+        {tab === 'clocks' && clocks.filter((c) => c.duration_seconds > 0).map((clock) => (
           <button
             key={clock.id}
             onClick={() => onSelectClock(clock.id === selectedClockId ? null : clock.id)}
@@ -827,14 +834,17 @@ function SlotPicker({
             <span className={`flex-1 text-sm font-medium truncate ${selectedClockId === clock.id ? 'text-white' : 'text-zinc-300'}`}>
               {clock.name}
             </span>
+            <span className="text-[11px] text-zinc-500 flex-shrink-0 tabular-nums">
+              {Math.round(clock.duration_seconds / 60)}m
+            </span>
           </button>
         ))}
 
         {tab === 'shows' && shows.length === 0 && (
-          <p className="px-4 py-4 text-sm text-zinc-600 italic">No active shows</p>
+          <p className="px-4 py-4 text-sm text-zinc-600 italic">No shows defined</p>
         )}
-        {tab === 'clocks' && clocks.length === 0 && (
-          <p className="px-4 py-4 text-sm text-zinc-600 italic">No clocks defined</p>
+        {tab === 'clocks' && clocks.filter((c) => c.duration_seconds > 0).length === 0 && (
+          <p className="px-4 py-4 text-sm text-zinc-600 italic">No clocks with segments</p>
         )}
       </div>
     </div>
@@ -859,15 +869,19 @@ function NewSlotPopover({
   const [selectedShowId,  setSelectedShowId]  = useState<number | null>(null);
   const [selectedClockId, setSelectedClockId] = useState<number | null>(null);
   const [timeStart, setTimeStart] = useState(initStart);
-  const [timeEnd,   setTimeEnd]   = useState('');
+  const [timeEnd,   setTimeEnd]   = useState(() => addMinutes(initStart, 60));
 
   const computedEnd = useMemo(() => {
     if (selectedShowId) {
       const show = shows.find((s) => s.id === selectedShowId);
       if (show) return addMinutes(timeStart, show.duration_minutes);
     }
+    if (selectedClockId) {
+      const clock = clocks.find((c) => c.id === selectedClockId);
+      if (clock && clock.duration_seconds > 0) return addMinutes(timeStart, Math.round(clock.duration_seconds / 60));
+    }
     return null;
-  }, [selectedShowId, timeStart, shows]);
+  }, [selectedShowId, selectedClockId, timeStart, shows, clocks]);
 
   const effectiveEnd = computedEnd ?? timeEnd;
 
@@ -945,6 +959,7 @@ function EditSlotPopover({
   onChange: (showId: number | null, clockId: number | null) => void;
 }) {
   const [picking, setPicking] = useState(false);
+  const navigate = useNavigate();
   const isClockSlot = !entry.show_id && !!entry.clock_id;
   const hex  = show ? COLOR_HEX[show.color] : '#52525b';
   const left = Math.min(x + 12, window.innerWidth  - 272);
@@ -992,7 +1007,7 @@ function EditSlotPopover({
                   <div className="text-sm font-semibold text-zinc-100 truncate">{clock?.name ?? 'No clock'}</div>
                 </div>
               )
-              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? 'No show'}</div>
+              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? (entry.show_id ? 'Orphaned entry' : 'No show')}</div>
             }
             {show?.host && <div className="text-xs text-zinc-400 mt-0.5">{show.host}</div>}
           </div>
@@ -1010,6 +1025,24 @@ function EditSlotPopover({
           >
             Change
           </button>
+          {show && (
+            <button
+              onClick={() => navigate(`/shows/${show.id}`)}
+              title="Edit show"
+              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {isClockSlot && clock && (
+            <button
+              onClick={() => navigate(`/clocks/${clock.id}`)}
+              title="Edit clock"
+              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
           <button
             onClick={onRemove}
             className="p-1.5 text-zinc-500 hover:text-red-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
@@ -1042,15 +1075,19 @@ function CalNewSlotPopover({
   const [selectedShowId,  setSelectedShowId]  = useState<number | null>(templateEntry?.show_id  ?? null);
   const [selectedClockId, setSelectedClockId] = useState<number | null>(templateEntry?.clock_id ?? null);
   const [timeStart, setTimeStart] = useState(initStart);
-  const [timeEnd,   setTimeEnd]   = useState('');
+  const [timeEnd,   setTimeEnd]   = useState(() => addMinutes(initStart, 60));
 
   const computedEnd = useMemo(() => {
     if (selectedShowId) {
       const show = shows.find((s) => s.id === selectedShowId);
       if (show) return addMinutes(timeStart, show.duration_minutes);
     }
+    if (selectedClockId) {
+      const clock = clocks.find((c) => c.id === selectedClockId);
+      if (clock && clock.duration_seconds > 0) return addMinutes(timeStart, Math.round(clock.duration_seconds / 60));
+    }
     return null;
-  }, [selectedShowId, timeStart, shows]);
+  }, [selectedShowId, selectedClockId, timeStart, shows, clocks]);
 
   // Pre-fill end for override: use the template entry's own end time
   const templateEnd = templateEntry ? templateEntry.time_end : null;
@@ -1140,6 +1177,7 @@ function CalEditSlotPopover({
   onChange: (showId: number | null, clockId: number | null) => void;
 }) {
   const [picking, setPicking] = useState(false);
+  const navigate = useNavigate();
   const isClockSlot = !entry.show_id && !!entry.clock_id;
   const hex  = show ? COLOR_HEX[show.color] : '#52525b';
   const left = Math.min(x + 12, window.innerWidth  - 272);
@@ -1193,7 +1231,7 @@ function CalEditSlotPopover({
                   <div className="text-sm font-semibold text-zinc-100 truncate">{clock?.name ?? 'No clock'}</div>
                 </div>
               )
-              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? 'No show'}</div>
+              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? (entry.show_id ? 'Orphaned entry' : 'No show')}</div>
             }
             {show?.host && <div className="text-xs text-zinc-400 mt-0.5">{show.host}</div>}
           </div>
@@ -1211,6 +1249,24 @@ function CalEditSlotPopover({
           >
             Change
           </button>
+          {show && (
+            <button
+              onClick={() => navigate(`/shows/${show.id}`)}
+              title="Edit show"
+              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
+          {isClockSlot && clock && (
+            <button
+              onClick={() => navigate(`/clocks/${clock.id}`)}
+              title="Edit clock"
+              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+            >
+              <Pencil className="w-3.5 h-3.5" />
+            </button>
+          )}
           {onRestore && (
             <button
               onClick={onRestore}

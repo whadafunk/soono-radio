@@ -1,4 +1,5 @@
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
+import { useParams } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -206,6 +207,8 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
 
 export function ClocksPage() {
   const queryClient = useQueryClient();
+  const { id: urlId } = useParams<{ id?: string }>();
+  const autoSelectedRef = useRef(false);
   const [selectedId, setSelectedId] = useState<number | null>(null);
   const [draftClock, setDraftClock] = useState<ClockType | null>(null);
   const [draftSegs, setDraftSegs] = useState<SegmentDraft[]>([]);
@@ -290,6 +293,16 @@ export function ClocksPage() {
     setConfirmDelete(false);
     setExpandedId(null);
   };
+
+  // Auto-select the clock from the URL param (e.g. navigated from schedule page)
+  useEffect(() => {
+    if (!urlId || autoSelectedRef.current || clocks.length === 0) return;
+    const target = clocks.find((c) => c.id === Number(urlId));
+    if (!target) return;
+    autoSelectedRef.current = true;
+    const segs = queryClient.getQueryData<ClockSegment[]>(['clock-segments', target.id]) ?? [];
+    selectClock(target, segs);
+  }, [urlId, clocks]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleClockClick = (clock: ClockType) => {
     if (clock.id === selectedId) return;

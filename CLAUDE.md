@@ -211,6 +211,40 @@ Start with implementing LiquidSoap settings control panel, then expand to player
 - Volume mount ensures XML config persists and API can read/write it from localhost
 - Run `docker stop radio-icecast` to shut it down
 
+### Database Migrations
+
+The API uses Drizzle ORM with libsql. Migrations live in `apps/api/drizzle/` and run automatically on server start via `migrate()`.
+
+**Always use `drizzle-kit generate` to create migrations** — never write migration files by hand:
+
+```bash
+cd apps/api
+pnpm drizzle-kit generate   # diffs schema.ts against last snapshot, creates new .sql + journal entry
+```
+
+This matters because the Drizzle libsql migrator uses the `when` timestamp in `_journal.json` to decide which migrations to run. It skips any migration whose `when` is ≤ the `created_at` of the last applied migration in `__drizzle_migrations`. Manually-written files with old or wrong timestamps are **silently skipped forever**. `drizzle-kit generate` always stamps the file with the current time, so order is always correct.
+
+**SQLite cannot `DROP COLUMN` reliably** (libsql does not support it). If you need to remove a column:
+1. Use `drizzle-kit generate` — it will emit a full table-recreation migration (CREATE new → copy data → DROP old → RENAME).
+2. Do not hand-write `ALTER TABLE ... DROP COLUMN` in a migration; it will fail silently or error at runtime.
+
+**Known schema drift (intentional, harmless):**  
+`shows.type` and `shows.active` exist in the DB but are absent from `schema.ts`. They were removed from the application in May 2026 but could not be dropped via migration (libsql limitation). Drizzle ignores columns it doesn't know about — all reads/writes use explicit column lists, so these columns are inert. They have DB-level defaults (`type='automated'`, `active=1`) and do not affect any application logic.
+
+**If a migration must be applied manually** (e.g. to fix a timestamp ordering problem):
+```bash
+# 1. Apply the SQL directly
+sqlite3 data/radio.db "ALTER TABLE foo ADD COLUMN bar integer;"
+
+# 2. Compute the hash of the .sql file
+node -e "const {createHash}=require('crypto'),{readFileSync}=require('fs'); \
+  console.log(createHash('sha256').update(readFileSync('apps/api/drizzle/NNNN_tag.sql','utf8')).digest('hex'))"
+
+# 3. Record it so the migrator won't try to re-run it
+sqlite3 data/radio.db "INSERT INTO __drizzle_migrations (hash, created_at) VALUES ('<hash>', <when_ms>);"
+```
+`<when_ms>` must be greater than the `created_at` of the last row in `__drizzle_migrations` (check with `SELECT MAX(created_at) FROM __drizzle_migrations;`). Also update the `when` field in `_journal.json` to match.
+
 ### Documentation & Knowledge
 
 - **CLAUDE.md** (this file) is the developer guide; update it as patterns emerge
