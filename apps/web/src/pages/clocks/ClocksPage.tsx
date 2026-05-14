@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -12,6 +12,7 @@ import {
 import {
   SortableContext,
   verticalListSortingStrategy,
+  horizontalListSortingStrategy,
   useSortable,
   arrayMove,
 } from '@dnd-kit/sortable';
@@ -43,7 +44,9 @@ import {
   updateClock,
   deleteClock,
   replaceClockSegments,
+  fetchPlaylists,
 } from '../../api';
+import type { PlaylistSummary } from '../../api';
 
 // ─── Segment metadata ─────────────────────────────────────────────────────────
 
@@ -72,8 +75,8 @@ const SOURCE_LABELS: Record<SegmentSourceEntry['type'], string> = {
 // Available source types per segment type
 const VALID_SOURCE_TYPES: Record<ClockSegmentType, SegmentSourceEntry['type'][]> = {
   music:         ['show_playlist', 'playlist'],
-  live:          ['live'],
-  live_audience: ['live'],
+  live:          ['live', 'show_beds', 'playlist'],
+  live_audience: ['live', 'show_beds', 'playlist'],
   stop_set:      ['campaigns', 'promos', 'playlist'],
   news:          ['live', 'recording'],
   voice_track:   ['playlist'],
@@ -222,6 +225,7 @@ export function ClocksPage() {
   };
 
   const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
+  const { data: allPlaylists = [] } = useQuery({ queryKey: ['playlists'], queryFn: fetchPlaylists });
 
   const { data: loadedSegments = [] } = useQuery({
     queryKey: ['clock-segments', selectedId],
@@ -476,7 +480,14 @@ export function ClocksPage() {
             </div>
 
             {/* Timeline */}
-            <ClockTimeline segments={draftSegs} total={total} overflow={overflow} />
+            <ClockTimeline
+              segments={draftSegs}
+              total={total}
+              overflow={overflow}
+              expandedId={expandedId}
+              onExpandToggle={(id) => setExpandedId((prev) => prev === id ? null : id)}
+              onReorder={reorderSegs}
+            />
 
             {/* Segment list */}
             <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
@@ -509,6 +520,7 @@ export function ClocksPage() {
                   onUpdate={updateSeg}
                   onDelete={deleteSeg}
                   onChangeType={changeSegType}
+                  playlists={allPlaylists}
                 />
                 {draftSegs.length === 0 && (
                   <div className="px-5 py-10 text-center text-zinc-400 text-sm">
@@ -530,34 +542,107 @@ export function ClocksPage() {
 
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 
-function ClockTimeline({ segments, total, overflow }: { segments: SegmentDraft[]; total: number; overflow: boolean }) {
+function SortableTimelineItem({
+  seg, cap, isActive, isDraggingAny, onExpandToggle,
+}: {
+  seg: SegmentDraft;
+  cap: number;
+  isActive: boolean;
+  isDraggingAny: boolean;
+  onExpandToggle: (id: number) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: seg.id });
+  const meta = SEGMENT_META[seg.type];
+  const widthPct = (seg.duration_seconds / cap) * 100;
+
+  return (
+    <div
+      ref={setNodeRef}
+      {...attributes}
+      {...listeners}
+      onClick={isDraggingAny ? undefined : () => onExpandToggle(seg.id)}
+      className={`flex items-center justify-center overflow-hidden border-r border-zinc-900/50 last:border-r-0 cursor-pointer transition-colors ${isDragging ? 'opacity-50' : ''} ${!isActive && !isDragging ? 'hover:brightness-125' : ''}`}
+      style={{
+        width: `${widthPct}%`,
+        flexShrink: 0,
+        backgroundColor: meta.color + (isActive ? '55' : '33'),
+        transform: CSS.Transform.toString(transform),
+        transition,
+        position: 'relative',
+        zIndex: isDragging ? 10 : undefined,
+        outline: isActive ? '2px solid rgba(255,255,255,0.7)' : undefined,
+        outlineOffset: isActive ? '-2px' : undefined,
+      }}
+      title={`${seg.name} · ${fmtDuration(seg.duration_seconds)}`}
+    >
+      {seg.duration_seconds >= 240 && (
+        <span className="text-xs font-medium truncate px-1 pointer-events-none select-none" style={{ color: meta.color }}>
+          {seg.name}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function ClockTimeline({
+  segments, total, overflow, expandedId, onExpandToggle, onReorder,
+}: {
+  segments: SegmentDraft[];
+  total: number;
+  overflow: boolean;
+  expandedId: number | null;
+  onExpandToggle: (id: number) => void;
+  onReorder: (oldIndex: number, newIndex: number) => void;
+}) {
   const cap = Math.max(total, 3600);
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+  const [timelineDragging, setTimelineDragging] = useState(false);
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    setTimeout(() => setTimelineDragging(false), 0);
+    if (!over || active.id === over.id) return;
+    const oldIndex = segments.findIndex(s => s.id === active.id);
+    const newIndex = segments.findIndex(s => s.id === over.id);
+    if (oldIndex !== -1 && newIndex !== -1) onReorder(oldIndex, newIndex);
+  };
+
   return (
     <div className="flex-shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-4">
       <div className="flex items-center justify-between mb-3">
         <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Hour overview</span>
         <span className="text-xs text-zinc-400 font-mono">60 min</span>
       </div>
-      <div className="relative h-12 flex rounded overflow-hidden bg-zinc-800">
-        {segments.map((seg) => {
-          const meta = SEGMENT_META[seg.type];
-          const widthPct = (seg.duration_seconds / cap) * 100;
-          return (
-            <div key={seg.id} className="flex items-center justify-center overflow-hidden transition-all duration-150 border-r border-zinc-900/50 last:border-r-0" style={{ width: `${widthPct}%`, backgroundColor: meta.color + '33' }} title={`${seg.name} · ${fmtDuration(seg.duration_seconds)}`}>
-              {seg.duration_seconds >= 240 && (
-                <span className="text-xs font-medium truncate px-1" style={{ color: meta.color }}>
-                  {seg.duration_seconds >= 480 ? seg.name : fmtDuration(seg.duration_seconds)}
-                </span>
-              )}
-            </div>
-          );
-        })}
-        {total < 3600 && (
-          <div className="flex items-center justify-center" style={{ width: `${((3600 - total) / 3600) * 100}%` }}>
-            <span className="text-xs text-zinc-400">{fmtDuration(3600 - total)} free</span>
+      <DndContext
+        sensors={sensors}
+        collisionDetection={closestCenter}
+        onDragStart={() => setTimelineDragging(true)}
+        onDragEnd={handleDragEnd}
+        onDragCancel={() => setTimeout(() => setTimelineDragging(false), 0)}
+      >
+        <SortableContext items={segments.map(s => s.id)} strategy={horizontalListSortingStrategy}>
+          <div className="relative h-12 flex rounded overflow-hidden bg-zinc-800">
+            {segments.map((seg) => (
+              <SortableTimelineItem
+                key={seg.id}
+                seg={seg}
+                cap={cap}
+                isActive={expandedId === seg.id}
+                isDraggingAny={timelineDragging}
+                onExpandToggle={onExpandToggle}
+              />
+            ))}
+            {total < 3600 && (
+              <div
+                className="flex items-center justify-center pointer-events-none"
+                style={{ width: `${((3600 - total) / 3600) * 100}%` }}
+              >
+                <span className="text-xs text-zinc-400">{fmtDuration(3600 - total)} free</span>
+              </div>
+            )}
           </div>
-        )}
-      </div>
+        </SortableContext>
+      </DndContext>
       <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3">
         {CLOCK_SEGMENT_TYPES.filter((t) => segments.some((s) => s.type === t)).map((type) => {
           const meta = SEGMENT_META[type];
@@ -578,7 +663,7 @@ function ClockTimeline({ segments, total, overflow }: { segments: SegmentDraft[]
 // ─── Segment list (accordion) ─────────────────────────────────────────────────
 
 function SegmentList({
-  segments, expandedId, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType,
+  segments, expandedId, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists,
 }: {
   segments: SegmentDraft[];
   expandedId: number | null;
@@ -588,6 +673,7 @@ function SegmentList({
   onUpdate: (id: number, patch: Partial<SegmentDraft>) => void;
   onDelete: (id: number) => void;
   onChangeType: (id: number, type: ClockSegmentType) => void;
+  playlists: PlaylistSummary[];
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -614,6 +700,7 @@ function SegmentList({
               onUpdate={onUpdate}
               onDelete={onDelete}
               onChangeType={onChangeType}
+              playlists={playlists}
             />
           ))}
         </div>
@@ -625,7 +712,7 @@ function SegmentList({
 // ─── Sortable segment item ────────────────────────────────────────────────────
 
 function SortableSegmentItem({
-  segment, isExpanded, onExpand, onUpdate, onDelete, onChangeType,
+  segment, isExpanded, onExpand, onUpdate, onDelete, onChangeType, playlists,
 }: {
   segment: SegmentDraft;
   isExpanded: boolean;
@@ -633,6 +720,7 @@ function SortableSegmentItem({
   onUpdate: (id: number, patch: Partial<SegmentDraft>) => void;
   onDelete: (id: number) => void;
   onChangeType: (id: number, type: ClockSegmentType) => void;
+  playlists: PlaylistSummary[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: segment.id });
   const meta = SEGMENT_META[segment.type];
@@ -700,6 +788,7 @@ function SortableSegmentItem({
             segment={segment}
             onApply={(patch) => onUpdate(segment.id, patch)}
             onChangeType={(type) => onChangeType(segment.id, type)}
+            playlists={playlists}
           />
         )}
       </div>
@@ -712,16 +801,26 @@ function SortableSegmentItem({
 type DrawerTab = 'content' | 'timing' | 'transitions' | 'live';
 
 function SegmentDrawer({
-  segment, onApply, onChangeType,
+  segment, onApply, onChangeType, playlists,
 }: {
   segment: SegmentDraft;
   onApply: (patch: Partial<SegmentDraft>) => void;
   onChangeType: (type: ClockSegmentType) => void;
+  playlists: PlaylistSummary[];
 }) {
   const [tab, setTab] = useState<DrawerTab>('content');
   const [draft, setDraft] = useState<SegmentDraft>({ ...segment });
+  const [applied, setApplied] = useState(false);
+
+  const drawerDirty = JSON.stringify(draft) !== JSON.stringify(segment);
 
   const update = (patch: Partial<SegmentDraft>) => setDraft((d) => ({ ...d, ...patch }));
+
+  const handleApply = () => {
+    onApply(draft);
+    setApplied(true);
+    setTimeout(() => setApplied(false), 1500);
+  };
 
   const meta = SEGMENT_META[draft.type];
   const isLive = draft.type === 'live' || draft.type === 'live_audience' || draft.type === 'bulletin';
@@ -819,6 +918,7 @@ function SegmentDrawer({
                 sources={draft.sources}
                 segType={draft.type}
                 onChange={(sources) => update({ sources })}
+                playlists={playlists}
               />
             </div>
           </div>
@@ -927,18 +1027,18 @@ function SegmentDrawer({
         {tab === 'transitions' && (
           <div className="grid grid-cols-2 gap-4">
             <Field label="Start clip playlist" hint="Plays before segment content">
-              <PlaylistIdInput value={draft.start_clip_playlist_id} onChange={(v) => update({ start_clip_playlist_id: v })} />
+              <PlaylistDropdown value={draft.start_clip_playlist_id} onChange={(v) => update({ start_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
             </Field>
             <Field label="End clip playlist" hint="Plays after segment content">
-              <PlaylistIdInput value={draft.end_clip_playlist_id} onChange={(v) => update({ end_clip_playlist_id: v })} />
+              <PlaylistDropdown value={draft.end_clip_playlist_id} onChange={(v) => update({ end_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
             </Field>
             {isLive && (
               <Field label="Bed playlist" hint="Background audio under harbor input">
-                <PlaylistIdInput value={draft.bed_playlist_id} onChange={(v) => update({ bed_playlist_id: v })} />
+                <PlaylistDropdown value={draft.bed_playlist_id} onChange={(v) => update({ bed_playlist_id: v })} playlists={playlists} categories={['bed']} />
               </Field>
             )}
             <Field label="Filler playlist" hint="Short content to fill gaps from look-ahead scheduling">
-              <PlaylistIdInput value={draft.filler_playlist_id} onChange={(v) => update({ filler_playlist_id: v })} />
+              <PlaylistDropdown value={draft.filler_playlist_id} onChange={(v) => update({ filler_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
             </Field>
 
             {draft.type === 'music' && (
@@ -946,9 +1046,11 @@ function SegmentDrawer({
                 <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Interstitial jingles</p>
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Jingle playlist" hint="Short station IDs or show jingles inserted between tracks">
-                    <PlaylistIdInput
+                    <PlaylistDropdown
                       value={draft.interstitial_jingle_playlist_id}
                       onChange={(v) => update({ interstitial_jingle_playlist_id: v })}
+                      playlists={playlists}
+                      categories={['jingle']}
                     />
                   </Field>
                   <Field label="Every N songs" hint="Insert one jingle after every N tracks (leave blank to disable)">
@@ -1029,12 +1131,22 @@ function SegmentDrawer({
         )}
       </div>
 
-      <div className="flex justify-end gap-2 px-5 pb-4">
+      <div className="flex justify-end items-center gap-3 px-5 pb-4">
+        {drawerDirty && !applied && (
+          <span className="text-xs text-amber-400">Unapplied changes</span>
+        )}
         <button
-          onClick={() => onApply(draft)}
-          className="px-4 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
+          onClick={handleApply}
+          disabled={!drawerDirty}
+          className={`px-4 py-1.5 text-xs rounded-lg transition-all duration-200 ${
+            applied
+              ? 'bg-green-600 text-white'
+              : drawerDirty
+              ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+              : 'bg-zinc-800 text-zinc-500 cursor-default'
+          }`}
         >
-          Save
+          {applied ? '✓ Applied' : 'Apply'}
         </button>
       </div>
     </div>
@@ -1043,16 +1155,24 @@ function SegmentDrawer({
 
 // ─── Sources editor ───────────────────────────────────────────────────────────
 
-const IMPLICIT_LIVE_TYPES: ClockSegmentType[] = ['live', 'live_audience', 'bulletin'];
+const IMPLICIT_LIVE_TYPES: ClockSegmentType[] = ['bulletin'];
 
 type PlaylistSource = Extract<SegmentSourceEntry, { type: 'playlist' }>;
 
+function playlistCategoriesForSegType(segType: ClockSegmentType): string[] {
+  if (segType === 'music') return ['music'];
+  if (segType === 'live' || segType === 'live_audience') return ['bed'];
+  if (segType === 'stop_set') return ['promo'];
+  return [];
+}
+
 function SourcesEditor({
-  sources, segType, onChange,
+  sources, segType, onChange, playlists,
 }: {
   sources: SegmentSourceEntry[];
   segType: ClockSegmentType;
   onChange: (sources: SegmentSourceEntry[]) => void;
+  playlists: PlaylistSummary[];
 }) {
   // Live types — harbor is implicit, nothing to configure
   if (IMPLICIT_LIVE_TYPES.includes(segType)) {
@@ -1090,7 +1210,7 @@ function SourcesEditor({
     );
   }
 
-  // Music and stop_set — multi-source list
+  // Music, live, live_audience, stop_set — multi-source list
   const validTypes = VALID_SOURCE_TYPES[segType];
   const showWeight = segType === 'music';
 
@@ -1101,7 +1221,14 @@ function SourcesEditor({
     const usedSingles = new Set(sources.filter((s) => !REPEATABLE.has(s.type)).map((s) => s.type));
     const pick = validTypes.find((t) => !REPEATABLE.has(t) && !usedSingles.has(t))
       ?? validTypes.find((t) => REPEATABLE.has(t));
-    if (pick) onChange([...sources, makeDefaultSource(pick)]);
+    if (!pick) return;
+    if (pick === 'playlist') {
+      const cats = playlistCategoriesForSegType(segType);
+      const first = cats.length ? playlists.find(p => cats.includes(p.type)) : playlists[0];
+      onChange([...sources, { type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false }]);
+    } else {
+      onChange([...sources, makeDefaultSource(pick)]);
+    }
   };
 
   const updateSource = (i: number, entry: SegmentSourceEntry) =>
@@ -1133,6 +1260,8 @@ function SourcesEditor({
             showRotationFlags={showWeight && src.type === 'playlist'}
             onChange={(entry) => updateSource(i, entry)}
             onRemove={() => removeSource(i)}
+            playlists={playlists}
+            segType={segType}
           />
         );
       })}
@@ -1145,8 +1274,13 @@ function SourcesEditor({
   );
 }
 
+function getSourceLabel(type: SegmentSourceEntry['type'], segType: ClockSegmentType): string {
+  if (type === 'playlist' && (segType === 'live' || segType === 'live_audience')) return 'Beds playlist';
+  return SOURCE_LABELS[type];
+}
+
 function SourceRow({
-  source, validTypes, usedTypes, showWeight, showRotationFlags, onChange, onRemove,
+  source, validTypes, usedTypes, showWeight, showRotationFlags, onChange, onRemove, playlists, segType,
 }: {
   source: SegmentSourceEntry;
   validTypes: SegmentSourceEntry['type'][];
@@ -1155,6 +1289,8 @@ function SourceRow({
   showRotationFlags: boolean;
   onChange: (entry: SegmentSourceEntry) => void;
   onRemove: () => void;
+  playlists: PlaylistSummary[];
+  segType: ClockSegmentType;
 }) {
   const availableTypes = validTypes.filter((t) => t === source.type || !usedTypes.has(t));
   const hasTier = source.type === 'show_playlist';
@@ -1162,7 +1298,64 @@ function SourceRow({
   const hasWeight = showWeight && 'weight' in source;
   const playlistSrc = isPlaylist ? (source as PlaylistSource) : null;
 
-  // Playlist entries use a structured multi-line layout for clarity
+  // ── Stop-set virtual-type tracking ────────────────────────────────────────
+  // stop_set exposes 'playlist_promo' and 'playlist_spot' as UI variants of
+  // the shared 'playlist' source type. We derive the variant from the resolved
+  // playlist's category, then hold it in state for the brief window before a
+  // playlist is selected or when playlists haven't loaded yet.
+  const derivedVariant = useMemo<'playlist_promo' | 'playlist_spot' | null>(() => {
+    if (segType !== 'stop_set' || source.type !== 'playlist') return null;
+    const ps = source as PlaylistSource;
+    const pl = playlists.find(p => p.id === ps.playlist_id);
+    if (!pl) return null;
+    return pl.type === 'spot' ? 'playlist_spot' : 'playlist_promo';
+  }, [segType, source, playlists]);
+
+  const [stopSetVariant, setStopSetVariant] = useState<'playlist_promo' | 'playlist_spot'>('playlist_promo');
+
+  useEffect(() => {
+    if (derivedVariant !== null) setStopSetVariant(derivedVariant);
+  }, [derivedVariant]);
+
+  // Playlist category filter for the dropdown
+  const playlistCategories: string[] = (() => {
+    if (segType === 'music') return ['music'];
+    if (segType === 'live' || segType === 'live_audience') return ['bed'];
+    if (segType === 'stop_set') return stopSetVariant === 'playlist_spot' ? ['spot'] : ['promo'];
+    return [];
+  })();
+
+  const typeSelectorValue = segType === 'stop_set' && isPlaylist ? stopSetVariant : source.type;
+
+  const handleTypeChange = (val: string) => {
+    if (val === 'playlist_promo') {
+      setStopSetVariant('playlist_promo');
+      const first = playlists.find(p => p.type === 'promo');
+      onChange({ type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false });
+    } else if (val === 'playlist_spot') {
+      setStopSetVariant('playlist_spot');
+      const first = playlists.find(p => p.type === 'spot');
+      onChange({ type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false });
+    } else {
+      onChange(makeDefaultSource(val as SegmentSourceEntry['type']));
+    }
+  };
+
+  const typeOptions = (types: SegmentSourceEntry['type'][]) =>
+    segType === 'stop_set'
+      ? types.flatMap(t =>
+          t === 'playlist'
+            ? [
+                <option key="playlist_promo" value="playlist_promo" className="bg-zinc-900">Promos playlist</option>,
+                <option key="playlist_spot" value="playlist_spot" className="bg-zinc-900">Campaigns playlist</option>,
+              ]
+            : [<option key={t} value={t} className="bg-zinc-900">{SOURCE_LABELS[t]}</option>]
+        )
+      : types.map(t => (
+          <option key={t} value={t} className="bg-zinc-900">{getSourceLabel(t, segType)}</option>
+        ));
+
+  // Playlist entries use a structured multi-line layout
   if (isPlaylist && playlistSrc) {
     const weightVal = hasWeight ? (source as Extract<SegmentSourceEntry, { weight: number }>).weight : 1;
     return (
@@ -1170,39 +1363,28 @@ function SourceRow({
         {/* Header row: type selector + remove */}
         <div className="flex items-center gap-2 px-2 py-1.5 border-b border-zinc-800/60">
           <select
-            value={source.type}
-            onChange={(e) => onChange(makeDefaultSource(e.target.value as SegmentSourceEntry['type']))}
+            value={typeSelectorValue}
+            onChange={(e) => handleTypeChange(e.target.value)}
             className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
           >
-            {availableTypes.map((t) => (
-              <option key={t} value={t} className="bg-zinc-900">{SOURCE_LABELS[t]}</option>
-            ))}
+            {typeOptions(availableTypes)}
           </select>
-          <button
-            onClick={onRemove}
-            className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded hover:bg-red-900/20 flex-shrink-0"
-          >
+          <button onClick={onRemove} className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded hover:bg-red-900/20 flex-shrink-0">
             <X className="w-3 h-3" />
           </button>
         </div>
-        {/* Fields row: playlist ID + weight */}
+        {/* Fields row: playlist picker + optional weight */}
         <div className="flex items-center gap-4 px-3 py-2">
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-zinc-500">Playlist ID</span>
-            <input
-              type="number"
-              min={1}
-              placeholder="—"
-              value={playlistSrc.playlist_id || ''}
-              onChange={(e) => {
-                const v = parseInt(e.target.value, 10);
-                if (!isNaN(v) && v >= 1) onChange({ ...playlistSrc, playlist_id: v });
-              }}
-              className="w-16 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+          <div className="flex-1 min-w-0">
+            <PlaylistDropdown
+              value={playlistSrc.playlist_id || null}
+              onChange={(v) => onChange({ ...playlistSrc, playlist_id: v ?? 1 })}
+              playlists={playlists}
+              categories={playlistCategories}
             />
           </div>
           {showWeight && (
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-shrink-0">
               <span className="text-xs text-zinc-500">Weight</span>
               <input
                 type="number"
@@ -1222,21 +1404,11 @@ function SourceRow({
         {showRotationFlags && (
           <div className="flex items-center gap-4 px-3 pb-2.5">
             <label className="flex items-center gap-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={playlistSrc.hot_play}
-                onChange={(e) => onChange({ ...playlistSrc, hot_play: e.target.checked })}
-                className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-              />
+              <input type="checkbox" checked={playlistSrc.hot_play} onChange={(e) => onChange({ ...playlistSrc, hot_play: e.target.checked })} className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
               <span className="text-xs text-zinc-300">Hot play</span>
             </label>
             <label className="flex items-center gap-1.5 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={playlistSrc.heavy_rotation}
-                onChange={(e) => onChange({ ...playlistSrc, heavy_rotation: e.target.checked })}
-                className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-              />
+              <input type="checkbox" checked={playlistSrc.heavy_rotation} onChange={(e) => onChange({ ...playlistSrc, heavy_rotation: e.target.checked })} className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
               <span className="text-xs text-zinc-300">Heavy rotation</span>
             </label>
           </div>
@@ -1249,12 +1421,10 @@ function SourceRow({
     <div className="flex items-center gap-2 bg-zinc-900 rounded px-2 py-1.5">
       <select
         value={source.type}
-        onChange={(e) => onChange(makeDefaultSource(e.target.value as SegmentSourceEntry['type']))}
+        onChange={(e) => handleTypeChange(e.target.value)}
         className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
       >
-        {availableTypes.map((t) => (
-          <option key={t} value={t} className="bg-zinc-900">{SOURCE_LABELS[t]}</option>
-        ))}
+        {typeOptions(availableTypes)}
       </select>
 
       {hasTier && (
@@ -1290,10 +1460,7 @@ function SourceRow({
         </div>
       )}
 
-      <button
-        onClick={onRemove}
-        className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded hover:bg-red-900/20 flex-shrink-0"
-      >
+      <button onClick={onRemove} className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded hover:bg-red-900/20 flex-shrink-0">
         <X className="w-3 h-3" />
       </button>
     </div>
@@ -1325,5 +1492,29 @@ function PlaylistIdInput({ value, onChange }: { value: number | null; onChange: 
       }}
       className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
     />
+  );
+}
+
+function PlaylistDropdown({ value, onChange, playlists, categories }: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+  playlists: PlaylistSummary[];
+  categories?: string[];
+}) {
+  const filtered = categories?.length ? playlists.filter(p => categories.includes(p.type)) : playlists;
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(e) => {
+        const v = parseInt(e.target.value, 10);
+        onChange(isNaN(v) || v <= 0 ? null : v);
+      }}
+      className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+    >
+      <option value="" className="bg-zinc-900 text-zinc-500">— None —</option>
+      {filtered.map(p => (
+        <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
+      ))}
+    </select>
   );
 }
