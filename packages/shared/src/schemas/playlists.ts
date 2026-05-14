@@ -171,10 +171,18 @@ export const RotationParamsSchema = z.union([
   z.record(z.unknown()), // catch-all for future types
 ]);
 
+export const ROTATION_KINDS = ['music', 'sweeper'] as const;
+export type RotationKind = (typeof ROTATION_KINDS)[number];
+
+export const SONG_POSITIONS = ['any', 'song_start', 'song_end'] as const;
+export type SongPosition = (typeof SONG_POSITIONS)[number];
+
 export const RotationSchema = z.object({
   id: z.number().int(),
   name: z.string(),
+  kind: z.enum(ROTATION_KINDS).default('music'),
   type: z.enum(ROTATION_TYPES),
+  song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
@@ -183,13 +191,18 @@ export type Rotation = z.infer<typeof RotationSchema>;
 
 export const RotationCreateSchema = z.object({
   name: z.string().min(1, 'Name is required'),
+  kind: z.enum(ROTATION_KINDS).default('music'),
   type: z.enum(ROTATION_TYPES),
+  song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()).default({}),
 });
 export type RotationCreate = z.infer<typeof RotationCreateSchema>;
 
 export const RotationPatchSchema = z.object({
   name: z.string().min(1).optional(),
+  kind: z.enum(ROTATION_KINDS).optional(),
+  type: z.enum(ROTATION_TYPES).optional(),
+  song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()).optional(),
 });
 export type RotationPatch = z.infer<typeof RotationPatchSchema>;

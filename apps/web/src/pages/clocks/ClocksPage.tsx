@@ -20,7 +20,7 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   Plus, GripVertical, Trash2, Check, X, Clock,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Radio,
 } from 'lucide-react';
 import {
   Clock as ClockType,
@@ -37,11 +37,19 @@ import {
   RECOVERY_TACTICS,
   TrailingTimeStrategy,
   TRAILING_TIME_STRATEGIES,
-  SweepConfig,
+  SegmentSweeperConfig,
   SweepSourceEntry,
   SWEEP_SOURCES,
   SIMPLE_ROTATION_TYPES,
   SimpleRotationType,
+  FINISH_POLICIES,
+  JOIN_POLICIES,
+  OVERRUN_POLICIES,
+  FinishPolicy,
+  JoinPolicy,
+  OverrunPolicy,
+  Rotation,
+  Show,
 } from '@radio/shared';
 import {
   fetchClocks,
@@ -51,8 +59,35 @@ import {
   deleteClock,
   replaceClockSegments,
   fetchPlaylists,
+  fetchShows,
+  fetchRotations,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
+
+// ─── Handover / sweep labels ──────────────────────────────────────────────────
+
+const FINISH_POLICY_LABELS: Record<FinishPolicy, { label: string; desc: string }> = {
+  hard_cut:        { label: 'Hard cut',        desc: 'Cut the active segment immediately when a hard-start successor arrives.' },
+  finish_segment:  { label: 'Finish segment',  desc: 'Let the active segment finish naturally before handing over (may overrun by minutes).' },
+};
+
+const JOIN_POLICY_LABELS: Record<JoinPolicy, { label: string; desc: string }> = {
+  join_top:  { label: 'Join at top',  desc: 'Always start the clock at segment 1, regardless of when the slot begins.' },
+  join_mid:  { label: 'Join mid',     desc: 'Skip ahead to the segment that would be playing at the current wall-clock minute. Preserves break-time alignment.' },
+};
+
+const OVERRUN_POLICY_LABELS: Record<OverrunPolicy, { label: string; desc: string }> = {
+  loop_top:      { label: 'Loop from top',  desc: 'Restart the clock at segment 1 if the show outlives its clock.' },
+  loop_mid:      { label: 'Loop at mid',    desc: 'Resume at the segment matching the wall-clock minute. Maintains alignment.' },
+  fall_through:  { label: 'Fall through',   desc: 'No clock structure beyond the first pass — keep playing the show\'s content sources.' },
+};
+
+const SWEEP_SOURCE_LABELS: Record<typeof SWEEP_SOURCES[number], string> = {
+  commercial:  'Campaigns',
+  promo:       'Promo',
+  station_id:  'Station ID',
+  jingle:      'Jingle',
+};
 
 // ─── Segment metadata ─────────────────────────────────────────────────────────
 
@@ -137,21 +172,41 @@ const DURATION_STEP: Record<ClockSegmentType, number> = {
 
 type SegmentDraft = ClockSegment;
 
+const DEFAULT_MUSIC_SWEEPER_CONFIG: SegmentSweeperConfig = {
+  per_hour: 3,
+  min_gap_minutes: 8,
+  sources: [
+    { type: 'commercial', weight: 2, rotation_id: null },
+    { type: 'promo',      weight: 1, rotation_id: null },
+    { type: 'station_id', weight: 1, rotation_id: null },
+    { type: 'jingle',     weight: 1, rotation_id: null },
+  ],
+};
+
+const DEFAULT_LIVE_SWEEPER_CONFIG: SegmentSweeperConfig = {
+  per_hour: 1,
+  min_gap_minutes: 15,
+  sources: [
+    { type: 'station_id', weight: 1, rotation_id: null },
+    { type: 'jingle',     weight: 1, rotation_id: null },
+  ],
+};
+
 const TYPE_DEFAULTS: Record<ClockSegmentType, {
   sources: SegmentSourceEntry[];
   start_policy: StartPolicy;
   trailing_time: TrailingTimeStrategy[];
   accept_live: boolean;
-  accept_sweepers: SweeperType[];
+  sweeper_config: SegmentSweeperConfig | null;
   recovery_tactics: RecoveryTactic[];
 }> = {
-  music:         { sources: [{ type: 'show_playlist', weight: 1 }],           start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: ['skip_events', 'fill', 'early_handover'], accept_live: true,  accept_sweepers: ['commercial', 'promo', 'station_id', 'jingle'], recovery_tactics: ['trim_outro', 'skip_song', 'drop_queued'] },
-  live:          { sources: [{ type: 'live' }],                                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: [],                                         accept_live: true,  accept_sweepers: ['station_id', 'jingle'],                         recovery_tactics: [] },
-  live_audience: { sources: [{ type: 'live' }],                                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: [],                                         accept_live: true,  accept_sweepers: ['station_id', 'jingle'],                         recovery_tactics: [] },
-  stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    trailing_time: ['skip_events', 'fill'],                     accept_live: false, accept_sweepers: [],                                               recovery_tactics: [] },
-  news:          { sources: [{ type: 'live' }],                                start_policy: { type: 'hard' },                                    trailing_time: ['skip_events', 'fill'],                     accept_live: true,  accept_sweepers: [],                                               recovery_tactics: [] },
-  voice_track:   { sources: [],                                                 start_policy: { type: 'hard' },                                    trailing_time: [],                                         accept_live: false, accept_sweepers: [],                                               recovery_tactics: [] },
-  bulletin:      { sources: [{ type: 'live' }],                                start_policy: { type: 'hard' },                                    trailing_time: [],                                         accept_live: true,  accept_sweepers: [],                                               recovery_tactics: [] },
+  music:         { sources: [{ type: 'show_playlist', weight: 1 }],                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: ['skip_events', 'fill', 'early_handover'], accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG, recovery_tactics: ['trim_outro', 'skip_song', 'drop_queued'] },
+  live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: [],                                         accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG,  recovery_tactics: [] },
+  live_audience: { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: [],                                         accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG,  recovery_tactics: [] },
+  stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    trailing_time: ['skip_events', 'fill'],                     accept_live: false, sweeper_config: null,                         recovery_tactics: [] },
+  news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    trailing_time: ['skip_events', 'fill'],                     accept_live: true,  sweeper_config: null,                         recovery_tactics: [] },
+  voice_track:   { sources: [],                                                      start_policy: { type: 'hard' },                                    trailing_time: [],                                         accept_live: false, sweeper_config: null,                         recovery_tactics: [] },
+  bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    trailing_time: [],                                         accept_live: true,  sweeper_config: null,                         recovery_tactics: [] },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -203,7 +258,8 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
     trailing_time: d.trailing_time,
     recovery_tactics: d.recovery_tactics,
     accept_live: d.accept_live,
-    accept_sweepers: d.accept_sweepers,
+    accept_sweepers: [],
+    sweeper_config: d.sweeper_config,
     silence_detection_action: null,
     rotation_type: null,
   };
@@ -235,6 +291,11 @@ export function ClocksPage() {
 
   const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
   const { data: allPlaylists = [] } = useQuery({ queryKey: ['playlists'], queryFn: fetchPlaylists });
+  const { data: allShows = [] } = useQuery({ queryKey: ['shows'], queryFn: fetchShows });
+  const { data: allRotations = [] } = useQuery({ queryKey: ['rotations'], queryFn: fetchRotations });
+
+  const musicRotations = allRotations.filter((r) => (r.kind ?? 'music') === 'music');
+  const sweeperRotations = allRotations.filter((r) => r.kind === 'sweeper');
 
   const { data: loadedSegments = [] } = useQuery({
     queryKey: ['clock-segments', selectedId],
@@ -244,9 +305,32 @@ export function ClocksPage() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
+      // Save-time validation: unassigned clocks need a playlist source on every music segment.
+      // Backend enforces the same rule; we surface it here for a faster, clearer UX.
+      if (draftClock && draftClock.show_id === null) {
+        const offending = draftSegs
+          .map((s, i) => ({ s, i }))
+          .filter(({ s }) => s.type === 'music' && !s.sources.some((src) => src.type === 'playlist'));
+        if (offending.length > 0) {
+          throw new Error(
+            `Unassigned clock requires a playlist source on every music segment (segment${
+              offending.length > 1 ? 's' : ''
+            } #${offending.map(({ i }) => i + 1).join(', #')})`,
+          );
+        }
+      }
       const promises: Promise<unknown>[] = [];
       if (clockDirty && draftClock)
-        promises.push(updateClock(draftClock.id, { name: draftClock.name, description: draftClock.description, sweep_config: draftClock.sweep_config }));
+        promises.push(updateClock(draftClock.id, {
+          name: draftClock.name,
+          description: draftClock.description,
+          show_id: draftClock.show_id,
+          station_id_playlist_id: draftClock.station_id_playlist_id,
+          jingle_playlist_id: draftClock.jingle_playlist_id,
+          finish_policy: draftClock.finish_policy,
+          join_policy: draftClock.join_policy,
+          overrun_policy: draftClock.overrun_policy,
+        }));
       if (segsDirty && draftClock)
         promises.push(replaceClockSegments(draftClock.id, draftSegs));
       await Promise.all(promises);
@@ -375,7 +459,8 @@ export function ClocksPage() {
         start_policy: d.start_policy,
         trailing_time: d.trailing_time,
         accept_live: d.accept_live,
-        accept_sweepers: d.accept_sweepers,
+        accept_sweepers: [],
+        sweeper_config: d.sweeper_config,
         recovery_tactics: d.recovery_tactics,
       };
     }));
@@ -417,13 +502,17 @@ export function ClocksPage() {
                 value={newName}
                 onChange={(e) => setNewName(e.target.value)}
                 onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newName.trim()) createMutation.mutate({ name: newName.trim() });
+                  if (e.key === 'Enter' && newName.trim() && !createMutation.isPending) createMutation.mutate({ name: newName.trim() });
                   if (e.key === 'Escape') { setCreatingNew(false); setNewName(''); }
                 }}
                 placeholder="Clock name…"
                 className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
               />
-              <button onClick={() => newName.trim() && createMutation.mutate({ name: newName.trim() })} className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors">
+              <button
+                onClick={() => newName.trim() && !createMutation.isPending && createMutation.mutate({ name: newName.trim() })}
+                disabled={!newName.trim() || createMutation.isPending}
+                className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-40 disabled:cursor-default"
+              >
                 <Check className="w-3.5 h-3.5" />
               </button>
               <button onClick={() => { setCreatingNew(false); setNewName(''); }} className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors">
@@ -440,13 +529,21 @@ export function ClocksPage() {
               const segs = clock.id === selectedId ? draftSegs : (queryClient.getQueryData<ClockSegment[]>(['clock-segments', clock.id]) ?? []);
               const secs = totalSeconds(segs);
               const isSelected = clock.id === selectedId;
+              const assignedShow = clock.show_id != null ? allShows.find((s) => s.id === clock.show_id) : null;
               return (
                 <button key={clock.id} onClick={() => handleClockClick(clock)} className={`w-full text-left px-4 py-3 border-b border-zinc-800/60 transition-colors ${isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'}`}>
                   <div className="flex items-center gap-2">
                     <Clock className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
                     <span className="text-sm font-medium text-white truncate">{clock.name}</span>
                   </div>
-                  <div className="flex gap-2 mt-1 ml-5">
+                  <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 ml-5 items-center">
+                    <span className={`text-[10px] px-1 py-0.5 rounded ${clock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                      {clock.used ? 'Used' : 'Not used'}
+                    </span>
+                    <span className="text-[10px] text-zinc-500 truncate">
+                      {assignedShow ? assignedShow.name : 'Unassigned'}
+                    </span>
+                    <span className="basis-full" />
                     <span className={`text-xs ${secs > 3600 ? 'text-red-400' : 'text-zinc-400'}`}>{fmtDuration(secs)}</span>
                     <span className="text-xs text-zinc-400">· {segs.length} seg</span>
                   </div>
@@ -473,10 +570,65 @@ export function ClocksPage() {
                   placeholder="Add a description…"
                   className="mt-1 text-sm text-zinc-300 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-full transition-colors pb-0.5 placeholder:text-zinc-500"
                 />
-                <SweepConfigEditor
-                  config={draftClock.sweep_config}
-                  onChange={(c) => updateDraftClock((clock) => ({ ...clock, sweep_config: c }))}
+
+                {/* Show assignment + used badge */}
+                <div className="mt-3 flex items-center gap-3 flex-wrap">
+                  <div className="flex items-center gap-2">
+                    <Radio className="w-3.5 h-3.5 text-zinc-500" />
+                    <span className="text-xs text-zinc-500">Show</span>
+                    <select
+                      value={draftClock.show_id ?? ''}
+                      onChange={(e) =>
+                        updateDraftClock((c) => ({ ...c, show_id: e.target.value === '' ? null : Number(e.target.value) }))
+                      }
+                      className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
+                    >
+                      <option value="" className="bg-zinc-900">Unassigned</option>
+                      {allShows.map((s) => (
+                        <option key={s.id} value={s.id} className="bg-zinc-900">{s.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                    {draftClock.used ? 'Used in schedule' : 'Not used'}
+                  </span>
+                  {draftClock.show_id === null && (
+                    <span className="text-[10px] text-amber-400">
+                      Music segments require an explicit playlist source
+                    </span>
+                  )}
+                </div>
+
+                <HandoverEditor
+                  finish={draftClock.finish_policy}
+                  join={draftClock.join_policy}
+                  overrun={draftClock.overrun_policy}
+                  onChange={(p) => updateDraftClock((c) => ({ ...c, ...p }))}
                 />
+
+                {/* Sweeper playlist sources — clock-level, shared across all segments */}
+                <div className="mt-3 pt-3 border-t border-zinc-700/60 flex flex-wrap gap-4">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs text-zinc-500">Station ID playlist</span>
+                    <PlaylistDropdown
+                      value={draftClock.station_id_playlist_id ?? null}
+                      onChange={(id) => updateDraftClock((c) => ({ ...c, station_id_playlist_id: id }))}
+                      playlists={allPlaylists}
+                      categories={['jingle']}
+                    />
+                  </div>
+                  {draftClock.show_id === null && (
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-500">Jingle playlist</span>
+                      <PlaylistDropdown
+                        value={draftClock.jingle_playlist_id ?? null}
+                        onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
+                        playlists={allPlaylists}
+                        categories={['jingle']}
+                      />
+                    </div>
+                  )}
+                </div>
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
                 {dirty && (
@@ -544,6 +696,9 @@ export function ClocksPage() {
                   onDelete={deleteSeg}
                   onChangeType={changeSegType}
                   playlists={allPlaylists}
+                  musicRotations={musicRotations}
+                  sweeperRotations={sweeperRotations}
+                  clockShowId={draftClock.show_id}
                 />
                 {draftSegs.length === 0 && (
                   <div className="px-5 py-10 text-center text-zinc-400 text-sm">
@@ -686,7 +841,7 @@ function ClockTimeline({
 // ─── Segment list (accordion) ─────────────────────────────────────────────────
 
 function SegmentList({
-  segments, expandedId, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists,
+  segments, expandedId, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations, clockShowId,
 }: {
   segments: SegmentDraft[];
   expandedId: number | null;
@@ -697,6 +852,9 @@ function SegmentList({
   onDelete: (id: number) => void;
   onChangeType: (id: number, type: ClockSegmentType) => void;
   playlists: PlaylistSummary[];
+  musicRotations: Rotation[];
+  sweeperRotations: Rotation[];
+  clockShowId: number | null;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -724,6 +882,9 @@ function SegmentList({
               onDelete={onDelete}
               onChangeType={onChangeType}
               playlists={playlists}
+              musicRotations={musicRotations}
+              sweeperRotations={sweeperRotations}
+              clockShowId={clockShowId}
             />
           ))}
         </div>
@@ -735,7 +896,7 @@ function SegmentList({
 // ─── Sortable segment item ────────────────────────────────────────────────────
 
 function SortableSegmentItem({
-  segment, isExpanded, onExpand, onUpdate, onDelete, onChangeType, playlists,
+  segment, isExpanded, onExpand, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations, clockShowId,
 }: {
   segment: SegmentDraft;
   isExpanded: boolean;
@@ -744,6 +905,9 @@ function SortableSegmentItem({
   onDelete: (id: number) => void;
   onChangeType: (id: number, type: ClockSegmentType) => void;
   playlists: PlaylistSummary[];
+  musicRotations: Rotation[];
+  sweeperRotations: Rotation[];
+  clockShowId: number | null;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: segment.id });
   const meta = SEGMENT_META[segment.type];
@@ -812,6 +976,9 @@ function SortableSegmentItem({
             onApply={(patch) => onUpdate(segment.id, patch)}
             onChangeType={(type) => onChangeType(segment.id, type)}
             playlists={playlists}
+            musicRotations={musicRotations}
+            sweeperRotations={sweeperRotations}
+            clockShowId={clockShowId}
           />
         )}
       </div>
@@ -824,12 +991,15 @@ function SortableSegmentItem({
 type DrawerTab = 'content' | 'timing' | 'transitions' | 'live';
 
 function SegmentDrawer({
-  segment, onApply, onChangeType, playlists,
+  segment, onApply, onChangeType, playlists, musicRotations, sweeperRotations, clockShowId,
 }: {
   segment: SegmentDraft;
   onApply: (patch: Partial<SegmentDraft>) => void;
   onChangeType: (type: ClockSegmentType) => void;
   playlists: PlaylistSummary[];
+  musicRotations: Rotation[];
+  sweeperRotations: Rotation[];
+  clockShowId: number | null;
 }) {
   const [tab, setTab] = useState<DrawerTab>('content');
   const [draft, setDraft] = useState<SegmentDraft>({ ...segment });
@@ -901,7 +1071,8 @@ function SegmentDrawer({
                     start_policy: d.start_policy,
                     trailing_time: d.trailing_time,
                     accept_live: d.accept_live,
-                    accept_sweepers: d.accept_sweepers,
+                    accept_sweepers: [],
+                    sweeper_config: d.sweeper_config,
                     recovery_tactics: d.recovery_tactics,
                   });
                 }}
@@ -942,23 +1113,28 @@ function SegmentDrawer({
                 segType={draft.type}
                 onChange={(sources) => update({ sources })}
                 playlists={playlists}
+                musicRotations={musicRotations}
+                clockShowId={clockShowId}
               />
             </div>
 
-            {(draft.type === 'stop_set' || draft.type === 'live' || draft.type === 'live_audience') && (
-              <Field label="Rotation">
-                <select
-                  value={draft.rotation_type ?? ''}
-                  onChange={(e) => update({ rotation_type: e.target.value === '' ? null : e.target.value as SimpleRotationType })}
-                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="" className="bg-zinc-900">Default</option>
-                  {SIMPLE_ROTATION_TYPES.map((t) => (
-                    <option key={t} value={t} className="bg-zinc-900">{t === 'round_robin' ? 'Round robin' : 'Random'}</option>
-                  ))}
-                </select>
-              </Field>
-            )}
+            {/* Live segments: simple rotation visible only when at least one non-harbor source is present.
+                Stop-set rotation lives per slot inside SourcesEditor; no segment-level rotation here. */}
+            {(draft.type === 'live' || draft.type === 'live_audience') &&
+              draft.sources.some((s) => s.type !== 'live') && (
+                <Field label="Rotation">
+                  <select
+                    value={draft.rotation_type ?? ''}
+                    onChange={(e) => update({ rotation_type: e.target.value === '' ? null : e.target.value as SimpleRotationType })}
+                    className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="" className="bg-zinc-900">Default</option>
+                    {SIMPLE_ROTATION_TYPES.map((t) => (
+                      <option key={t} value={t} className="bg-zinc-900">{t === 'round_robin' ? 'Round robin' : 'Random'}</option>
+                    ))}
+                  </select>
+                </Field>
+              )}
           </div>
         )}
 
@@ -1129,26 +1305,13 @@ function SegmentDrawer({
             )}
 
             {draft.type !== 'stop_set' && (
-              <Field label="Accept sweepers" className="col-span-2">
-                <div className="flex gap-4">
-                  {SWEEPER_TYPES.map((t) => (
-                    <label key={t} className="flex items-center gap-1.5 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={draft.accept_sweepers.includes(t)}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                            ? [...draft.accept_sweepers, t]
-                            : draft.accept_sweepers.filter((x) => x !== t);
-                          update({ accept_sweepers: next });
-                        }}
-                        className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-                      />
-                      <span className="text-xs text-zinc-300">{t.replace(/_/g, ' ')}</span>
-                    </label>
-                  ))}
-                </div>
-              </Field>
+              <div className="col-span-2">
+                <SegmentSweeperEditor
+                  config={draft.sweeper_config ?? null}
+                  sweeperRotations={sweeperRotations}
+                  onChange={(c) => update({ sweeper_config: c })}
+                />
+              </div>
             )}
 
             {isLive && (
@@ -1205,12 +1368,14 @@ function playlistCategoriesForSegType(segType: ClockSegmentType): string[] {
 }
 
 function SourcesEditor({
-  sources, segType, onChange, playlists,
+  sources, segType, onChange, playlists, musicRotations, clockShowId,
 }: {
   sources: SegmentSourceEntry[];
   segType: ClockSegmentType;
   onChange: (sources: SegmentSourceEntry[]) => void;
   playlists: PlaylistSummary[];
+  musicRotations: Rotation[];
+  clockShowId: number | null;
 }) {
   // Live types — harbor is implicit, nothing to configure
   if (IMPLICIT_LIVE_TYPES.includes(segType)) {
@@ -1248,12 +1413,29 @@ function SourcesEditor({
     );
   }
 
-  // Music, live, live_audience, stop_set — multi-source list
-  const validTypes = VALID_SOURCE_TYPES[segType];
+  // Stop-set — two fixed slots: campaigns + promos. See docs/clocks-rotations-redesign.md §3.
+  if (segType === 'stop_set') {
+    return <StopSetSourcesEditor sources={sources} onChange={onChange} playlists={playlists} />;
+  }
+
+  // Music, live, live_audience — multi-source list
+  let validTypes = VALID_SOURCE_TYPES[segType];
+  // Unassigned clocks can't use show-* sources (no show context at runtime).
+  if (clockShowId === null) {
+    validTypes = validTypes.filter((t) => !t.startsWith('show_'));
+  }
   const showWeight = segType === 'music';
 
   // 'playlist' can appear multiple times; all other types are single-use
   const REPEATABLE = new Set<SegmentSourceEntry['type']>(['playlist']);
+
+  // Playlist IDs already in use by other rows — for dropdown exclusion
+  const usedPlaylistIds = (excludeIdx: number) =>
+    new Set(
+      sources
+        .filter((s, idx) => idx !== excludeIdx && s.type === 'playlist')
+        .map((s) => (s as Extract<SegmentSourceEntry, { type: 'playlist' }>).playlist_id),
+    );
 
   const addSource = () => {
     const usedSingles = new Set(sources.filter((s) => !REPEATABLE.has(s.type)).map((s) => s.type));
@@ -1262,8 +1444,12 @@ function SourcesEditor({
     if (!pick) return;
     if (pick === 'playlist') {
       const cats = playlistCategoriesForSegType(segType);
-      const first = cats.length ? playlists.find(p => cats.includes(p.type)) : playlists[0];
-      onChange([...sources, { type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false }]);
+      const usedIds = new Set(
+        sources.filter((s) => s.type === 'playlist').map((s) => (s as Extract<SegmentSourceEntry, { type: 'playlist' }>).playlist_id),
+      );
+      const candidates = cats.length ? playlists.filter((p) => cats.includes(p.type)) : playlists;
+      const first = candidates.find((p) => !usedIds.has(p.id)) ?? candidates[0];
+      onChange([...sources, { type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false, rotation_id: null }]);
     } else {
       onChange([...sources, makeDefaultSource(pick)]);
     }
@@ -1294,8 +1480,10 @@ function SourcesEditor({
             source={src}
             validTypes={validTypes}
             usedTypes={usedByOthers}
+            usedPlaylistIds={usedPlaylistIds(i)}
             showWeight={showWeight}
-            showRotationFlags={showWeight && src.type === 'playlist'}
+            showRotationIdPicker={segType === 'music' && src.type === 'playlist'}
+            musicRotations={musicRotations}
             onChange={(entry) => updateSource(i, entry)}
             onRemove={() => removeSource(i)}
             playlists={playlists}
@@ -1312,19 +1500,210 @@ function SourcesEditor({
   );
 }
 
+// ─── Stop-set two-slot editor ────────────────────────────────────────────────
+
+type StopSetCampaignsMode = 'none' | 'campaigns' | 'playlist';
+type StopSetPromosMode    = 'none' | 'promos' | 'playlist';
+
+function classifyStopSetSources(sources: SegmentSourceEntry[], playlists: PlaylistSummary[]) {
+  let campaignsMode: StopSetCampaignsMode = 'none';
+  let campaignsRotation: SimpleRotationType | undefined;
+  let campaignsPlaylistId: number | null = null;
+
+  let promosMode: StopSetPromosMode = 'none';
+  let promosRotation: SimpleRotationType | undefined;
+  let promosPlaylistId: number | null = null;
+
+  for (const s of sources) {
+    if (s.type === 'campaigns') {
+      campaignsMode = 'campaigns';
+      campaignsRotation = s.rotation;
+    } else if (s.type === 'promos') {
+      promosMode = 'promos';
+      promosRotation = s.rotation;
+    } else if (s.type === 'playlist') {
+      const pl = playlists.find((p) => p.id === s.playlist_id);
+      if (pl?.type === 'spot') {
+        campaignsMode = 'playlist';
+        campaignsPlaylistId = s.playlist_id;
+        campaignsRotation = s.rotation;
+      } else {
+        promosMode = 'playlist';
+        promosPlaylistId = s.playlist_id;
+        promosRotation = s.rotation;
+      }
+    }
+  }
+  return {
+    campaignsMode, campaignsRotation, campaignsPlaylistId,
+    promosMode,    promosRotation,    promosPlaylistId,
+  };
+}
+
+function StopSetSourcesEditor({
+  sources, onChange, playlists,
+}: {
+  sources: SegmentSourceEntry[];
+  onChange: (sources: SegmentSourceEntry[]) => void;
+  playlists: PlaylistSummary[];
+}) {
+  const state = classifyStopSetSources(sources, playlists);
+
+  const buildSources = (next: typeof state): SegmentSourceEntry[] => {
+    const out: SegmentSourceEntry[] = [];
+    // Campaigns slot
+    if (next.campaignsMode === 'campaigns') {
+      out.push({ type: 'campaigns', rotation: next.campaignsRotation });
+    } else if (next.campaignsMode === 'playlist' && next.campaignsPlaylistId !== null) {
+      out.push({
+        type: 'playlist', playlist_id: next.campaignsPlaylistId, weight: 1,
+        hot_play: false, heavy_rotation: false, rotation: next.campaignsRotation, rotation_id: null,
+      });
+    }
+    // Promos slot
+    if (next.promosMode === 'promos') {
+      out.push({ type: 'promos', weight: 1, rotation: next.promosRotation });
+    } else if (next.promosMode === 'playlist' && next.promosPlaylistId !== null) {
+      out.push({
+        type: 'playlist', playlist_id: next.promosPlaylistId, weight: 1,
+        hot_play: false, heavy_rotation: false, rotation: next.promosRotation, rotation_id: null,
+      });
+    }
+    return out;
+  };
+
+  const updateState = (patch: Partial<typeof state>) => onChange(buildSources({ ...state, ...patch }));
+
+  return (
+    <div className="space-y-3">
+      {/* Campaigns slot */}
+      <StopSetSlot
+        title="Campaigns"
+        mode={state.campaignsMode}
+        modeOptions={[
+          { value: 'none', label: 'None' },
+          { value: 'campaigns', label: 'Campaigns' },
+          { value: 'playlist', label: 'Campaigns playlist' },
+        ]}
+        playlistCategory="spot"
+        playlistId={state.campaignsPlaylistId}
+        rotation={state.campaignsRotation}
+        playlists={playlists}
+        onModeChange={(mode) => {
+          const m = mode as StopSetCampaignsMode;
+          const firstSpot = playlists.find((p) => p.type === 'spot');
+          updateState({
+            campaignsMode: m,
+            campaignsPlaylistId: m === 'playlist' ? (state.campaignsPlaylistId ?? firstSpot?.id ?? null) : null,
+          });
+        }}
+        onPlaylistChange={(id) => updateState({ campaignsPlaylistId: id })}
+        onRotationChange={(r) => updateState({ campaignsRotation: r })}
+      />
+
+      {/* Promos slot */}
+      <StopSetSlot
+        title="Promos"
+        mode={state.promosMode}
+        modeOptions={[
+          { value: 'none', label: 'None' },
+          { value: 'promos', label: 'Promos' },
+          { value: 'playlist', label: 'Promos playlist' },
+        ]}
+        playlistCategory="promo"
+        playlistId={state.promosPlaylistId}
+        rotation={state.promosRotation}
+        playlists={playlists}
+        onModeChange={(mode) => {
+          const m = mode as StopSetPromosMode;
+          const firstPromo = playlists.find((p) => p.type === 'promo');
+          updateState({
+            promosMode: m,
+            promosPlaylistId: m === 'playlist' ? (state.promosPlaylistId ?? firstPromo?.id ?? null) : null,
+          });
+        }}
+        onPlaylistChange={(id) => updateState({ promosPlaylistId: id })}
+        onRotationChange={(r) => updateState({ promosRotation: r })}
+      />
+    </div>
+  );
+}
+
+function StopSetSlot({
+  title, mode, modeOptions, playlistCategory, playlistId, rotation, playlists,
+  onModeChange, onPlaylistChange, onRotationChange,
+}: {
+  title: string;
+  mode: string;
+  modeOptions: { value: string; label: string }[];
+  playlistCategory: 'spot' | 'promo';
+  playlistId: number | null;
+  rotation: SimpleRotationType | undefined;
+  playlists: PlaylistSummary[];
+  onModeChange: (v: string) => void;
+  onPlaylistChange: (id: number | null) => void;
+  onRotationChange: (r: SimpleRotationType | undefined) => void;
+}) {
+  const isNone = mode === 'none';
+  return (
+    <div className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
+      <div className="flex items-center gap-2 px-2 py-1.5 border-b border-zinc-800/60">
+        <span className="text-xs font-medium text-zinc-300 w-24">{title}</span>
+        <select
+          value={mode}
+          onChange={(e) => onModeChange(e.target.value)}
+          className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+        >
+          {modeOptions.map((o) => (
+            <option key={o.value} value={o.value} className="bg-zinc-900">{o.label}</option>
+          ))}
+        </select>
+      </div>
+      {!isNone && (
+        <div className="flex items-center gap-3 px-3 py-2">
+          {mode === 'playlist' && (
+            <div className="flex-1 min-w-0">
+              <PlaylistDropdown
+                value={playlistId}
+                onChange={onPlaylistChange}
+                playlists={playlists}
+                categories={[playlistCategory]}
+              />
+            </div>
+          )}
+          <div className="flex items-center gap-1.5 ml-auto">
+            <span className="text-xs text-zinc-500">Rotation</span>
+            <select
+              value={rotation ?? ''}
+              onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
+              className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="" className="bg-zinc-900">Default</option>
+              <option value="round_robin" className="bg-zinc-900">Round robin</option>
+              <option value="random" className="bg-zinc-900">Random</option>
+            </select>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function getSourceLabel(type: SegmentSourceEntry['type'], segType: ClockSegmentType): string {
   if (type === 'playlist' && (segType === 'live' || segType === 'live_audience')) return 'Beds playlist';
   return SOURCE_LABELS[type];
 }
 
 function SourceRow({
-  source, validTypes, usedTypes, showWeight, showRotationFlags, onChange, onRemove, playlists, segType,
+  source, validTypes, usedTypes, usedPlaylistIds, showWeight, showRotationIdPicker, musicRotations, onChange, onRemove, playlists, segType,
 }: {
   source: SegmentSourceEntry;
   validTypes: SegmentSourceEntry['type'][];
   usedTypes: Set<SegmentSourceEntry['type']>;
+  usedPlaylistIds: Set<number>;
   showWeight: boolean;
-  showRotationFlags: boolean;
+  showRotationIdPicker: boolean;
+  musicRotations: Rotation[];
   onChange: (entry: SegmentSourceEntry) => void;
   onRemove: () => void;
   playlists: PlaylistSummary[];
@@ -1396,6 +1775,10 @@ function SourceRow({
   // Playlist entries use a structured multi-line layout
   if (isPlaylist && playlistSrc) {
     const weightVal = hasWeight ? (source as Extract<SegmentSourceEntry, { weight: number }>).weight : 1;
+    // Exclude playlists already chosen by sibling rows. Keep the current row's selection.
+    const filteredPlaylists = playlists.filter(
+      (p) => p.id === playlistSrc.playlist_id || !usedPlaylistIds.has(p.id),
+    );
     return (
       <div className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
         {/* Header row: type selector + remove */}
@@ -1417,7 +1800,7 @@ function SourceRow({
             <PlaylistDropdown
               value={playlistSrc.playlist_id || null}
               onChange={(v) => onChange({ ...playlistSrc, playlist_id: v ?? 1 })}
-              playlists={playlists}
+              playlists={filteredPlaylists}
               categories={playlistCategories}
             />
           </div>
@@ -1438,29 +1821,20 @@ function SourceRow({
             </div>
           )}
         </div>
-        {/* Rotation flags + rotation selector */}
-        {showRotationFlags && (
-          <div className="flex items-center gap-4 px-3 pb-2.5">
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" checked={playlistSrc.hot_play} onChange={(e) => onChange({ ...playlistSrc, hot_play: e.target.checked })} className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
-              <span className="text-xs text-zinc-300">Hot play</span>
-            </label>
-            <label className="flex items-center gap-1.5 cursor-pointer">
-              <input type="checkbox" checked={playlistSrc.heavy_rotation} onChange={(e) => onChange({ ...playlistSrc, heavy_rotation: e.target.checked })} className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
-              <span className="text-xs text-zinc-300">Heavy rotation</span>
-            </label>
-            <div className="flex items-center gap-1.5 ml-auto">
-              <span className="text-xs text-zinc-500">Rotation</span>
-              <select
-                value={playlistSrc.rotation ?? ''}
-                onChange={(e) => onChange({ ...playlistSrc, rotation: e.target.value === '' ? undefined : e.target.value as SimpleRotationType })}
-                className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-              >
-                <option value="" className="bg-zinc-900">Default</option>
-                <option value="round_robin" className="bg-zinc-900">Round robin</option>
-                <option value="random" className="bg-zinc-900">Random</option>
-              </select>
-            </div>
+        {/* Rotation document picker (music segments only) */}
+        {showRotationIdPicker && (
+          <div className="flex items-center gap-3 px-3 pb-2.5">
+            <span className="text-xs text-zinc-500">Rotation</span>
+            <select
+              value={playlistSrc.rotation_id ?? ''}
+              onChange={(e) => onChange({ ...playlistSrc, rotation_id: e.target.value === '' ? null : Number(e.target.value) })}
+              className="flex-1 px-2 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+            >
+              <option value="" className="bg-zinc-900">Default rotation</option>
+              {musicRotations.map((r) => (
+                <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
+              ))}
+            </select>
           </div>
         )}
       </div>
@@ -1532,23 +1906,14 @@ function SourceRow({
   );
 }
 
-// ─── Sweep config editor ──────────────────────────────────────────────────────
+// ─── Segment sweeper editor ───────────────────────────────────────────────────
 
-const SWEEP_OVER_TYPES = ['music', 'stop_set', 'news', 'voice_track', 'bulletin', 'live', 'live_audience'] as const;
-const SWEEP_OVER_LABELS: Record<typeof SWEEP_OVER_TYPES[number], string> = {
-  music: 'Music', stop_set: 'Stop set', news: 'News', voice_track: 'Voice track',
-  bulletin: 'Bulletin', live: 'Live', live_audience: 'Live audience',
-};
-const SWEEP_SOURCE_LABELS: Record<typeof SWEEP_SOURCES[number], string> = {
-  jingle: 'Jingle', promo: 'Promo', spot: 'Spot',
-};
-
-function SweepConfigEditor({
-  config,
-  onChange,
+function SegmentSweeperEditor({
+  config, sweeperRotations, onChange,
 }: {
-  config: SweepConfig | null;
-  onChange: (c: SweepConfig | null) => void;
+  config: SegmentSweeperConfig | null;
+  sweeperRotations: Rotation[];
+  onChange: (c: SegmentSweeperConfig | null) => void;
 }) {
   const enabled = config !== null;
 
@@ -1556,11 +1921,11 @@ function SweepConfigEditor({
     if (enabled) {
       onChange(null);
     } else {
-      onChange({ per_hour: 4, over: ['music'], min_gap_minutes: 10, sources: [{ type: 'jingle', weight: 1, rotation: 'round_robin' }] });
+      onChange({ per_hour: 3, min_gap_minutes: 8, sources: [{ type: 'jingle', weight: 1, rotation_id: null }] });
     }
   };
 
-  const update = (patch: Partial<SweepConfig>) => {
+  const update = (patch: Partial<SegmentSweeperConfig>) => {
     if (!config) return;
     onChange({ ...config, ...patch });
   };
@@ -1572,9 +1937,9 @@ function SweepConfigEditor({
 
   const addSource = () => {
     if (!config) return;
-    const usedTypes = new Set(config.sources.map((s) => s.type));
-    const pick = SWEEP_SOURCES.find((t) => !usedTypes.has(t)) ?? 'jingle';
-    onChange({ ...config, sources: [...config.sources, { type: pick, weight: 1, rotation: 'round_robin' }] });
+    const used = new Set(config.sources.map((s) => s.type));
+    const pick = SWEEP_SOURCES.find((t) => !used.has(t)) ?? 'jingle';
+    onChange({ ...config, sources: [...config.sources, { type: pick, weight: 1, rotation_id: null }] });
   };
 
   const removeSource = (i: number) => {
@@ -1583,122 +1948,159 @@ function SweepConfigEditor({
   };
 
   return (
-    <div className="mt-3 pt-3 border-t border-zinc-700/60">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Sweepers</span>
-        <label className="flex items-center gap-2 cursor-pointer">
-          <span className="text-xs text-zinc-500">{enabled ? 'Enabled' : 'Disabled'}</span>
-          <button
-            type="button"
-            onClick={toggle}
-            className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors ${enabled ? 'bg-indigo-600' : 'bg-zinc-700'}`}
-          >
-            <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
-          </button>
-        </label>
+    <div className="pt-2">
+      <div className="flex items-center gap-3 mb-2">
+        <label className="text-xs font-medium text-zinc-400">Sweepers</label>
+        <button
+          type="button"
+          onClick={toggle}
+          className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors ${enabled ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+        >
+          <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+        </button>
       </div>
 
       {enabled && config && (
-        <div className="mt-3 space-y-3">
-          <div className="flex items-center gap-6">
+        <div className="space-y-2">
+          <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-400">Per hour</span>
-              <input
-                type="number"
-                min={0}
-                max={20}
-                value={config.per_hour}
+              <span className="text-xs text-zinc-500">Per hour</span>
+              <input type="number" min={0} max={20} value={config.per_hour}
                 onChange={(e) => update({ per_hour: Math.max(0, Math.min(20, parseInt(e.target.value) || 0)) })}
                 className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
               />
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-400">Min gap</span>
-              <input
-                type="number"
-                min={1}
-                value={config.min_gap_minutes}
+              <span className="text-xs text-zinc-500">Min gap</span>
+              <input type="number" min={1} value={config.min_gap_minutes}
                 onChange={(e) => update({ min_gap_minutes: Math.max(1, parseInt(e.target.value) || 1) })}
                 className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
               />
               <span className="text-xs text-zinc-500">min</span>
             </div>
           </div>
-
-          <div>
-            <span className="text-xs text-zinc-500 mb-1.5 block">Play over</span>
-            <div className="flex flex-wrap gap-2">
-              {SWEEP_OVER_TYPES.map((t) => (
-                <label key={t} className="flex items-center gap-1 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={config.over.includes(t)}
-                    onChange={(e) => {
-                      const next = e.target.checked ? [...config.over, t] : config.over.filter((x) => x !== t);
-                      update({ over: next });
-                    }}
-                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-                  />
-                  <span className="text-xs text-zinc-300">{SWEEP_OVER_LABELS[t]}</span>
-                </label>
-              ))}
-            </div>
-          </div>
-
-          <div>
-            <span className="text-xs text-zinc-500 mb-1.5 block">Sources</span>
-            <div className="space-y-1.5">
-              {config.sources.map((src, i) => (
+          <div className="space-y-1.5">
+            {config.sources.map((src, i) => {
+              const usedByOthers = new Set(config.sources.filter((_, idx) => idx !== i).map((s) => s.type));
+              return (
                 <div key={i} className="flex items-center gap-2">
-                  <select
-                    value={src.type}
+                  <select value={src.type}
                     onChange={(e) => updateSource(i, { type: e.target.value as typeof SWEEP_SOURCES[number] })}
                     className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
                   >
-                    {SWEEP_SOURCES.map((t) => (
+                    {SWEEP_SOURCES.filter((t) => t === src.type || !usedByOthers.has(t)).map((t) => (
                       <option key={t} value={t} className="bg-zinc-900">{SWEEP_SOURCE_LABELS[t]}</option>
                     ))}
                   </select>
                   <div className="flex items-center gap-1">
                     <span className="text-xs text-zinc-500">wt</span>
-                    <input
-                      type="number"
-                      min={1}
-                      value={src.weight}
+                    <input type="number" min={1} value={src.weight}
                       onChange={(e) => updateSource(i, { weight: Math.max(1, parseInt(e.target.value) || 1) })}
                       className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
                     />
                   </div>
-                  <select
-                    value={src.rotation}
-                    onChange={(e) => updateSource(i, { rotation: e.target.value as SimpleRotationType })}
-                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                  <select value={src.rotation_id ?? ''}
+                    onChange={(e) => updateSource(i, { rotation_id: e.target.value === '' ? null : Number(e.target.value) })}
+                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500 max-w-[160px]"
+                    title="Sweeper rotation document"
                   >
-                    <option value="round_robin" className="bg-zinc-900">Round robin</option>
-                    <option value="random" className="bg-zinc-900">Random</option>
+                    <option value="" className="bg-zinc-900">Default rotation</option>
+                    {sweeperRotations.map((r) => (
+                      <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
+                    ))}
                   </select>
-                  <button
-                    type="button"
-                    onClick={() => removeSource(i)}
+                  <button type="button" onClick={() => removeSource(i)}
                     className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded hover:bg-red-900/20"
                   >
                     <X className="w-3 h-3" />
                   </button>
                 </div>
-              ))}
-              {config.sources.length < SWEEP_SOURCES.length && (
-                <button
-                  type="button"
-                  onClick={addSource}
-                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
-                >
-                  + Add source
-                </button>
-              )}
-            </div>
+              );
+            })}
+            {config.sources.length < SWEEP_SOURCES.length && (
+              <button type="button" onClick={addSource} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+                + Add type
+              </button>
+            )}
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// ─── Handover policy editor ───────────────────────────────────────────────────
+
+function HandoverEditor({
+  finish, join, overrun, onChange,
+}: {
+  finish: FinishPolicy;
+  join: JoinPolicy;
+  overrun: OverrunPolicy;
+  onChange: (patch: { finish_policy?: FinishPolicy; join_policy?: JoinPolicy; overrun_policy?: OverrunPolicy }) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  return (
+    <div className="mt-3 pt-3 border-t border-zinc-700/60">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider hover:text-zinc-200 transition-colors"
+      >
+        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        Handover policies
+      </button>
+      {open && (
+        <div className="mt-3 grid grid-cols-1 gap-3">
+          <PolicyRow
+            label="Finish"
+            value={finish}
+            options={FINISH_POLICIES}
+            labelsMap={FINISH_POLICY_LABELS}
+            onChange={(v) => onChange({ finish_policy: v as FinishPolicy })}
+          />
+          <PolicyRow
+            label="Join"
+            value={join}
+            options={JOIN_POLICIES}
+            labelsMap={JOIN_POLICY_LABELS}
+            onChange={(v) => onChange({ join_policy: v as JoinPolicy })}
+          />
+          <PolicyRow
+            label="Overrun"
+            value={overrun}
+            options={OVERRUN_POLICIES}
+            labelsMap={OVERRUN_POLICY_LABELS}
+            onChange={(v) => onChange({ overrun_policy: v as OverrunPolicy })}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PolicyRow<T extends string>({
+  label, value, options, labelsMap, onChange,
+}: {
+  label: string;
+  value: T;
+  options: readonly T[];
+  labelsMap: Record<T, { label: string; desc: string }>;
+  onChange: (v: T) => void;
+}) {
+  return (
+    <div className="flex items-start gap-3">
+      <span className="text-xs text-zinc-500 w-16 pt-1.5">{label}</span>
+      <select
+        value={value}
+        onChange={(e) => onChange(e.target.value as T)}
+        className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
+      >
+        {options.map((o) => (
+          <option key={o} value={o} className="bg-zinc-900">{labelsMap[o].label}</option>
+        ))}
+      </select>
+      <span className="text-[11px] text-zinc-500 flex-1">{labelsMap[value].desc}</span>
     </div>
   );
 }

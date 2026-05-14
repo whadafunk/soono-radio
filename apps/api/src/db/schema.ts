@@ -238,10 +238,21 @@ export const ROTATION_TYPES = [
 ] as const;
 export type RotationType = (typeof ROTATION_TYPES)[number];
 
+export const ROTATION_KINDS = ['music', 'sweeper'] as const;
+export type RotationKind = (typeof ROTATION_KINDS)[number];
+
+export const SONG_POSITIONS = ['any', 'song_start', 'song_end'] as const;
+export type SongPosition = (typeof SONG_POSITIONS)[number];
+
 export const rotations = sqliteTable('rotations', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
+  // 'music' rotations apply to playlist draws; 'sweeper' rotations apply to
+  // sweep overlays (clock sweep config). Source pool is derived, not stored.
+  kind: text('kind', { enum: ROTATION_KINDS }).notNull().default('music'),
   type: text('type', { enum: ROTATION_TYPES }).notNull(),
+  // Sweeper-only: when in the underlying track to fire the overlay
+  song_position: text('song_position', { enum: SONG_POSITIONS }),
   // Type-specific params: separation_minutes, artist_separation_minutes,
   // pool_size, order_by, distribution, etc.
   params: text('params', { mode: 'json' }).notNull().default('{}'),
@@ -258,12 +269,37 @@ export type RotationInsert = typeof rotations.$inferInsert;
 
 // ─── Clocks ───────────────────────────────────────────────────────────────────
 
+export const FINISH_POLICIES = ['hard_cut', 'finish_segment'] as const;
+export type FinishPolicy = (typeof FINISH_POLICIES)[number];
+
+export const JOIN_POLICIES = ['join_top', 'join_mid'] as const;
+export type JoinPolicy = (typeof JOIN_POLICIES)[number];
+
+export const OVERRUN_POLICIES = ['loop_top', 'loop_mid', 'fall_through'] as const;
+export type OverrunPolicy = (typeof OVERRUN_POLICIES)[number];
+
 export const clocks = sqliteTable('clocks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
   description: text('description'),
-  // { per_hour, over[], min_gap_minutes, sources[] }
+  // Design-time hint: clock was built for this show. Runtime still uses the
+  // calendar slot's show_id for source resolution. NULL = unassigned clock.
+  // No FK — cleared in app code when a show is deleted.
+  show_id: integer('show_id'),
+  // Legacy — superseded by per-segment sweeper_config. Kept inert in DB.
   sweep_config: text('sweep_config', { mode: 'json' }),
+  // Playlist used as source for station_id sweepers across this clock
+  station_id_playlist_id: integer('station_id_playlist_id'),
+  // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
+  jingle_playlist_id: integer('jingle_playlist_id'),
+  // Handover policies — see docs/clocks-rotations-redesign.md §5
+  finish_policy: text('finish_policy', { enum: FINISH_POLICIES })
+    .notNull()
+    .default('finish_segment'),
+  join_policy: text('join_policy', { enum: JOIN_POLICIES }).notNull().default('join_top'),
+  overrun_policy: text('overrun_policy', { enum: OVERRUN_POLICIES })
+    .notNull()
+    .default('loop_top'),
   created_at: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -373,8 +409,10 @@ export const clockSegments = sqliteTable(
     // ── Sweepers & Live ──────────────────────────────────────────────────────
     // Whether the harbor (DJ mic) is open during this segment
     accept_live: integer('accept_live', { mode: 'boolean' }).notNull().default(true),
-    // Sweeper types allowed to play as overlays during this segment
+    // Legacy — superseded by sweeper_config. Kept inert in DB.
     accept_sweepers: text('accept_sweepers', { mode: 'json' }).notNull().default('[]'),
+    // Per-segment sweeper distribution: { per_hour, min_gap_minutes, sources[] }
+    sweeper_config: text('sweeper_config', { mode: 'json' }),
     // Only for live / live_audience: action when silence is detected on harbor
     silence_detection_action: text('silence_detection_action'),
     // Simple rotation algorithm for stop_set/live/live_audience segments

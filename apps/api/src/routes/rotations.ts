@@ -15,7 +15,9 @@ export async function rotationRoutes(fastify: FastifyInstance) {
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
     const [rotation] = await db.insert(rotations).values({
       name: parsed.data.name,
+      kind: parsed.data.kind ?? 'music',
       type: parsed.data.type,
+      song_position: parsed.data.song_position ?? null,
       params: parsed.data.params ?? {},
     }).returning();
     return reply.status(201).send(rotation);

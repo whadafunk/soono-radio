@@ -41,16 +41,12 @@ export const NowPlayingSchema = z
   .nullable();
 export type NowPlaying = z.infer<typeof NowPlayingSchema>;
 
-export const MID_HOUR_HANDOFF_OPTIONS = ['finish_clock', 'hard_cut', 'join_mid_clock'] as const;
-export type MidHourHandoff = (typeof MID_HOUR_HANDOFF_OPTIONS)[number];
-
 /** Recent-plays row (one per /supervisor/recent-plays). */
 export const SupervisorConfigSchema = z.object({
   scheduler_tick_ms: z.number().int().min(500).max(60_000).default(5_000),
   metadata_poll_ms: z.number().int().min(500).max(60_000).default(5_000),
   queue_depth_threshold: z.number().int().min(1).max(20).default(1),
   separation_minutes: z.number().int().min(0).max(720).default(30),
-  mid_hour_handoff: z.enum(MID_HOUR_HANDOFF_OPTIONS).default('finish_clock'),
 });
 export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>;
 

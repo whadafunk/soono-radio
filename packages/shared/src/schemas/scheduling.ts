@@ -15,9 +15,14 @@ export type StartPolicy = z.infer<typeof StartPolicySchema>;
 export const TRAILING_TIME_STRATEGIES = ['skip_events', 'fill', 'early_handover', 'hard_cut_with_jingle'] as const;
 export type TrailingTimeStrategy = (typeof TRAILING_TIME_STRATEGIES)[number];
 
-// ============ SWEEP CONFIG ============
+// ============ SWEEPER CONFIG ============
 
-export const SWEEP_SOURCES = ['jingle', 'promo', 'spot'] as const;
+// Sweeper source types — source pool is derived per type, not stored in the doc:
+// - commercial → campaign spots
+// - promo      → promo documents (future)
+// - station_id → clock.station_id_playlist_id
+// - jingle     → show's jingle playlist (assigned clock) OR clock.jingle_playlist_id (unassigned)
+export const SWEEP_SOURCES = ['commercial', 'promo', 'station_id', 'jingle'] as const;
 export type SweepSource = (typeof SWEEP_SOURCES)[number];
 
 export const SIMPLE_ROTATION_TYPES = ['round_robin', 'random'] as const;
@@ -26,17 +31,18 @@ export type SimpleRotationType = (typeof SIMPLE_ROTATION_TYPES)[number];
 export const SweepSourceEntrySchema = z.object({
   type: z.enum(SWEEP_SOURCES),
   weight: z.number().int().positive().default(1),
-  rotation: z.enum(SIMPLE_ROTATION_TYPES).default('round_robin'),
+  // FK to a sweeper-kind rotation document; null = default round-robin behavior
+  rotation_id: z.number().int().positive().nullable().optional(),
 });
 export type SweepSourceEntry = z.infer<typeof SweepSourceEntrySchema>;
 
-export const SweepConfigSchema = z.object({
+// Per-segment sweeper distribution config (replaces old clock-level sweep_config)
+export const SegmentSweeperConfigSchema = z.object({
   per_hour: z.number().int().min(0).max(20),
-  over: z.array(z.enum(['music', 'stop_set', 'news', 'voice_track', 'bulletin', 'live', 'live_audience'])),
   min_gap_minutes: z.number().int().min(1),
   sources: z.array(SweepSourceEntrySchema),
 });
-export type SweepConfig = z.infer<typeof SweepConfigSchema>;
+export type SegmentSweeperConfig = z.infer<typeof SegmentSweeperConfigSchema>;
 
 // ============ SEGMENT SOURCE ============
 
@@ -53,12 +59,15 @@ export const SEGMENT_SOURCE_TYPES = [
 export type SegmentSourceType = (typeof SEGMENT_SOURCE_TYPES)[number];
 
 export const SegmentSourceEntrySchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('show_playlist'), tier: z.string().optional(), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
+  z.object({ type: z.literal('show_playlist'), tier: z.string().optional(), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional(), rotation_id: z.number().int().positive().nullable().optional() }),
   z.object({ type: z.literal('show_jingles'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
   z.object({ type: z.literal('show_beds'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
+  // promos / campaigns gain an optional simple rotation — used by the stop-set two-slot UI
   z.object({ type: z.literal('promos'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
-  z.object({ type: z.literal('playlist'), playlist_id: z.number().int().positive(), weight: z.number().int().positive().default(1), hot_play: z.boolean().default(false), heavy_rotation: z.boolean().default(false), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
-  z.object({ type: z.literal('campaigns') }),
+  // playlist source: hot_play / heavy_rotation kept for future rotation-document logic;
+  // rotation_id supersedes the old simple `rotation` enum on music segments.
+  z.object({ type: z.literal('playlist'), playlist_id: z.number().int().positive(), weight: z.number().int().positive().default(1), hot_play: z.boolean().default(false), heavy_rotation: z.boolean().default(false), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional(), rotation_id: z.number().int().positive().nullable().optional() }),
+  z.object({ type: z.literal('campaigns'), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
   z.object({ type: z.literal('live') }),
   z.object({ type: z.literal('recording') }),
 ]);
@@ -118,7 +127,9 @@ export const ClockSegmentSchema = z.object({
   recovery_tactics: z.array(z.enum(RECOVERY_TACTICS)).default([]),
 
   accept_live: z.boolean(),
+  // Legacy field — superseded by sweeper_config. Still returned by API for old data.
   accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
+  sweeper_config: SegmentSweeperConfigSchema.nullable().default(null),
   silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable(),
   rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable(),
 });
@@ -146,6 +157,7 @@ export const ClockSegmentCreateSchema = z.object({
 
   accept_live: z.boolean().default(true),
   accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
+  sweeper_config: SegmentSweeperConfigSchema.nullable().optional(),
   silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable().optional(),
   rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable().optional(),
 });
@@ -154,12 +166,33 @@ export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
 export const ClockSegmentPatchSchema = ClockSegmentCreateSchema.partial().omit({ sort_order: true });
 export type ClockSegmentPatch = z.infer<typeof ClockSegmentPatchSchema>;
 
+// Handover policies — see docs/clocks-rotations-redesign.md §5
+export const FINISH_POLICIES = ['hard_cut', 'finish_segment'] as const;
+export type FinishPolicy = (typeof FINISH_POLICIES)[number];
+
+export const JOIN_POLICIES = ['join_top', 'join_mid'] as const;
+export type JoinPolicy = (typeof JOIN_POLICIES)[number];
+
+export const OVERRUN_POLICIES = ['loop_top', 'loop_mid', 'fall_through'] as const;
+export type OverrunPolicy = (typeof OVERRUN_POLICIES)[number];
+
 export const ClockSchema = z.object({
   id: z.number().int(),
   name: z.string(),
   description: z.string().nullable(),
-  sweep_config: SweepConfigSchema.nullable(),
+  // Design-time hint only — see docs/clocks-rotations-redesign.md §2
+  show_id: z.number().int().nullable(),
+  // Playlist for station_id sweepers; shared across all segments on this clock
+  station_id_playlist_id: z.number().int().nullable(),
+  // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
+  jingle_playlist_id: z.number().int().nullable(),
+  finish_policy: z.enum(FINISH_POLICIES).default('finish_segment'),
+  join_policy: z.enum(JOIN_POLICIES).default('join_top'),
+  overrun_policy: z.enum(OVERRUN_POLICIES).default('loop_top'),
   duration_seconds: z.number().int().nonnegative(),
+  // Derived: true if any calendar/template entry references this clock.
+  // Populated by the API on read; not stored.
+  used: z.boolean().default(false),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
@@ -168,14 +201,24 @@ export type Clock = z.infer<typeof ClockSchema>;
 export const ClockCreateSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   description: z.string().nullable().optional(),
-  sweep_config: SweepConfigSchema.nullable().optional(),
+  show_id: z.number().int().positive().nullable().optional(),
+  station_id_playlist_id: z.number().int().positive().nullable().optional(),
+  jingle_playlist_id: z.number().int().positive().nullable().optional(),
+  finish_policy: z.enum(FINISH_POLICIES).optional(),
+  join_policy: z.enum(JOIN_POLICIES).optional(),
+  overrun_policy: z.enum(OVERRUN_POLICIES).optional(),
 });
 export type ClockCreate = z.infer<typeof ClockCreateSchema>;
 
 export const ClockPatchSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
-  sweep_config: SweepConfigSchema.nullable().optional(),
+  show_id: z.number().int().positive().nullable().optional(),
+  station_id_playlist_id: z.number().int().positive().nullable().optional(),
+  jingle_playlist_id: z.number().int().positive().nullable().optional(),
+  finish_policy: z.enum(FINISH_POLICIES).optional(),
+  join_policy: z.enum(JOIN_POLICIES).optional(),
+  overrun_policy: z.enum(OVERRUN_POLICIES).optional(),
 });
 export type ClockPatch = z.infer<typeof ClockPatchSchema>;
 

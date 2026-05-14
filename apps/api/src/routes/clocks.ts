@@ -3,7 +3,16 @@ import { eq, asc, sql } from 'drizzle-orm';
 import { z } from 'zod';
 import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@radio/shared';
 import { db } from '../db/index.js';
-import { clocks, clockSegments } from '../db/schema.js';
+import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries } from '../db/schema.js';
+
+// `used` = clock is referenced by any calendar / template / template_clock entry.
+// Computed as a correlated subquery so it survives the GROUP BY on clock_segments.
+const usedExpr = sql<number>`(
+  SELECT
+    (SELECT COUNT(*) FROM ${calendarEntries} WHERE ${calendarEntries.clock_id} = ${clocks.id}) +
+    (SELECT COUNT(*) FROM ${templateEntries} WHERE ${templateEntries.clock_id} = ${clocks.id}) +
+    (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${clocks.id})
+)`;
 
 export async function clockRoutes(fastify: FastifyInstance) {
   fastify.get('/clocks', async (_req, reply) => {
@@ -12,8 +21,14 @@ export async function clockRoutes(fastify: FastifyInstance) {
         id: clocks.id,
         name: clocks.name,
         description: clocks.description,
-        sweep_config: clocks.sweep_config,
+        show_id: clocks.show_id,
+        station_id_playlist_id: clocks.station_id_playlist_id,
+        jingle_playlist_id: clocks.jingle_playlist_id,
+        finish_policy: clocks.finish_policy,
+        join_policy: clocks.join_policy,
+        overrun_policy: clocks.overrun_policy,
         duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
+        used_count: usedExpr,
         created_at: clocks.created_at,
         updated_at: clocks.updated_at,
       })
@@ -21,7 +36,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .leftJoin(clockSegments, eq(clockSegments.clock_id, clocks.id))
       .groupBy(clocks.id)
       .orderBy(asc(clocks.name));
-    return reply.send(rows);
+    return reply.send(rows.map(({ used_count, ...c }) => ({ ...c, used: used_count > 0 })));
   });
 
   fastify.post<{ Body: unknown }>('/clocks', async (request, reply) => {
@@ -30,7 +45,12 @@ export async function clockRoutes(fastify: FastifyInstance) {
     const [clock] = await db.insert(clocks).values({
       name: parsed.data.name,
       description: parsed.data.description ?? null,
-      sweep_config: parsed.data.sweep_config ?? null,
+      show_id: parsed.data.show_id ?? null,
+      station_id_playlist_id: parsed.data.station_id_playlist_id ?? null,
+      jingle_playlist_id: parsed.data.jingle_playlist_id ?? null,
+      ...(parsed.data.finish_policy && { finish_policy: parsed.data.finish_policy }),
+      ...(parsed.data.join_policy && { join_policy: parsed.data.join_policy }),
+      ...(parsed.data.overrun_policy && { overrun_policy: parsed.data.overrun_policy }),
     }).returning();
     return reply.status(201).send(clock);
   });
@@ -42,8 +62,14 @@ export async function clockRoutes(fastify: FastifyInstance) {
         id: clocks.id,
         name: clocks.name,
         description: clocks.description,
-        sweep_config: clocks.sweep_config,
+        show_id: clocks.show_id,
+        station_id_playlist_id: clocks.station_id_playlist_id,
+        jingle_playlist_id: clocks.jingle_playlist_id,
+        finish_policy: clocks.finish_policy,
+        join_policy: clocks.join_policy,
+        overrun_policy: clocks.overrun_policy,
         duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
+        used_count: usedExpr,
         created_at: clocks.created_at,
         updated_at: clocks.updated_at,
       })
@@ -52,7 +78,8 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .where(eq(clocks.id, id))
       .groupBy(clocks.id);
     if (!clock) return reply.status(404).send({ error: 'Clock not found' });
-    return reply.send(clock);
+    const { used_count, ...rest } = clock;
+    return reply.send({ ...rest, used: used_count > 0 });
   });
 
   fastify.patch<{ Params: { id: string }; Body: unknown }>('/clocks/:id', async (request, reply) => {
@@ -89,6 +116,24 @@ export async function clockRoutes(fastify: FastifyInstance) {
     const parsed = z.array(ClockSegmentCreateSchema).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
 
+    // Unassigned clocks (no show context at runtime) must back every music
+    // segment with at least one specific `playlist` source — otherwise nothing
+    // will play. See docs/clocks-rotations-redesign.md §2.
+    if (clock.show_id === null) {
+      const offending = parsed.data
+        .map((s, i) => ({ s, i }))
+        .filter(({ s }) =>
+          s.type === 'music' &&
+          !(s.sources ?? []).some((src) => src.type === 'playlist'),
+        );
+      if (offending.length > 0) {
+        return reply.status(400).send({
+          error: 'Unassigned clocks require at least one playlist source on every music segment',
+          segment_indexes: offending.map(({ i }) => i),
+        });
+      }
+    }
+
     await db.delete(clockSegments).where(eq(clockSegments.clock_id, id));
     if (parsed.data.length > 0) {
       await db.insert(clockSegments).values(
@@ -110,6 +155,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
           recovery_tactics: s.recovery_tactics ?? [],
           accept_live: s.accept_live ?? true,
           accept_sweepers: s.accept_sweepers ?? [],
+          sweeper_config: s.sweeper_config ?? null,
           silence_detection_action: s.silence_detection_action ?? null,
           rotation_type: s.rotation_type ?? null,
         })),

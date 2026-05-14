@@ -1,8 +1,19 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Check, X, Trash2, Repeat } from 'lucide-react';
-import { Rotation, RotationType, ROTATION_TYPES } from '@radio/shared';
+import { Plus, Check, X, Trash2, Repeat, Music, Megaphone } from 'lucide-react';
+import { Rotation, RotationType, RotationKind, SongPosition, ROTATION_TYPES, ROTATION_KINDS, SONG_POSITIONS } from '@radio/shared';
 import { fetchRotations, createRotation, updateRotation, deleteRotation } from '../../api';
+
+const KIND_META: Record<RotationKind, { label: string; icon: typeof Music; desc: string }> = {
+  music:   { label: 'Music',   icon: Music,      desc: 'Draws from playlists. Used by show playlists and music-segment sources.' },
+  sweeper: { label: 'Sweeper', icon: Megaphone,  desc: 'Drives sweep overlays (jingles, station IDs, promos, ad spots). Source pool is derived from sweeper type, not configured here.' },
+};
+
+const SONG_POSITION_LABELS: Record<SongPosition, string> = {
+  any:         'Any time',
+  song_start:  'At song start',
+  song_end:    'At song end',
+};
 
 const TYPE_META: Record<RotationType, { label: string; short: string; bg: string; border: string; text: string; desc: string }> = {
   random_separation: {
@@ -34,7 +45,7 @@ const DEFAULT_PARAMS: Record<RotationType, Record<string, unknown>> = {
   weighted:              {},
 };
 
-type RotationDraft = { id: number; name: string; type: RotationType; params: Record<string, unknown> };
+type RotationDraft = { id: number; name: string; kind: RotationKind; type: RotationType; song_position: SongPosition | null; params: Record<string, unknown> };
 
 export function RotationsPage() {
   const queryClient = useQueryClient();
@@ -43,8 +54,10 @@ export function RotationsPage() {
   const [dirty, setDirty] = useState(false);
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('');
+  const [newKind, setNewKind] = useState<RotationKind>('music');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [kindFilter, setKindFilter] = useState<RotationKind | 'all'>('all');
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
@@ -56,7 +69,12 @@ export function RotationsPage() {
   const saveMutation = useMutation({
     mutationFn: () => {
       if (!draft) throw new Error('No draft');
-      return updateRotation(draft.id, { name: draft.name, params: draft.params });
+      return updateRotation(draft.id, {
+        name: draft.name,
+        type: draft.type,
+        song_position: draft.kind === 'sweeper' ? draft.song_position : null,
+        params: draft.params,
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rotations'] });
@@ -67,8 +85,14 @@ export function RotationsPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: (name: string) =>
-      createRotation({ name, type: 'random_separation', params: DEFAULT_PARAMS.random_separation }),
+    mutationFn: ({ name, kind }: { name: string; kind: RotationKind }) =>
+      createRotation({
+        name,
+        kind,
+        type: 'round_robin',
+        song_position: kind === 'sweeper' ? 'any' : null,
+        params: DEFAULT_PARAMS.round_robin,
+      }),
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['rotations'] });
       setCreatingNew(false);
@@ -94,7 +118,14 @@ export function RotationsPage() {
 
   const selectRotation = (r: Rotation) => {
     setSelectedId(r.id);
-    setDraft({ id: r.id, name: r.name, type: r.type, params: JSON.parse(JSON.stringify(r.params)) });
+    setDraft({
+      id: r.id,
+      name: r.name,
+      kind: r.kind ?? 'music',
+      type: r.type,
+      song_position: r.song_position ?? null,
+      params: JSON.parse(JSON.stringify(r.params)),
+    });
     setDirty(false);
     setConfirmDelete(false);
   };
@@ -107,7 +138,14 @@ export function RotationsPage() {
   const handleDiscard = () => {
     const original = rotations.find((r) => r.id === selectedId);
     if (original) {
-      setDraft({ id: original.id, name: original.name, type: original.type, params: JSON.parse(JSON.stringify(original.params)) });
+      setDraft({
+        id: original.id,
+        name: original.name,
+        kind: original.kind ?? 'music',
+        type: original.type,
+        song_position: original.song_position ?? null,
+        params: JSON.parse(JSON.stringify(original.params)),
+      });
       setDirty(false);
     }
   };
@@ -153,31 +191,66 @@ export function RotationsPage() {
             </button>
           </div>
 
+          {/* Kind filter tabs */}
+          <div className="flex border-b border-zinc-800 text-xs">
+            {(['all', ...ROTATION_KINDS] as const).map((k) => (
+              <button
+                key={k}
+                onClick={() => setKindFilter(k)}
+                className={`flex-1 py-1.5 transition-colors ${
+                  kindFilter === k ? 'text-white bg-zinc-800/60 border-b border-indigo-500' : 'text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                {k === 'all' ? 'All' : KIND_META[k].label}
+              </button>
+            ))}
+          </div>
+
           {creatingNew && (
-            <div className="px-3 py-2 border-b border-zinc-800 flex gap-1.5">
-              <input
-                autoFocus
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter' && newName.trim()) createMutation.mutate(newName.trim());
-                  if (e.key === 'Escape') { setCreatingNew(false); setNewName(''); }
-                }}
-                placeholder="Rotation name…"
-                className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-              />
-              <button
-                onClick={() => newName.trim() && createMutation.mutate(newName.trim())}
-                className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors"
-              >
-                <Check className="w-3.5 h-3.5" />
-              </button>
-              <button
-                onClick={() => { setCreatingNew(false); setNewName(''); }}
-                className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
+            <div className="px-3 py-2 border-b border-zinc-800 flex flex-col gap-1.5">
+              <div className="flex gap-1.5">
+                {ROTATION_KINDS.map((k) => {
+                  const Icon = KIND_META[k].icon;
+                  return (
+                    <button
+                      key={k}
+                      onClick={() => setNewKind(k)}
+                      className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-xs transition-colors ${
+                        newKind === k ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50' : 'bg-zinc-800 text-zinc-400 border border-transparent hover:text-zinc-200'
+                      }`}
+                    >
+                      <Icon className="w-3 h-3" />
+                      {KIND_META[k].label}
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="flex gap-1.5">
+                <input
+                  autoFocus
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' && newName.trim() && !createMutation.isPending) createMutation.mutate({ name: newName.trim(), kind: newKind });
+                    if (e.key === 'Escape') { setCreatingNew(false); setNewName(''); }
+                  }}
+                  placeholder="Rotation name…"
+                  className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                />
+                <button
+                  onClick={() => newName.trim() && !createMutation.isPending && createMutation.mutate({ name: newName.trim(), kind: newKind })}
+                  disabled={!newName.trim() || createMutation.isPending}
+                  className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-40 disabled:cursor-default"
+                >
+                  <Check className="w-3.5 h-3.5" />
+                </button>
+                <button
+                  onClick={() => { setCreatingNew(false); setNewName(''); }}
+                  className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
+                >
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
             </div>
           )}
 
@@ -185,29 +258,35 @@ export function RotationsPage() {
             {rotations.length === 0 && !creatingNew && (
               <p className="px-4 py-6 text-xs text-zinc-400 text-center">No rotations yet.<br />Create one to get started.</p>
             )}
-            {rotations.map((r) => {
-              const meta = TYPE_META[r.type];
-              const isSelected = r.id === selectedId;
-              return (
-                <button
-                  key={r.id}
-                  onClick={() => selectRotation(r)}
-                  className={`w-full text-left px-4 py-3 border-b border-zinc-800/60 transition-colors ${
-                    isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'
-                  }`}
-                >
-                  <div className="flex items-center gap-2">
-                    <Repeat className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
-                    <span className="text-sm font-medium text-white truncate">{r.name}</span>
-                  </div>
-                  <div className="mt-1.5 ml-5">
-                    <span className={`text-xs px-1.5 py-0.5 rounded border ${meta.bg} ${meta.border} ${meta.text}`}>
-                      {meta.short}
-                    </span>
-                  </div>
-                </button>
-              );
-            })}
+            {rotations
+              .filter((r) => kindFilter === 'all' || (r.kind ?? 'music') === kindFilter)
+              .map((r) => {
+                const meta = TYPE_META[r.type];
+                const kind = r.kind ?? 'music';
+                const KindIcon = KIND_META[kind].icon;
+                const isSelected = r.id === selectedId;
+                return (
+                  <button
+                    key={r.id}
+                    onClick={() => selectRotation(r)}
+                    className={`w-full text-left px-4 py-3 border-b border-zinc-800/60 transition-colors ${
+                      isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'
+                    }`}
+                  >
+                    <div className="flex items-center gap-2">
+                      <KindIcon className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+                      <span className="text-sm font-medium text-white truncate">{r.name}</span>
+                    </div>
+                    <div className="mt-1.5 ml-5 flex gap-1.5">
+                      <span className="text-[10px] uppercase tracking-wider text-zinc-500">{KIND_META[kind].label}</span>
+                      <span className="text-zinc-700">·</span>
+                      <span className={`text-xs px-1.5 py-0.5 rounded border ${meta.bg} ${meta.border} ${meta.text}`}>
+                        {meta.short}
+                      </span>
+                    </div>
+                  </button>
+                );
+              })}
           </div>
         </div>
 
@@ -269,8 +348,19 @@ export function RotationsPage() {
               </div>
             </div>
 
-            {/* Type + Params */}
+            {/* Kind + Type + Params */}
             <div className="flex-1 min-h-0 bg-zinc-900 border border-zinc-800 rounded-lg p-5 space-y-6 overflow-auto">
+              <div className="flex items-center gap-3 pb-3 border-b border-zinc-800/60">
+                {(() => {
+                  const Icon = KIND_META[draft.kind].icon;
+                  return <Icon className="w-4 h-4 text-zinc-400" />;
+                })()}
+                <div className="flex-1 min-w-0">
+                  <div className="text-sm text-zinc-200">{KIND_META[draft.kind].label} rotation</div>
+                  <div className="text-xs text-zinc-500">{KIND_META[draft.kind].desc}</div>
+                </div>
+              </div>
+
               <div>
                 <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
                   Algorithm
@@ -296,6 +386,28 @@ export function RotationsPage() {
                 </div>
                 <p className="mt-2 text-xs text-zinc-500">{TYPE_META[draft.type].desc}</p>
               </div>
+
+              {draft.kind === 'sweeper' && (
+                <div>
+                  <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+                    Fire at
+                  </label>
+                  <select
+                    value={draft.song_position ?? 'any'}
+                    onChange={(e) =>
+                      updateDraft((d) => ({ ...d, song_position: e.target.value as SongPosition }))
+                    }
+                    className="w-64 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                  >
+                    {SONG_POSITIONS.map((p) => (
+                      <option key={p} value={p} className="bg-zinc-900">{SONG_POSITION_LABELS[p]}</option>
+                    ))}
+                  </select>
+                  <p className="mt-2 text-xs text-zinc-500">
+                    When this sweeper fires relative to the underlying music track. Source pool is derived from sweeper type (see Clocks &gt; Sweepers).
+                  </p>
+                </div>
+              )}
 
               <ParamsForm type={draft.type} params={draft.params} onChange={updateParam} />
             </div>
