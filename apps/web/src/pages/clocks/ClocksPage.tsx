@@ -37,6 +37,11 @@ import {
   RECOVERY_TACTICS,
   TrailingTimeStrategy,
   TRAILING_TIME_STRATEGIES,
+  SweepConfig,
+  SweepSourceEntry,
+  SWEEP_SOURCES,
+  SIMPLE_ROTATION_TYPES,
+  SimpleRotationType,
 } from '@radio/shared';
 import {
   fetchClocks,
@@ -200,6 +205,7 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
     accept_live: d.accept_live,
     accept_sweepers: d.accept_sweepers,
     silence_detection_action: null,
+    rotation_type: null,
   };
 }
 
@@ -466,6 +472,10 @@ export function ClocksPage() {
                   onChange={(e) => updateDraftClock((c) => ({ ...c, description: e.target.value || null }))}
                   placeholder="Add a description…"
                   className="mt-1 text-sm text-zinc-300 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-full transition-colors pb-0.5 placeholder:text-zinc-500"
+                />
+                <SweepConfigEditor
+                  config={draftClock.sweep_config}
+                  onChange={(c) => updateDraftClock((clock) => ({ ...clock, sweep_config: c }))}
                 />
               </div>
               <div className="flex items-center gap-2 flex-shrink-0">
@@ -934,6 +944,21 @@ function SegmentDrawer({
                 playlists={playlists}
               />
             </div>
+
+            {(draft.type === 'stop_set' || draft.type === 'live' || draft.type === 'live_audience') && (
+              <Field label="Rotation">
+                <select
+                  value={draft.rotation_type ?? ''}
+                  onChange={(e) => update({ rotation_type: e.target.value === '' ? null : e.target.value as SimpleRotationType })}
+                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="" className="bg-zinc-900">Default</option>
+                  {SIMPLE_ROTATION_TYPES.map((t) => (
+                    <option key={t} value={t} className="bg-zinc-900">{t === 'round_robin' ? 'Round robin' : 'Random'}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
           </div>
         )}
 
@@ -1413,7 +1438,7 @@ function SourceRow({
             </div>
           )}
         </div>
-        {/* Rotation flags row */}
+        {/* Rotation flags + rotation selector */}
         {showRotationFlags && (
           <div className="flex items-center gap-4 px-3 pb-2.5">
             <label className="flex items-center gap-1.5 cursor-pointer">
@@ -1424,6 +1449,18 @@ function SourceRow({
               <input type="checkbox" checked={playlistSrc.heavy_rotation} onChange={(e) => onChange({ ...playlistSrc, heavy_rotation: e.target.checked })} className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
               <span className="text-xs text-zinc-300">Heavy rotation</span>
             </label>
+            <div className="flex items-center gap-1.5 ml-auto">
+              <span className="text-xs text-zinc-500">Rotation</span>
+              <select
+                value={playlistSrc.rotation ?? ''}
+                onChange={(e) => onChange({ ...playlistSrc, rotation: e.target.value === '' ? undefined : e.target.value as SimpleRotationType })}
+                className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+              >
+                <option value="" className="bg-zinc-900">Default</option>
+                <option value="round_robin" className="bg-zinc-900">Round robin</option>
+                <option value="random" className="bg-zinc-900">Random</option>
+              </select>
+            </div>
           </div>
         )}
       </div>
@@ -1473,9 +1510,195 @@ function SourceRow({
         </div>
       )}
 
+      {'rotation' in source && (
+        <select
+          value={(source as { rotation?: string }).rotation ?? ''}
+          onChange={(e) => {
+            const s = source as Extract<SegmentSourceEntry, { rotation?: SimpleRotationType }>;
+            onChange({ ...s, rotation: e.target.value === '' ? undefined : e.target.value as SimpleRotationType });
+          }}
+          className="px-1.5 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+        >
+          <option value="" className="bg-zinc-900">Default</option>
+          <option value="round_robin" className="bg-zinc-900">Round robin</option>
+          <option value="random" className="bg-zinc-900">Random</option>
+        </select>
+      )}
+
       <button onClick={onRemove} className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded hover:bg-red-900/20 flex-shrink-0">
         <X className="w-3 h-3" />
       </button>
+    </div>
+  );
+}
+
+// ─── Sweep config editor ──────────────────────────────────────────────────────
+
+const SWEEP_OVER_TYPES = ['music', 'stop_set', 'news', 'voice_track', 'bulletin', 'live', 'live_audience'] as const;
+const SWEEP_OVER_LABELS: Record<typeof SWEEP_OVER_TYPES[number], string> = {
+  music: 'Music', stop_set: 'Stop set', news: 'News', voice_track: 'Voice track',
+  bulletin: 'Bulletin', live: 'Live', live_audience: 'Live audience',
+};
+const SWEEP_SOURCE_LABELS: Record<typeof SWEEP_SOURCES[number], string> = {
+  jingle: 'Jingle', promo: 'Promo', spot: 'Spot',
+};
+
+function SweepConfigEditor({
+  config,
+  onChange,
+}: {
+  config: SweepConfig | null;
+  onChange: (c: SweepConfig | null) => void;
+}) {
+  const enabled = config !== null;
+
+  const toggle = () => {
+    if (enabled) {
+      onChange(null);
+    } else {
+      onChange({ per_hour: 4, over: ['music'], min_gap_minutes: 10, sources: [{ type: 'jingle', weight: 1, rotation: 'round_robin' }] });
+    }
+  };
+
+  const update = (patch: Partial<SweepConfig>) => {
+    if (!config) return;
+    onChange({ ...config, ...patch });
+  };
+
+  const updateSource = (i: number, patch: Partial<SweepSourceEntry>) => {
+    if (!config) return;
+    onChange({ ...config, sources: config.sources.map((s, idx) => idx === i ? { ...s, ...patch } : s) });
+  };
+
+  const addSource = () => {
+    if (!config) return;
+    const usedTypes = new Set(config.sources.map((s) => s.type));
+    const pick = SWEEP_SOURCES.find((t) => !usedTypes.has(t)) ?? 'jingle';
+    onChange({ ...config, sources: [...config.sources, { type: pick, weight: 1, rotation: 'round_robin' }] });
+  };
+
+  const removeSource = (i: number) => {
+    if (!config) return;
+    onChange({ ...config, sources: config.sources.filter((_, idx) => idx !== i) });
+  };
+
+  return (
+    <div className="mt-3 pt-3 border-t border-zinc-700/60">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Sweepers</span>
+        <label className="flex items-center gap-2 cursor-pointer">
+          <span className="text-xs text-zinc-500">{enabled ? 'Enabled' : 'Disabled'}</span>
+          <button
+            type="button"
+            onClick={toggle}
+            className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors ${enabled ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+          >
+            <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
+          </button>
+        </label>
+      </div>
+
+      {enabled && config && (
+        <div className="mt-3 space-y-3">
+          <div className="flex items-center gap-6">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-400">Per hour</span>
+              <input
+                type="number"
+                min={0}
+                max={20}
+                value={config.per_hour}
+                onChange={(e) => update({ per_hour: Math.max(0, Math.min(20, parseInt(e.target.value) || 0)) })}
+                className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+              />
+            </div>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-zinc-400">Min gap</span>
+              <input
+                type="number"
+                min={1}
+                value={config.min_gap_minutes}
+                onChange={(e) => update({ min_gap_minutes: Math.max(1, parseInt(e.target.value) || 1) })}
+                className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+              />
+              <span className="text-xs text-zinc-500">min</span>
+            </div>
+          </div>
+
+          <div>
+            <span className="text-xs text-zinc-500 mb-1.5 block">Play over</span>
+            <div className="flex flex-wrap gap-2">
+              {SWEEP_OVER_TYPES.map((t) => (
+                <label key={t} className="flex items-center gap-1 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={config.over.includes(t)}
+                    onChange={(e) => {
+                      const next = e.target.checked ? [...config.over, t] : config.over.filter((x) => x !== t);
+                      update({ over: next });
+                    }}
+                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                  />
+                  <span className="text-xs text-zinc-300">{SWEEP_OVER_LABELS[t]}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <span className="text-xs text-zinc-500 mb-1.5 block">Sources</span>
+            <div className="space-y-1.5">
+              {config.sources.map((src, i) => (
+                <div key={i} className="flex items-center gap-2">
+                  <select
+                    value={src.type}
+                    onChange={(e) => updateSource(i, { type: e.target.value as typeof SWEEP_SOURCES[number] })}
+                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                  >
+                    {SWEEP_SOURCES.map((t) => (
+                      <option key={t} value={t} className="bg-zinc-900">{SWEEP_SOURCE_LABELS[t]}</option>
+                    ))}
+                  </select>
+                  <div className="flex items-center gap-1">
+                    <span className="text-xs text-zinc-500">wt</span>
+                    <input
+                      type="number"
+                      min={1}
+                      value={src.weight}
+                      onChange={(e) => updateSource(i, { weight: Math.max(1, parseInt(e.target.value) || 1) })}
+                      className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                    />
+                  </div>
+                  <select
+                    value={src.rotation}
+                    onChange={(e) => updateSource(i, { rotation: e.target.value as SimpleRotationType })}
+                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="round_robin" className="bg-zinc-900">Round robin</option>
+                    <option value="random" className="bg-zinc-900">Random</option>
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => removeSource(i)}
+                    className="p-1 text-zinc-600 hover:text-red-400 transition-colors rounded hover:bg-red-900/20"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </div>
+              ))}
+              {config.sources.length < SWEEP_SOURCES.length && (
+                <button
+                  type="button"
+                  onClick={addSource}
+                  className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                >
+                  + Add source
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -20,11 +20,21 @@ export type TrailingTimeStrategy = (typeof TRAILING_TIME_STRATEGIES)[number];
 export const SWEEP_SOURCES = ['jingle', 'promo', 'spot'] as const;
 export type SweepSource = (typeof SWEEP_SOURCES)[number];
 
+export const SIMPLE_ROTATION_TYPES = ['round_robin', 'random'] as const;
+export type SimpleRotationType = (typeof SIMPLE_ROTATION_TYPES)[number];
+
+export const SweepSourceEntrySchema = z.object({
+  type: z.enum(SWEEP_SOURCES),
+  weight: z.number().int().positive().default(1),
+  rotation: z.enum(SIMPLE_ROTATION_TYPES).default('round_robin'),
+});
+export type SweepSourceEntry = z.infer<typeof SweepSourceEntrySchema>;
+
 export const SweepConfigSchema = z.object({
   per_hour: z.number().int().min(0).max(20),
   over: z.array(z.enum(['music', 'stop_set', 'news', 'voice_track', 'bulletin', 'live', 'live_audience'])),
   min_gap_minutes: z.number().int().min(1),
-  sources: z.array(z.enum(SWEEP_SOURCES)),
+  sources: z.array(SweepSourceEntrySchema),
 });
 export type SweepConfig = z.infer<typeof SweepConfigSchema>;
 
@@ -43,11 +53,11 @@ export const SEGMENT_SOURCE_TYPES = [
 export type SegmentSourceType = (typeof SEGMENT_SOURCE_TYPES)[number];
 
 export const SegmentSourceEntrySchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('show_playlist'), tier: z.string().optional(), weight: z.number().int().positive().default(1) }),
-  z.object({ type: z.literal('show_jingles'), weight: z.number().int().positive().default(1) }),
-  z.object({ type: z.literal('show_beds'), weight: z.number().int().positive().default(1) }),
-  z.object({ type: z.literal('promos'), weight: z.number().int().positive().default(1) }),
-  z.object({ type: z.literal('playlist'), playlist_id: z.number().int().positive(), weight: z.number().int().positive().default(1), hot_play: z.boolean().default(false), heavy_rotation: z.boolean().default(false) }),
+  z.object({ type: z.literal('show_playlist'), tier: z.string().optional(), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
+  z.object({ type: z.literal('show_jingles'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
+  z.object({ type: z.literal('show_beds'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
+  z.object({ type: z.literal('promos'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
+  z.object({ type: z.literal('playlist'), playlist_id: z.number().int().positive(), weight: z.number().int().positive().default(1), hot_play: z.boolean().default(false), heavy_rotation: z.boolean().default(false), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
   z.object({ type: z.literal('campaigns') }),
   z.object({ type: z.literal('live') }),
   z.object({ type: z.literal('recording') }),
@@ -110,6 +120,7 @@ export const ClockSegmentSchema = z.object({
   accept_live: z.boolean(),
   accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
   silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable(),
+  rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable(),
 });
 export type ClockSegment = z.infer<typeof ClockSegmentSchema>;
 
@@ -136,6 +147,7 @@ export const ClockSegmentCreateSchema = z.object({
   accept_live: z.boolean().default(true),
   accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
   silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable().optional(),
+  rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable().optional(),
 });
 export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
 

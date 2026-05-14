@@ -9,14 +9,14 @@ import {
 } from 'lucide-react';
 import {
   ShowPatch, ShowPatchSchema, ShowColor, SHOW_COLORS,
-  ShowPlaylist,
+  ShowPlaylist, Rotation,
 } from '@radio/shared';
 import { Media } from '@radio/shared';
 import {
   fetchShow, updateShow, fetchClocks, fetchTemplateEntries,
   fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
   fetchPlaylists, fetchLibrary, fetchLibraryItem, fetchIngestJob,
-  uploadLibraryFiles,
+  uploadLibraryFiles, fetchRotations,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
 
@@ -458,6 +458,11 @@ function MusicPlaylistsSection({
   const qc = useQueryClient();
   const [addingId, setAddingId] = useState<number | ''>('');
 
+  const { data: rotations = [] } = useQuery<Rotation[]>({
+    queryKey: ['rotations'],
+    queryFn: fetchRotations,
+  });
+
   const addMutation = useMutation({
     mutationFn: (playlistId: number) =>
       addShowPlaylist(showId, { playlist_id: playlistId, weight: 1 }),
@@ -478,6 +483,12 @@ function MusicPlaylistsSection({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
   });
 
+  const rotationMutation = useMutation({
+    mutationFn: ({ spid, rotation_id }: { spid: number; rotation_id: number | null }) =>
+      updateShowPlaylist(showId, spid, { rotation_id }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
+  });
+
   const unassigned = availablePlaylists.filter((p) => !usedPlaylistIds.has(p.id));
 
   return (
@@ -491,31 +502,51 @@ function MusicPlaylistsSection({
       )}
 
       {showMusicPlaylists.length > 0 && (
-        <ul className="space-y-1 mb-3">
+        <ul className="space-y-2 mb-3">
           {showMusicPlaylists.map((sp) => (
-            <li key={sp.id} className="flex items-center gap-2 group">
-              <span className="flex-1 text-sm text-zinc-200 truncate">{sp.playlist_name}</span>
-              <div className="flex items-center gap-1 shrink-0">
-                <span className="text-xs text-zinc-500">wt</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={99}
-                  defaultValue={sp.weight}
-                  onBlur={(e) => {
-                    const v = Number(e.target.value);
-                    if (v >= 1 && v !== sp.weight) weightMutation.mutate({ spid: sp.id, weight: v });
-                  }}
-                  className="w-12 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
-                />
+            <li key={sp.id} className="group">
+              <div className="flex items-center gap-2">
+                <span className="flex-1 text-sm text-zinc-200 truncate">{sp.playlist_name}</span>
+                <div className="flex items-center gap-1 shrink-0">
+                  <span className="text-xs text-zinc-500">wt</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={99}
+                    defaultValue={sp.weight}
+                    onBlur={(e) => {
+                      const v = Number(e.target.value);
+                      if (v >= 1 && v !== sp.weight) weightMutation.mutate({ spid: sp.id, weight: v });
+                    }}
+                    className="w-12 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => removeMutation.mutate(sp.id)}
+                  className="p-0.5 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                </button>
               </div>
-              <button
-                type="button"
-                onClick={() => removeMutation.mutate(sp.id)}
-                className="p-0.5 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-              </button>
+              {rotations.length > 0 && (
+                <div className="flex items-center gap-1.5 mt-1 ml-0.5">
+                  <span className="text-xs text-zinc-600">rotation</span>
+                  <select
+                    value={sp.rotation_id ?? ''}
+                    onChange={(e) => {
+                      const v = e.target.value === '' ? null : Number(e.target.value);
+                      rotationMutation.mutate({ spid: sp.id, rotation_id: v });
+                    }}
+                    className="bg-zinc-800 border border-zinc-700/60 rounded px-1.5 py-0.5 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                  >
+                    <option value="">Default</option>
+                    {rotations.map((r) => (
+                      <option key={r.id} value={r.id}>{r.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
             </li>
           ))}
         </ul>

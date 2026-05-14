@@ -235,7 +235,6 @@ export const ROTATION_TYPES = [
   'least_recently_played',
   'round_robin',
   'weighted',
-  'campaign',
 ] as const;
 export type RotationType = (typeof ROTATION_TYPES)[number];
 
@@ -378,6 +377,8 @@ export const clockSegments = sqliteTable(
     accept_sweepers: text('accept_sweepers', { mode: 'json' }).notNull().default('[]'),
     // Only for live / live_audience: action when silence is detected on harbor
     silence_detection_action: text('silence_detection_action'),
+    // Simple rotation algorithm for stop_set/live/live_audience segments
+    rotation_type: text('rotation_type'),
   },
   (t) => ({
     clockIdx: index('clock_segments_clock_idx').on(t.clock_id),

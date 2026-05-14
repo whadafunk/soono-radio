@@ -144,7 +144,6 @@ export const ROTATION_TYPES = [
   'least_recently_played',
   'round_robin',
   'weighted',
-  'campaign',
 ] as const;
 export type RotationType = (typeof ROTATION_TYPES)[number];
 
@@ -164,16 +163,11 @@ export const RoundRobinParamsSchema = z.object({
 
 export const WeightedParamsSchema = z.object({});
 
-export const CampaignRotationParamsSchema = z.object({
-  distribution: z.enum(['even_spread', 'priority_first', 'pacing']).default('even_spread'),
-});
-
 export const RotationParamsSchema = z.union([
   RandomSeparationParamsSchema,
   LeastRecentlyPlayedParamsSchema,
   RoundRobinParamsSchema,
   WeightedParamsSchema,
-  CampaignRotationParamsSchema,
   z.record(z.unknown()), // catch-all for future types
 ]);
 

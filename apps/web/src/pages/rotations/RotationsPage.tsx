@@ -25,11 +25,6 @@ const TYPE_META: Record<RotationType, { label: string; short: string; bg: string
     bg: 'bg-violet-500/15', border: 'border-violet-500/40', text: 'text-violet-300',
     desc: 'Picks tracks at random with probability proportional to their weight in the playlist.',
   },
-  campaign: {
-    label: 'Campaign', short: 'Campaign',
-    bg: 'bg-emerald-500/15', border: 'border-emerald-500/40', text: 'text-emerald-300',
-    desc: 'Distributes campaign spots according to pacing goals and priority.',
-  },
 };
 
 const DEFAULT_PARAMS: Record<RotationType, Record<string, unknown>> = {
@@ -37,7 +32,6 @@ const DEFAULT_PARAMS: Record<RotationType, Record<string, unknown>> = {
   least_recently_played: {},
   round_robin:           { order_by: 'added_date' },
   weighted:              {},
-  campaign:              { distribution: 'even_spread' },
 };
 
 type RotationDraft = { id: number; name: string; type: RotationType; params: Record<string, unknown> };
@@ -410,36 +404,6 @@ function ParamsForm({
             <option value="artist">Artist (A–Z)</option>
             <option value="manual">Manual order</option>
           </select>
-        </div>
-      </div>
-    );
-  }
-
-  if (type === 'campaign') {
-    const dist = (params.distribution as string) ?? 'even_spread';
-    return (
-      <div>
-        <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
-          Parameters
-        </label>
-        <div>
-          <label className="block text-sm text-zinc-300 mb-1.5">Distribution strategy</label>
-          <select
-            value={dist}
-            onChange={(e) => onChange('distribution', e.target.value)}
-            className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-          >
-            <option value="even_spread">Even spread</option>
-            <option value="priority_first">Priority first</option>
-            <option value="pacing">Pacing (goal-aware)</option>
-          </select>
-          <p className="mt-2 text-xs text-zinc-500">
-            {dist === 'priority_first'
-              ? 'Hard-priority campaigns play first; remaining slots are split evenly.'
-              : dist === 'pacing'
-              ? 'Weights spots to hit monthly goals; underpaced campaigns get more airtime.'
-              : 'All active campaigns share available slots equally.'}
-          </p>
         </div>
       </div>
     );

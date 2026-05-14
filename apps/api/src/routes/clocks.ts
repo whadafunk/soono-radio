@@ -111,6 +111,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
           accept_live: s.accept_live ?? true,
           accept_sweepers: s.accept_sweepers ?? [],
           silence_detection_action: s.silence_detection_action ?? null,
+          rotation_type: s.rotation_type ?? null,
         })),
       );
     }
