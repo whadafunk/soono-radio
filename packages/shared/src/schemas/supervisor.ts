@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { FINISH_POLICIES, JOIN_POLICIES, OVERRUN_POLICIES } from './scheduling.js';
 
 export const PLAY_SOURCES = ['auto', 'live', 'manual'] as const;
 export type PlaySource = (typeof PLAY_SOURCES)[number];
@@ -47,6 +48,10 @@ export const SupervisorConfigSchema = z.object({
   metadata_poll_ms: z.number().int().min(500).max(60_000).default(5_000),
   queue_depth_threshold: z.number().int().min(1).max(20).default(1),
   separation_minutes: z.number().int().min(0).max(720).default(30),
+  // Station-wide handover defaults — clocks inherit these unless they set an explicit override
+  finish_policy: z.enum(FINISH_POLICIES).default('finish_segment'),
+  join_policy: z.enum(JOIN_POLICIES).default('join_top'),
+  overrun_policy: z.enum(OVERRUN_POLICIES).default('loop_top'),
 });
 export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>;
 

@@ -50,6 +50,7 @@ import {
   OverrunPolicy,
   Rotation,
   Show,
+  SupervisorConfig,
 } from '@radio/shared';
 import {
   fetchClocks,
@@ -61,6 +62,7 @@ import {
   fetchPlaylists,
   fetchShows,
   fetchRotations,
+  fetchSupervisorConfig,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
 
@@ -293,6 +295,7 @@ export function ClocksPage() {
   const { data: allPlaylists = [] } = useQuery({ queryKey: ['playlists'], queryFn: fetchPlaylists });
   const { data: allShows = [] } = useQuery({ queryKey: ['shows'], queryFn: fetchShows });
   const { data: allRotations = [] } = useQuery({ queryKey: ['rotations'], queryFn: fetchRotations });
+  const { data: supervisorConfig } = useQuery({ queryKey: ['supervisor-config'], queryFn: fetchSupervisorConfig });
 
   const musicRotations = allRotations.filter((r) => (r.kind ?? 'music') === 'music');
   const sweeperRotations = allRotations.filter((r) => r.kind === 'sweeper');
@@ -603,6 +606,7 @@ export function ClocksPage() {
                   finish={draftClock.finish_policy}
                   join={draftClock.join_policy}
                   overrun={draftClock.overrun_policy}
+                  supervisorConfig={supervisorConfig}
                   onChange={(p) => updateDraftClock((c) => ({ ...c, ...p }))}
                 />
 
@@ -2032,12 +2036,13 @@ function SegmentSweeperEditor({
 // ─── Handover policy editor ───────────────────────────────────────────────────
 
 function HandoverEditor({
-  finish, join, overrun, onChange,
+  finish, join, overrun, supervisorConfig, onChange,
 }: {
-  finish: FinishPolicy;
-  join: JoinPolicy;
-  overrun: OverrunPolicy;
-  onChange: (patch: { finish_policy?: FinishPolicy; join_policy?: JoinPolicy; overrun_policy?: OverrunPolicy }) => void;
+  finish: FinishPolicy | null;
+  join: JoinPolicy | null;
+  overrun: OverrunPolicy | null;
+  supervisorConfig: SupervisorConfig | undefined;
+  onChange: (patch: { finish_policy?: FinishPolicy | null; join_policy?: JoinPolicy | null; overrun_policy?: OverrunPolicy | null }) => void;
 }) {
   const [open, setOpen] = useState(true);
   return (
@@ -2057,21 +2062,24 @@ function HandoverEditor({
             value={finish}
             options={FINISH_POLICIES}
             labelsMap={FINISH_POLICY_LABELS}
-            onChange={(v) => onChange({ finish_policy: v as FinishPolicy })}
+            defaultLabel={supervisorConfig ? FINISH_POLICY_LABELS[supervisorConfig.finish_policy].label : 'Finish segment'}
+            onChange={(v) => onChange({ finish_policy: v as FinishPolicy | null })}
           />
           <PolicyRow
             label="Join"
             value={join}
             options={JOIN_POLICIES}
             labelsMap={JOIN_POLICY_LABELS}
-            onChange={(v) => onChange({ join_policy: v as JoinPolicy })}
+            defaultLabel={supervisorConfig ? JOIN_POLICY_LABELS[supervisorConfig.join_policy].label : 'Join at top'}
+            onChange={(v) => onChange({ join_policy: v as JoinPolicy | null })}
           />
           <PolicyRow
             label="Overrun"
             value={overrun}
             options={OVERRUN_POLICIES}
             labelsMap={OVERRUN_POLICY_LABELS}
-            onChange={(v) => onChange({ overrun_policy: v as OverrunPolicy })}
+            defaultLabel={supervisorConfig ? OVERRUN_POLICY_LABELS[supervisorConfig.overrun_policy].label : 'Loop from top'}
+            onChange={(v) => onChange({ overrun_policy: v as OverrunPolicy | null })}
           />
         </div>
       )}
@@ -2080,27 +2088,31 @@ function HandoverEditor({
 }
 
 function PolicyRow<T extends string>({
-  label, value, options, labelsMap, onChange,
+  label, value, options, labelsMap, defaultLabel, onChange,
 }: {
   label: string;
-  value: T;
+  value: T | null;
   options: readonly T[];
   labelsMap: Record<T, { label: string; desc: string }>;
-  onChange: (v: T) => void;
+  defaultLabel: string;
+  onChange: (v: T | null) => void;
 }) {
+  const selectValue = value ?? '';
+  const desc = value ? labelsMap[value].desc : null;
   return (
     <div className="flex items-start gap-3">
       <span className="text-xs text-zinc-500 w-16 pt-1.5">{label}</span>
       <select
-        value={value}
-        onChange={(e) => onChange(e.target.value as T)}
+        value={selectValue}
+        onChange={(e) => onChange((e.target.value === '' ? null : e.target.value as T))}
         className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
       >
+        <option value="" className="bg-zinc-900 text-zinc-400">Station default ({defaultLabel})</option>
         {options.map((o) => (
           <option key={o} value={o} className="bg-zinc-900">{labelsMap[o].label}</option>
         ))}
       </select>
-      <span className="text-[11px] text-zinc-500 flex-1">{labelsMap[value].desc}</span>
+      {desc && <span className="text-[11px] text-zinc-500 flex-1">{desc}</span>}
     </div>
   );
 }

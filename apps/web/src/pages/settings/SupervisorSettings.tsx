@@ -1,9 +1,13 @@
 import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useForm, UseFormRegister } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader, Check, AlertCircle } from 'lucide-react';
-import { SupervisorConfig, SupervisorConfigSchema } from '@radio/shared';
+import {
+  SupervisorConfig, SupervisorConfigSchema,
+  FINISH_POLICIES, JOIN_POLICIES, OVERRUN_POLICIES,
+  FinishPolicy, JoinPolicy, OverrunPolicy,
+} from '@radio/shared';
 import {
   fetchSupervisorConfig,
   updateSupervisorConfig,
@@ -170,6 +174,38 @@ export function SupervisorSettings() {
           </div>
         </CollapsibleSection>
 
+        <CollapsibleSection title="Handover defaults">
+          <p className="text-xs text-zinc-500 mb-4">
+            Station-wide defaults for clock handover behaviour. Individual clocks can override these.
+          </p>
+          <div className="space-y-4">
+            <HandoverPolicyRow
+              label="Finish policy"
+              hint="What to do when a hard-start segment is incoming."
+              fieldName="finish_policy"
+              options={FINISH_POLICIES}
+              labels={{ hard_cut: 'Hard cut', finish_segment: 'Finish segment' } as Record<FinishPolicy, string>}
+              register={register}
+            />
+            <HandoverPolicyRow
+              label="Join policy"
+              hint="How to enter a clock when the slot starts mid-way through its design length."
+              fieldName="join_policy"
+              options={JOIN_POLICIES}
+              labels={{ join_top: 'Join at top', join_mid: 'Join mid' } as Record<JoinPolicy, string>}
+              register={register}
+            />
+            <HandoverPolicyRow
+              label="Overrun policy"
+              hint="What to do when the show outlives its clock."
+              fieldName="overrun_policy"
+              options={OVERRUN_POLICIES}
+              labels={{ loop_top: 'Loop from top', loop_mid: 'Loop at mid', fall_through: 'Fall through' } as Record<OverrunPolicy, string>}
+              register={register}
+            />
+          </div>
+        </CollapsibleSection>
+
         <div className="flex gap-4">
           <button
             type="submit"
@@ -199,3 +235,30 @@ export function SupervisorSettings() {
   );
 }
 
+function HandoverPolicyRow<T extends string>({
+  label, hint, fieldName, options, labels, register,
+}: {
+  label: string;
+  hint: string;
+  fieldName: string;
+  options: readonly T[];
+  labels: Record<T, string>;
+  register: UseFormRegister<SupervisorConfig>;
+}) {
+  return (
+    <div>
+      <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center gap-1">
+        {label}
+        <HelpTooltip text={hint} />
+      </label>
+      <select
+        {...register(fieldName as keyof SupervisorConfig)}
+        className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+      >
+        {options.map((o) => (
+          <option key={o} value={o} className="bg-zinc-900">{labels[o]}</option>
+        ))}
+      </select>
+    </div>
+  );
+}

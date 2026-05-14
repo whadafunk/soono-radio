@@ -292,14 +292,10 @@ export const clocks = sqliteTable('clocks', {
   station_id_playlist_id: integer('station_id_playlist_id'),
   // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
   jingle_playlist_id: integer('jingle_playlist_id'),
-  // Handover policies — see docs/clocks-rotations-redesign.md §5
-  finish_policy: text('finish_policy', { enum: FINISH_POLICIES })
-    .notNull()
-    .default('finish_segment'),
-  join_policy: text('join_policy', { enum: JOIN_POLICIES }).notNull().default('join_top'),
-  overrun_policy: text('overrun_policy', { enum: OVERRUN_POLICIES })
-    .notNull()
-    .default('loop_top'),
+  // Handover policies — null means inherit from supervisor config defaults
+  finish_policy: text('finish_policy', { enum: FINISH_POLICIES }),
+  join_policy: text('join_policy', { enum: JOIN_POLICIES }),
+  overrun_policy: text('overrun_policy', { enum: OVERRUN_POLICIES }),
   created_at: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

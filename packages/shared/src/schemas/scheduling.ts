@@ -186,9 +186,10 @@ export const ClockSchema = z.object({
   station_id_playlist_id: z.number().int().nullable(),
   // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
   jingle_playlist_id: z.number().int().nullable(),
-  finish_policy: z.enum(FINISH_POLICIES).default('finish_segment'),
-  join_policy: z.enum(JOIN_POLICIES).default('join_top'),
-  overrun_policy: z.enum(OVERRUN_POLICIES).default('loop_top'),
+  // null = inherit from supervisor config defaults
+  finish_policy: z.enum(FINISH_POLICIES).nullable(),
+  join_policy: z.enum(JOIN_POLICIES).nullable(),
+  overrun_policy: z.enum(OVERRUN_POLICIES).nullable(),
   duration_seconds: z.number().int().nonnegative(),
   // Derived: true if any calendar/template entry references this clock.
   // Populated by the API on read; not stored.
@@ -204,9 +205,9 @@ export const ClockCreateSchema = z.object({
   show_id: z.number().int().positive().nullable().optional(),
   station_id_playlist_id: z.number().int().positive().nullable().optional(),
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
-  finish_policy: z.enum(FINISH_POLICIES).optional(),
-  join_policy: z.enum(JOIN_POLICIES).optional(),
-  overrun_policy: z.enum(OVERRUN_POLICIES).optional(),
+  finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),
+  join_policy: z.enum(JOIN_POLICIES).nullable().optional(),
+  overrun_policy: z.enum(OVERRUN_POLICIES).nullable().optional(),
 });
 export type ClockCreate = z.infer<typeof ClockCreateSchema>;
 
@@ -216,9 +217,9 @@ export const ClockPatchSchema = z.object({
   show_id: z.number().int().positive().nullable().optional(),
   station_id_playlist_id: z.number().int().positive().nullable().optional(),
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
-  finish_policy: z.enum(FINISH_POLICIES).optional(),
-  join_policy: z.enum(JOIN_POLICIES).optional(),
-  overrun_policy: z.enum(OVERRUN_POLICIES).optional(),
+  finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),
+  join_policy: z.enum(JOIN_POLICIES).nullable().optional(),
+  overrun_policy: z.enum(OVERRUN_POLICIES).nullable().optional(),
 });
 export type ClockPatch = z.infer<typeof ClockPatchSchema>;
 
