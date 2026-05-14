@@ -206,23 +206,27 @@ export const ShowPlaylistSchema = z.object({
   id: z.number().int(),
   show_id: z.number().int(),
   playlist_id: z.number().int(),
-  rotation_tier: z.string().nullable(),    // "hot" | "medium" | "cold" | custom
+  playlist_name: z.string(),
+  rotation_tier: z.string().nullable(),
   rotation_id: z.number().int().nullable(),
   fallback_tier: z.string().nullable(),
   sort_order: z.number().int().nonnegative(),
+  weight: z.number().int().positive(),
 });
 export type ShowPlaylist = z.infer<typeof ShowPlaylistSchema>;
 
 export const ShowPlaylistCreateSchema = z.object({
   playlist_id: z.number().int().positive(),
+  weight: z.number().int().positive().optional(),
   rotation_tier: z.string().nullable().optional(),
   rotation_id: z.number().int().positive().nullable().optional(),
   fallback_tier: z.string().nullable().optional(),
-  sort_order: z.number().int().nonnegative().default(0),
+  sort_order: z.number().int().nonnegative().optional(),
 });
 export type ShowPlaylistCreate = z.infer<typeof ShowPlaylistCreateSchema>;
 
 export const ShowPlaylistPatchSchema = z.object({
+  weight: z.number().int().positive().optional(),
   rotation_tier: z.string().nullable().optional(),
   rotation_id: z.number().int().positive().nullable().optional(),
   fallback_tier: z.string().nullable().optional(),

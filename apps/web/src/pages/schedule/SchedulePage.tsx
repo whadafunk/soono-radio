@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock } from 'lucide-react';
-import { Show, ShowColor, ShowType, TemplateEntry, CalendarEntry, Clock as ClockType } from '@radio/shared';
+import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
   createTemplateEntry, updateTemplateEntry, deleteTemplateEntry,
@@ -25,12 +25,6 @@ const COLOR_HEX: Record<ShowColor, string> = {
   rose:    '#fb7185',
   orange:  '#fb923c',
   teal:    '#2dd4bf',
-};
-
-const TYPE_LABEL: Record<ShowType, string> = {
-  live:        'Live',
-  automated:   'Automated',
-  prerecorded: 'Prerecorded',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -105,7 +99,7 @@ export function SchedulePage() {
   const { data: shows = [] }           = useQuery({ queryKey: ['shows'],            queryFn: fetchShows });
   const { data: clocks = [] }          = useQuery({ queryKey: ['clocks'],           queryFn: fetchClocks });
 
-  const activeShows = useMemo(() => shows.filter((s) => s.active), [shows]);
+  const activeShows = shows;
   const showMap     = useMemo(() => new Map(shows.map((s) => [s.id, s])), [shows]);
   const clockMap    = useMemo(() => new Map(clocks.map((c) => [c.id, c])), [clocks]);
 
@@ -1007,7 +1001,6 @@ function EditSlotPopover({
           </button>
         </div>
         <div className="space-y-1.5 mb-3">
-          {show && <InfoRow label="Type" value={TYPE_LABEL[show.type]} />}
           <InfoRow label="Time" value={`${entry.time_start} – ${entry.time_end}`} mono />
         </div>
         <div className="flex gap-2">
@@ -1209,7 +1202,6 @@ function CalEditSlotPopover({
           </button>
         </div>
         <div className="space-y-1.5 mb-3">
-          {show && <InfoRow label="Type" value={TYPE_LABEL[show.type]} />}
           <InfoRow label="Time" value={`${entry.time_start} – ${entry.time_end}`} mono />
         </div>
         <div className="flex gap-2">

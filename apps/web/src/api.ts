@@ -659,6 +659,9 @@ import {
   Show,
   ShowCreate,
   ShowPatch,
+  ShowPlaylist,
+  ShowPlaylistCreate,
+  ShowPlaylistPatch,
   Clock,
   ClockCreate,
   ClockPatch,
@@ -880,6 +883,22 @@ export function updateShow(id: number, patch_: ShowPatch): Promise<Show> {
 
 export function deleteShow(id: number): Promise<void> {
   return del(`/shows/${id}`);
+}
+
+export function fetchShowPlaylists(showId: number): Promise<ShowPlaylist[]> {
+  return apiFetch(`/shows/${showId}/playlists`);
+}
+
+export function addShowPlaylist(showId: number, data: ShowPlaylistCreate): Promise<ShowPlaylist> {
+  return post(`/shows/${showId}/playlists`, data);
+}
+
+export function updateShowPlaylist(showId: number, spid: number, data: ShowPlaylistPatch): Promise<ShowPlaylist> {
+  return patch(`/shows/${showId}/playlists/${spid}`, data);
+}
+
+export function removeShowPlaylist(showId: number, spid: number): Promise<void> {
+  return del(`/shows/${showId}/playlists/${spid}`);
 }
 
 // ─── Clocks ───────────────────────────────────────────────────────────────────

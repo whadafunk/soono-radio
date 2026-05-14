@@ -2,10 +2,23 @@ import { useParams, useNavigate, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useEffect } from 'react';
-import { ChevronLeft, BarChart2, Megaphone, Music2, Bell, Lock } from 'lucide-react';
-import { ShowPatch, ShowPatchSchema, ShowColor, ShowType, SHOW_COLORS, SHOW_TYPES } from '@radio/shared';
-import { fetchShow, updateShow, fetchClocks, fetchTemplateEntries } from '../../api';
+import { useEffect, useRef, useState } from 'react';
+import {
+  ChevronLeft, BarChart2, Megaphone, Music2, Bell, Lock,
+  Trash2, Plus, Upload, X, Loader2,
+} from 'lucide-react';
+import {
+  ShowPatch, ShowPatchSchema, ShowColor, SHOW_COLORS,
+  ShowPlaylist,
+} from '@radio/shared';
+import { Media } from '@radio/shared';
+import {
+  fetchShow, updateShow, fetchClocks, fetchTemplateEntries,
+  fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
+  fetchPlaylists, fetchLibrary, fetchLibraryItem, fetchIngestJob,
+  uploadLibraryFiles,
+} from '../../api';
+import type { PlaylistSummary } from '../../api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -17,9 +30,7 @@ const COLOR_DOT: Record<ShowColor, string> = {
   indigo: 'bg-indigo-500', violet: 'bg-violet-500', cyan:    'bg-cyan-500',    emerald: 'bg-emerald-500',
   amber:  'bg-amber-500',  rose:   'bg-rose-500',   orange:  'bg-orange-500',  teal:    'bg-teal-500',
 };
-const TYPE_LABEL: Record<ShowType, string> = {
-  live: 'Live', automated: 'Automated', prerecorded: 'Prerecorded',
-};
+
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const DURATION_STEP = 15;
@@ -57,6 +68,15 @@ export function ShowDetailPage() {
   });
   const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
   const { data: templateEntries = [] } = useQuery({ queryKey: ['template-entries'], queryFn: fetchTemplateEntries });
+  const { data: showMusicPlaylists = [] } = useQuery<ShowPlaylist[]>({
+    queryKey: ['show-playlists', showId],
+    queryFn: () => fetchShowPlaylists(showId),
+    enabled: !isNaN(showId),
+  });
+  const { data: allPlaylists = [] } = useQuery<PlaylistSummary[]>({
+    queryKey: ['playlists'],
+    queryFn: fetchPlaylists,
+  });
 
   const updateMutation = useMutation({
     mutationFn: (patch: ShowPatch) => updateShow(showId, patch),
@@ -74,22 +94,23 @@ export function ShowDetailPage() {
   useEffect(() => {
     if (show) {
       reset({
-        name:             show.name,
-        host:             show.host ?? '',
-        producer:         show.producer ?? '',
-        type:             show.type,
-        default_clock_id: show.default_clock_id,
-        duration_minutes: show.duration_minutes,
-        color:            show.color,
-        notes:            show.notes ?? '',
-        active:           show.active,
+        name:               show.name,
+        host:               show.host ?? '',
+        producer:           show.producer ?? '',
+        default_clock_id:   show.default_clock_id,
+        jingle_playlist_id: show.jingle_playlist_id,
+        bed_playlist_id:    show.bed_playlist_id,
+        intro_media_id:     show.intro_media_id,
+        outro_media_id:     show.outro_media_id,
+        duration_minutes:   show.duration_minutes,
+        color:              show.color,
+        notes:              show.notes ?? '',
       });
     }
   }, [show, reset]);
 
   const selectedColor    = watch('color') ?? show?.color;
   const selectedDuration = watch('duration_minutes') ?? show?.duration_minutes ?? 60;
-  const selectedActive   = watch('active') ?? show?.active;
 
   const onSubmit = (data: ShowPatch) => {
     updateMutation.mutate({
@@ -111,6 +132,16 @@ export function ShowDetailPage() {
     return d;
   });
 
+  // Compute next upcoming entry
+  const now = new Date();
+  const todayDow  = now.getDay() === 0 ? 7 : now.getDay();
+  const todayTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+  const nextEntryId = showEntries.find((e) => {
+    if (e.day_of_week > todayDow) return true;
+    if (e.day_of_week === todayDow && e.time_start > todayTime) return true;
+    return false;
+  })?.id ?? showEntries[0]?.id;
+
   if (isLoading) {
     return <div className="p-8 text-zinc-500 text-sm">Loading…</div>;
   }
@@ -124,6 +155,11 @@ export function ShowDetailPage() {
   }
 
   const hex = COLOR_HEX[selectedColor ?? show.color];
+
+  const jinglePlaylists = allPlaylists.filter((p) => p.type === 'jingle');
+  const bedPlaylists    = allPlaylists.filter((p) => p.type === 'bed');
+  const musicPlaylists  = allPlaylists.filter((p) => p.type === 'music');
+  const usedPlaylistIds = new Set(showMusicPlaylists.map((sp) => sp.playlist_id));
 
   return (
     <div className="pb-10">
@@ -140,13 +176,15 @@ export function ShowDetailPage() {
             <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
             <h1 className="text-lg font-semibold text-white">{show.name}</h1>
           </div>
-          <span className={`text-xs px-2 py-0.5 rounded-full font-medium border ${
-            show.active
-              ? 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30'
-              : 'bg-zinc-700/50 text-zinc-400 border-zinc-600/30'
-          }`}>
-            {show.active ? 'Active' : 'Inactive'}
-          </span>
+          {showEntries.length > 0 ? (
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium border bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+              Scheduled
+            </span>
+          ) : (
+            <span className="text-xs px-2 py-0.5 rounded-full font-medium border bg-zinc-700/50 text-zinc-400 border-zinc-600/30">
+              Unscheduled
+            </span>
+          )}
         </div>
 
         {isDirty && (
@@ -179,212 +217,515 @@ export function ShowDetailPage() {
           onSubmit={handleSubmit(onSubmit)}
           className="flex-1 min-w-0 space-y-5"
         >
-            {/* Name */}
-            <Field label="Name" error={errors.name?.message}>
+          {/* Name */}
+          <Field label="Name" error={errors.name?.message}>
+            <input
+              {...register('name')}
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
+            />
+          </Field>
+
+          {/* Host + Producer */}
+          <div className="grid grid-cols-2 gap-3">
+            <Field label="Host">
               <input
-                {...register('name')}
+                {...register('host')}
+                placeholder="—"
                 className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
               />
             </Field>
-
-            {/* Host + Producer */}
-            <div className="grid grid-cols-2 gap-3">
-              <Field label="Host">
-                <input
-                  {...register('host')}
-                  placeholder="—"
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-                />
-              </Field>
-              <Field label="Producer">
-                <input
-                  {...register('producer')}
-                  placeholder="—"
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-                />
-              </Field>
-            </div>
-
-            {/* Type */}
-            <Field label="Type">
-              <select
-                {...register('type')}
-                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-              >
-                {SHOW_TYPES.map((t) => (
-                  <option key={t} value={t}>{TYPE_LABEL[t]}</option>
-                ))}
-              </select>
-            </Field>
-
-            {/* Duration slider */}
-            <Field label={`Duration — ${formatDuration(selectedDuration)}`}>
-              <Controller
-                control={control}
-                name="duration_minutes"
-                render={({ field }) => (
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs text-zinc-500 w-8 text-right">{formatDuration(DURATION_MIN)}</span>
-                    <input
-                      type="range"
-                      min={DURATION_MIN}
-                      max={DURATION_MAX}
-                      step={DURATION_STEP}
-                      value={field.value ?? show.duration_minutes}
-                      onChange={(e) => field.onChange(Number(e.target.value))}
-                      className="flex-1 accent-indigo-500"
-                    />
-                    <span className="text-xs text-zinc-500 w-8">{formatDuration(DURATION_MAX)}</span>
-                  </div>
-                )}
+            <Field label="Producer">
+              <input
+                {...register('producer')}
+                placeholder="—"
+                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
               />
             </Field>
+          </div>
 
-            {/* Clock */}
-            <Field label="Default Clock">
-              <Controller
-                control={control}
-                name="default_clock_id"
-                render={({ field }) => (
-                  <select
-                    value={field.value ?? ''}
-                    onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
-                    className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-                  >
-                    <option value="">None</option>
-                    {clocks.map((c) => (
-                      <option key={c.id} value={c.id}>{c.name}</option>
-                    ))}
-                  </select>
-                )}
-              />
-            </Field>
-
-            {/* Color */}
-            <Field label="Color">
-              <div className="flex gap-2 flex-wrap">
-                {SHOW_COLORS.map((color) => (
-                  <button
-                    key={color}
-                    type="button"
-                    onClick={() => setValue('color', color, { shouldDirty: true })}
-                    className={`w-7 h-7 rounded-full ${COLOR_DOT[color]} transition-all ${
-                      selectedColor === color
-                        ? 'ring-2 ring-offset-2 ring-offset-zinc-950 ring-white scale-110'
-                        : 'opacity-50 hover:opacity-90'
-                    }`}
+          {/* Duration slider */}
+          <Field label={`Duration — ${formatDuration(selectedDuration)}`}>
+            <Controller
+              control={control}
+              name="duration_minutes"
+              render={({ field }) => (
+                <div className="flex items-center gap-3">
+                  <span className="text-xs text-zinc-500 w-8 text-right">{formatDuration(DURATION_MIN)}</span>
+                  <input
+                    type="range"
+                    min={DURATION_MIN}
+                    max={DURATION_MAX}
+                    step={DURATION_STEP}
+                    value={field.value ?? show.duration_minutes}
+                    onChange={(e) => field.onChange(Number(e.target.value))}
+                    className="flex-1 accent-indigo-500"
                   />
-                ))}
-              </div>
-            </Field>
+                  <span className="text-xs text-zinc-500 w-8">{formatDuration(DURATION_MAX)}</span>
+                </div>
+              )}
+            />
+          </Field>
 
-            {/* Notes */}
-            <Field label="Notes">
-              <textarea
-                {...register('notes')}
-                rows={3}
-                placeholder="Optional notes"
-                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 resize-none"
-              />
-            </Field>
+          {/* Clock */}
+          <Field label="Default Clock">
+            <Controller
+              control={control}
+              name="default_clock_id"
+              render={({ field }) => (
+                <select
+                  value={field.value ?? ''}
+                  onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">None</option>
+                  {clocks.map((c) => (
+                    <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              )}
+            />
+          </Field>
 
-            {/* Active toggle */}
-            <div className="flex items-center justify-between py-2 border-t border-zinc-800">
-              <span className="text-sm font-medium text-zinc-300">Active</span>
-              <button
-                type="button"
-                onClick={() => setValue('active', !selectedActive, { shouldDirty: true })}
-                className={`relative w-9 h-5 rounded-full transition-colors ${selectedActive ? 'bg-indigo-600' : 'bg-zinc-700'}`}
-              >
-                <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-all ${selectedActive ? 'left-4' : 'left-0.5'}`} />
-              </button>
+          {/* Color */}
+          <Field label="Color">
+            <div className="flex gap-2 flex-wrap">
+              {SHOW_COLORS.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  onClick={() => setValue('color', color, { shouldDirty: true })}
+                  className={`w-7 h-7 rounded-full ${COLOR_DOT[color]} transition-all ${
+                    selectedColor === color
+                      ? 'ring-2 ring-offset-2 ring-offset-zinc-950 ring-white scale-110'
+                      : 'opacity-50 hover:opacity-90'
+                  }`}
+                />
+              ))}
             </div>
+          </Field>
 
-            {/* ── Playlists ── */}
-            <section className="border-t border-zinc-800 pt-5">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Playlists</h2>
-                <button
-                  type="button"
-                  disabled
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-zinc-500 border border-zinc-700 rounded-md opacity-50 cursor-not-allowed"
-                >
-                  <Music2 className="w-3 h-3" /> Add
-                </button>
-              </div>
-              <div className="rounded-lg border border-zinc-800 border-dashed px-4 py-6 text-center text-zinc-500 text-sm">
-                No playlists assigned
-              </div>
-            </section>
+          {/* Notes */}
+          <Field label="Notes">
+            <textarea
+              {...register('notes')}
+              rows={3}
+              placeholder="Optional notes"
+              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 resize-none"
+            />
+          </Field>
 
-            {/* ── Jingles ── */}
-            <section className="border-t border-zinc-800 pt-5">
-              <div className="flex items-center justify-between mb-3">
-                <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Jingles</h2>
-                <button
-                  type="button"
-                  disabled
-                  className="flex items-center gap-1.5 px-2.5 py-1 text-xs text-zinc-500 border border-zinc-700 rounded-md opacity-50 cursor-not-allowed"
-                >
-                  <Bell className="w-3 h-3" /> Add
-                </button>
-              </div>
-              <div className="rounded-lg border border-zinc-800 border-dashed px-4 py-6 text-center text-zinc-500 text-sm">
-                No jingles assigned
-              </div>
-            </section>
-          </form>
+          {/* ── Intro / Outro ── */}
+          <section className="border-t border-zinc-800 pt-5 space-y-4">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Intro &amp; Outro</h2>
+            <Controller
+              control={control}
+              name="intro_media_id"
+              render={({ field }) => (
+                <MediaPickerField
+                  label="Intro clip"
+                  value={field.value ?? null}
+                  onChange={(v) => { field.onChange(v); setValue('intro_media_id', v, { shouldDirty: true }); }}
+                />
+              )}
+            />
+            <Controller
+              control={control}
+              name="outro_media_id"
+              render={({ field }) => (
+                <MediaPickerField
+                  label="Outro clip"
+                  value={field.value ?? null}
+                  onChange={(v) => { field.onChange(v); setValue('outro_media_id', v, { shouldDirty: true }); }}
+                />
+              )}
+            />
+          </section>
+
+          {/* ── Jingles ── */}
+          <section className="border-t border-zinc-800 pt-5">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Jingles</h2>
+            <Controller
+              control={control}
+              name="jingle_playlist_id"
+              render={({ field }) => (
+                <PlaylistSelect
+                  playlists={jinglePlaylists}
+                  value={field.value ?? null}
+                  onChange={(v) => { field.onChange(v); setValue('jingle_playlist_id', v, { shouldDirty: true }); }}
+                  placeholder="No jingle playlist assigned"
+                />
+              )}
+            />
+          </section>
+
+          {/* ── Beds ── */}
+          <section className="border-t border-zinc-800 pt-5">
+            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Beds</h2>
+            <Controller
+              control={control}
+              name="bed_playlist_id"
+              render={({ field }) => (
+                <PlaylistSelect
+                  playlists={bedPlaylists}
+                  value={field.value ?? null}
+                  onChange={(v) => { field.onChange(v); setValue('bed_playlist_id', v, { shouldDirty: true }); }}
+                  placeholder="No bed playlist assigned"
+                />
+              )}
+            />
+          </section>
+
+          {/* ── Music Playlists ── */}
+          <MusicPlaylistsSection
+            showId={showId}
+            showMusicPlaylists={showMusicPlaylists}
+            availablePlaylists={musicPlaylists}
+            usedPlaylistIds={usedPlaylistIds}
+          />
+        </form>
 
         {/* ── Right column: info panels ── */}
         <div className="w-64 flex-shrink-0 space-y-4">
 
-            {/* This week */}
-            <Panel title="This Week">
-              {showEntries.length === 0 ? (
-                <p className="text-xs text-zinc-500 py-2">Not scheduled this week</p>
-              ) : (
-                <ul className="space-y-1">
-                  {showEntries.map((entry) => {
-                    const day = weekDays[entry.day_of_week - 1];
-                    return (
-                      <li key={entry.id} className="flex items-center justify-between text-xs">
-                        <span className="text-zinc-300 font-medium">
-                          {DAY_NAMES[entry.day_of_week - 1]} {day.getDate()}
-                        </span>
-                        <span className="text-zinc-400 font-mono">
-                          {entry.time_start}–{entry.time_end}
-                        </span>
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
-            </Panel>
+          {/* This week */}
+          <Panel title="This Week">
+            {showEntries.length === 0 ? (
+              <p className="text-xs text-zinc-500 py-2">Not scheduled this week</p>
+            ) : (
+              <ul className="space-y-1">
+                {showEntries.map((entry) => {
+                  const day = weekDays[entry.day_of_week - 1];
+                  const isNext = entry.id === nextEntryId;
+                  return (
+                    <li
+                      key={entry.id}
+                      className={`flex items-center justify-between text-xs rounded px-1.5 py-0.5 -mx-1.5 ${
+                        isNext ? 'bg-indigo-500/10 text-indigo-300' : ''
+                      }`}
+                    >
+                      <span className={`font-medium ${isNext ? 'text-indigo-200' : 'text-zinc-300'}`}>
+                        {DAY_NAMES[entry.day_of_week - 1]} {day.getDate()}
+                        {isNext && <span className="ml-1 text-indigo-400 text-[10px]">next</span>}
+                      </span>
+                      <span className={`font-mono ${isNext ? 'text-indigo-300' : 'text-zinc-400'}`}>
+                        {entry.time_start}–{entry.time_end}
+                      </span>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </Panel>
 
-            {/* Campaigns — coming soon */}
-            <Panel
-              title="Campaigns"
-              icon={<Megaphone className="w-3.5 h-3.5" />}
-              locked
-            >
-              <p className="text-xs text-zinc-500 leading-relaxed">
-                Advertising campaigns associated with this show will appear here.
-              </p>
-            </Panel>
+          {/* Campaigns — coming soon */}
+          <Panel
+            title="Campaigns"
+            icon={<Megaphone className="w-3.5 h-3.5" />}
+            locked
+          >
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Advertising campaigns associated with this show will appear here.
+            </p>
+          </Panel>
 
-            {/* Statistics — coming soon */}
-            <Panel
-              title="Statistics"
-              icon={<BarChart2 className="w-3.5 h-3.5" />}
-              locked
-            >
-              <p className="text-xs text-zinc-500 leading-relaxed">
-                Ratings, play counts, and profitability metrics will appear here.
-              </p>
-            </Panel>
+          {/* Statistics — coming soon */}
+          <Panel
+            title="Statistics"
+            icon={<BarChart2 className="w-3.5 h-3.5" />}
+            locked
+          >
+            <p className="text-xs text-zinc-500 leading-relaxed">
+              Ratings, play counts, and profitability metrics will appear here.
+            </p>
+          </Panel>
 
         </div>
       </div>
+    </div>
+  );
+}
+
+// ─── Music Playlists Section ──────────────────────────────────────────────────
+
+function MusicPlaylistsSection({
+  showId, showMusicPlaylists, availablePlaylists, usedPlaylistIds,
+}: {
+  showId: number;
+  showMusicPlaylists: ShowPlaylist[];
+  availablePlaylists: PlaylistSummary[];
+  usedPlaylistIds: Set<number>;
+}) {
+  const qc = useQueryClient();
+  const [addingId, setAddingId] = useState<number | ''>('');
+
+  const addMutation = useMutation({
+    mutationFn: (playlistId: number) =>
+      addShowPlaylist(showId, { playlist_id: playlistId, weight: 1 }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['show-playlists', showId] });
+      setAddingId('');
+    },
+  });
+
+  const removeMutation = useMutation({
+    mutationFn: (spid: number) => removeShowPlaylist(showId, spid),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
+  });
+
+  const weightMutation = useMutation({
+    mutationFn: ({ spid, weight }: { spid: number; weight: number }) =>
+      updateShowPlaylist(showId, spid, { weight }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
+  });
+
+  const unassigned = availablePlaylists.filter((p) => !usedPlaylistIds.has(p.id));
+
+  return (
+    <section className="border-t border-zinc-800 pt-5">
+      <div className="flex items-center justify-between mb-3">
+        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Show Music</h2>
+      </div>
+
+      {showMusicPlaylists.length === 0 && unassigned.length === 0 && (
+        <p className="text-xs text-zinc-500 italic mb-3">No music playlists in library yet.</p>
+      )}
+
+      {showMusicPlaylists.length > 0 && (
+        <ul className="space-y-1 mb-3">
+          {showMusicPlaylists.map((sp) => (
+            <li key={sp.id} className="flex items-center gap-2 group">
+              <span className="flex-1 text-sm text-zinc-200 truncate">{sp.playlist_name}</span>
+              <div className="flex items-center gap-1 shrink-0">
+                <span className="text-xs text-zinc-500">wt</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={99}
+                  defaultValue={sp.weight}
+                  onBlur={(e) => {
+                    const v = Number(e.target.value);
+                    if (v >= 1 && v !== sp.weight) weightMutation.mutate({ spid: sp.id, weight: v });
+                  }}
+                  className="w-12 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+              <button
+                type="button"
+                onClick={() => removeMutation.mutate(sp.id)}
+                className="p-0.5 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+
+      {unassigned.length > 0 && (
+        <div className="flex items-center gap-2">
+          <select
+            value={addingId}
+            onChange={(e) => setAddingId(e.target.value === '' ? '' : Number(e.target.value))}
+            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+          >
+            <option value="">Add a music playlist…</option>
+            {unassigned.map((p) => (
+              <option key={p.id} value={p.id}>{p.name}</option>
+            ))}
+          </select>
+          <button
+            type="button"
+            disabled={addingId === '' || addMutation.isPending}
+            onClick={() => { if (addingId !== '') addMutation.mutate(Number(addingId)); }}
+            className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
+          >
+            <Plus className="w-3.5 h-3.5" /> Add
+          </button>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─── Playlist Select (single, for jingles/beds) ───────────────────────────────
+
+function PlaylistSelect({
+  playlists, value, onChange, placeholder,
+}: {
+  playlists: PlaylistSummary[];
+  value: number | null;
+  onChange: (id: number | null) => void;
+  placeholder: string;
+}) {
+  if (playlists.length === 0) {
+    return <p className="text-xs text-zinc-500 italic">{placeholder} — no matching playlists in library.</p>;
+  }
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+    >
+      <option value="">None</option>
+      {playlists.map((p) => (
+        <option key={p.id} value={p.id}>{p.name}</option>
+      ))}
+    </select>
+  );
+}
+
+// ─── Media Picker Field (intro/outro) ─────────────────────────────────────────
+
+function MediaPickerField({
+  label, value, onChange,
+}: {
+  label: string;
+  value: number | null;
+  onChange: (id: number | null) => void;
+}) {
+  const [isOpen, setIsOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'processing'>('idle');
+  const [pollingJobId, setPollingJobId] = useState<string | null>(null);
+  const fileRef = useRef<HTMLInputElement>(null);
+
+  const { data: currentMedia } = useQuery<Media>({
+    queryKey: ['media', value],
+    queryFn: () => fetchLibraryItem(value!),
+    enabled: value != null,
+  });
+
+  const { data: searchResults } = useQuery({
+    queryKey: ['media-picker', query],
+    queryFn: () => fetchLibrary({ q: query || undefined, category: 'jingle,intro,outro,promo', limit: 40 }),
+    enabled: isOpen,
+  });
+
+  const { data: ingestJob } = useQuery({
+    queryKey: ['ingest-job', pollingJobId],
+    queryFn: () => fetchIngestJob(pollingJobId!),
+    enabled: !!pollingJobId,
+    refetchInterval: pollingJobId ? 2000 : false,
+  });
+
+  useEffect(() => {
+    if (!ingestJob) return;
+    if (ingestJob.status === 'completed' && ingestJob.media_id) {
+      onChange(ingestJob.media_id);
+      setPollingJobId(null);
+      setUploadState('idle');
+      setIsOpen(false);
+    } else if (ingestJob.status === 'failed') {
+      setPollingJobId(null);
+      setUploadState('idle');
+    }
+  }, [ingestJob, onChange]);
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    e.target.value = '';
+    setUploadState('uploading');
+    try {
+      const { jobs } = await uploadLibraryFiles([file], 'jingle');
+      setUploadState('processing');
+      setPollingJobId(jobs[0].job_id);
+    } catch {
+      setUploadState('idle');
+    }
+  };
+
+  const mediaLabel = currentMedia
+    ? [currentMedia.title, currentMedia.artist].filter(Boolean).join(' — ') || currentMedia.original_filename
+    : null;
+
+  return (
+    <div>
+      <label className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</label>
+
+      <div className="flex items-center gap-2">
+        {/* Current selection display */}
+        <div className="flex-1 flex items-center gap-2 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 min-w-0">
+          {uploadState !== 'idle' ? (
+            <span className="flex items-center gap-1.5 text-xs text-zinc-400">
+              <Loader2 className="w-3 h-3 animate-spin" />
+              {uploadState === 'uploading' ? 'Uploading…' : 'Processing…'}
+            </span>
+          ) : mediaLabel ? (
+            <>
+              <span className="text-sm text-zinc-200 truncate flex-1">{mediaLabel}</span>
+              <button
+                type="button"
+                onClick={() => onChange(null)}
+                className="p-0.5 text-zinc-500 hover:text-zinc-300 flex-shrink-0"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </>
+          ) : (
+            <span className="text-sm text-zinc-500 italic">None</span>
+          )}
+        </div>
+
+        {/* Select button */}
+        <button
+          type="button"
+          onClick={() => { setIsOpen((o) => !o); setQuery(''); }}
+          className="px-2.5 py-2 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded-lg transition-colors"
+        >
+          {isOpen ? 'Close' : 'Select'}
+        </button>
+
+        {/* Upload button */}
+        <button
+          type="button"
+          onClick={() => fileRef.current?.click()}
+          disabled={uploadState !== 'idle'}
+          className="p-2 text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg transition-colors disabled:opacity-40"
+          title="Upload a clip"
+        >
+          <Upload className="w-3.5 h-3.5" />
+        </button>
+        <input ref={fileRef} type="file" accept="audio/*" className="hidden" onChange={handleFileChange} />
+      </div>
+
+      {/* Search dropdown */}
+      {isOpen && (
+        <div className="mt-1.5 border border-zinc-700 rounded-lg bg-zinc-900 overflow-hidden shadow-xl">
+          <div className="p-2 border-b border-zinc-800">
+            <input
+              autoFocus
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              placeholder="Search jingles, intros, promos…"
+              className="w-full bg-zinc-800 rounded px-2.5 py-1.5 text-sm text-white placeholder-zinc-500 focus:outline-none"
+            />
+          </div>
+          <ul className="max-h-48 overflow-y-auto divide-y divide-zinc-800/50">
+            {(searchResults?.items ?? []).length === 0 ? (
+              <li className="px-3 py-4 text-xs text-zinc-500 text-center">No results</li>
+            ) : (
+              searchResults?.items.map((item) => {
+                const label = [item.title, item.artist].filter(Boolean).join(' — ') || item.original_filename;
+                return (
+                  <li key={item.id}>
+                    <button
+                      type="button"
+                      onClick={() => { onChange(item.id); setIsOpen(false); }}
+                      className={`w-full text-left px-3 py-2 text-sm hover:bg-zinc-800 transition-colors ${
+                        item.id === value ? 'text-indigo-300 bg-indigo-500/10' : 'text-zinc-200'
+                      }`}
+                    >
+                      <span className="truncate block">{label}</span>
+                      <span className="text-xs text-zinc-500">{item.category}</span>
+                    </button>
+                  </li>
+                );
+              })
+            )}
+          </ul>
+        </div>
+      )}
     </div>
   );
 }

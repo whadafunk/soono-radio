@@ -3,12 +3,13 @@ import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, Trash2, Mic2, X } from 'lucide-react';
+import { Plus, Trash2, Mic2, X, CalendarClock } from 'lucide-react';
 import {
   ShowCreate, ShowCreateSchema,
-  ShowColor, ShowType, SHOW_COLORS, SHOW_TYPES,
+  ShowColor, SHOW_COLORS,
+  TemplateEntry,
 } from '@radio/shared';
-import { fetchShows, createShow, deleteShow } from '../../api';
+import { fetchShows, createShow, deleteShow, fetchTemplateEntries } from '../../api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -23,11 +24,29 @@ const COLOR_META: Record<ShowColor, { dot: string; label: string }> = {
   teal:    { dot: 'bg-teal-500',    label: 'Teal'    },
 };
 
-const TYPE_META: Record<ShowType, { label: string; badge: string }> = {
-  live:        { label: 'Live',        badge: 'bg-emerald-500/15 text-emerald-300 border border-emerald-500/30' },
-  automated:   { label: 'Automated',   badge: 'bg-indigo-500/15 text-indigo-300 border border-indigo-500/30'   },
-  prerecorded: { label: 'Prerecorded', badge: 'bg-amber-500/15 text-amber-300 border border-amber-500/30'      },
-};
+const DAY_SHORT = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
+
+function getNextOccurrence(entries: TemplateEntry[]): string | null {
+  if (entries.length === 0) return null;
+  const now = new Date();
+  const todayDow = now.getDay() === 0 ? 7 : now.getDay(); // 1=Mon…7=Sun
+  const todayTime = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+
+  // Sort entries by day then time, look for the first one that hasn't passed yet
+  const sorted = [...entries].sort(
+    (a, b) => a.day_of_week - b.day_of_week || a.time_start.localeCompare(b.time_start),
+  );
+
+  const upcoming = sorted.find((e) => {
+    if (e.day_of_week > todayDow) return true;
+    if (e.day_of_week === todayDow && e.time_start > todayTime) return true;
+    return false;
+  });
+
+  const hit = upcoming ?? sorted[0]; // wrap around to next week's first slot
+  if (!hit) return null;
+  return `${DAY_SHORT[hit.day_of_week - 1]} ${hit.time_start}`;
+}
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -43,6 +62,10 @@ export function ShowsPage() {
   };
 
   const { data: shows = [], isLoading } = useQuery({ queryKey: ['shows'], queryFn: fetchShows });
+  const { data: templateEntries = [] } = useQuery({
+    queryKey: ['template-entries'],
+    queryFn: fetchTemplateEntries,
+  });
 
   const createMutation = useMutation({
     mutationFn: (data: ShowCreate) => createShow(data),
@@ -102,15 +125,15 @@ export function ShowsPage() {
                 <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800 w-10"></th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Name</th>
                 <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Host</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Type</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Status</th>
+                <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Next</th>
                 <th className="px-4 py-3 w-28"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
               {shows.map((show) => {
                 const cm = COLOR_META[show.color];
-                const tm = TYPE_META[show.type];
+                const showEntries = templateEntries.filter((e) => e.show_id === show.id);
+                const next = getNextOccurrence(showEntries);
                 return (
                   <tr
                     key={show.id}
@@ -130,13 +153,14 @@ export function ShowsPage() {
                       }
                     </td>
                     <td className="px-4 py-3">
-                      <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${tm.badge}`}>{tm.label}</span>
-                    </td>
-                    <td className="px-4 py-3">
-                      {show.active
-                        ? <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">Active</span>
-                        : <span className="text-xs px-2 py-0.5 rounded-full font-medium bg-zinc-700/50 text-zinc-400 border border-zinc-600/30">Inactive</span>
-                      }
+                      {next ? (
+                        <span className="flex items-center gap-1.5 text-xs text-zinc-300">
+                          <CalendarClock className="w-3.5 h-3.5 text-zinc-500 flex-shrink-0" />
+                          {next}
+                        </span>
+                      ) : (
+                        <span className="text-xs text-zinc-500 italic">Unscheduled</span>
+                      )}
                     </td>
                     <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
@@ -185,7 +209,7 @@ function ShowModal({
 
   const { register, handleSubmit, watch, setValue, formState: { errors } } = useForm<ShowCreate>({
     resolver: zodResolver(ShowCreateSchema),
-    defaultValues: { type: 'automated', color: 'indigo' },
+    defaultValues: { color: 'indigo' },
   });
 
   const selectedColor = watch('color');
@@ -252,19 +276,6 @@ function ShowModal({
                 className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
               />
             </div>
-          </div>
-
-          {/* Type */}
-          <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1">Type</label>
-            <select
-              {...register('type')}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-            >
-              {SHOW_TYPES.map((t) => (
-                <option key={t} value={t}>{TYPE_META[t].label}</option>
-              ))}
-            </select>
           </div>
 
           {/* Color swatches */}

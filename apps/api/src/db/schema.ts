@@ -390,9 +390,6 @@ export type ClockSegmentInsert = typeof clockSegments.$inferInsert;
 
 // ─── Shows ────────────────────────────────────────────────────────────────────
 
-export const SHOW_TYPES = ['live', 'automated', 'prerecorded'] as const;
-export type ShowType = (typeof SHOW_TYPES)[number];
-
 export const SHOW_COLORS = [
   'indigo', 'violet', 'cyan', 'emerald', 'amber', 'rose', 'orange', 'teal',
 ] as const;
@@ -405,9 +402,16 @@ export const shows = sqliteTable(
     name: text('name').notNull(),
     host: text('host'),
     producer: text('producer'),
-    type: text('type', { enum: SHOW_TYPES }).notNull().default('automated'),
     default_clock_id: integer('default_clock_id').references(
       () => clocks.id,
+      { onDelete: 'set null' },
+    ),
+    jingle_playlist_id: integer('jingle_playlist_id').references(
+      () => playlists.id,
+      { onDelete: 'set null' },
+    ),
+    bed_playlist_id: integer('bed_playlist_id').references(
+      () => playlists.id,
       { onDelete: 'set null' },
     ),
     // One-time lifecycle audio — not part of the clock template
@@ -422,7 +426,6 @@ export const shows = sqliteTable(
     duration_minutes: integer('duration_minutes').notNull().default(60),
     color: text('color', { enum: SHOW_COLORS }).notNull().default('indigo'),
     notes: text('notes'),
-    active: integer('active', { mode: 'boolean' }).notNull().default(true),
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -430,9 +433,7 @@ export const shows = sqliteTable(
       .notNull()
       .default(sql`(unixepoch())`),
   },
-  (t) => ({
-    activeIdx: index('shows_active_idx').on(t.active),
-  }),
+  () => ({}),
 );
 
 export type Show = typeof shows.$inferSelect;
@@ -459,6 +460,7 @@ export const showPlaylists = sqliteTable(
     // If this tier's playlist is exhausted, try this tier next
     fallback_tier: text('fallback_tier'),
     sort_order: integer('sort_order').notNull().default(0),
+    weight: integer('weight').notNull().default(1),
   },
   (t) => ({
     showIdx: index('show_playlists_show_idx').on(t.show_id),

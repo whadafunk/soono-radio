@@ -358,9 +358,6 @@ export type CustomerContact = z.infer<typeof CustomerContactSchema>;
 
 // ============ SHOWS ============
 
-export const SHOW_TYPES = ['live', 'automated', 'prerecorded'] as const;
-export type ShowType = (typeof SHOW_TYPES)[number];
-
 export const SHOW_COLORS = [
   'indigo', 'violet', 'cyan', 'emerald', 'amber', 'rose', 'orange', 'teal',
 ] as const;
@@ -371,14 +368,14 @@ export const ShowSchema = z.object({
   name: z.string(),
   host: z.string().nullable(),
   producer: z.string().nullable(),
-  type: z.enum(SHOW_TYPES),
   default_clock_id: z.number().int().nullable(),
+  jingle_playlist_id: z.number().int().nullable(),
+  bed_playlist_id: z.number().int().nullable(),
   intro_media_id: z.number().int().nullable(),
   outro_media_id: z.number().int().nullable(),
   duration_minutes: z.number().int().min(30).max(720),
   color: z.enum(SHOW_COLORS),
   notes: z.string().nullable(),
-  active: z.boolean(),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
@@ -388,10 +385,7 @@ export const ShowCreateSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   host: z.string().nullable().optional(),
   producer: z.string().nullable().optional(),
-  type: z.enum(SHOW_TYPES).default('automated'),
   default_clock_id: z.number().int().nullable().optional(),
-  intro_media_id: z.number().int().positive().nullable().optional(),
-  outro_media_id: z.number().int().positive().nullable().optional(),
   duration_minutes: z.number().int().min(30).max(720).default(60),
   color: z.enum(SHOW_COLORS).default('indigo'),
   notes: z.string().nullable().optional(),
@@ -402,14 +396,14 @@ export const ShowPatchSchema = z.object({
   name: z.string().min(1).optional(),
   host: z.string().nullable().optional(),
   producer: z.string().nullable().optional(),
-  type: z.enum(SHOW_TYPES).optional(),
   default_clock_id: z.number().int().nullable().optional(),
+  jingle_playlist_id: z.number().int().nullable().optional(),
+  bed_playlist_id: z.number().int().nullable().optional(),
   intro_media_id: z.number().int().positive().nullable().optional(),
   outro_media_id: z.number().int().positive().nullable().optional(),
   duration_minutes: z.number().int().min(30).max(720).optional(),
   color: z.enum(SHOW_COLORS).optional(),
   notes: z.string().nullable().optional(),
-  active: z.boolean().optional(),
 });
 export type ShowPatch = z.infer<typeof ShowPatchSchema>;
 
