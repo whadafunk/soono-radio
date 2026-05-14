@@ -638,7 +638,7 @@ function EntryBlock({ entry, show, onClick }: {
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden">
           <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300">
-            {show?.name ?? 'Unscheduled'}
+            {show?.name ?? 'No show'}
           </span>
           {height >= 60 && show?.host && (
             <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5">{show.host}</span>
@@ -710,7 +710,7 @@ function CalendarEntryBlock({ entry, show, onClick }: {
             <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
           )}
           <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300 pr-3">
-            {show?.name ?? 'Unscheduled'}
+            {show?.name ?? 'No show'}
           </span>
           {height >= 60 && show?.host && (
             <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5">{show.host}</span>
@@ -918,7 +918,7 @@ function NewSlotPopover({
       <div className="px-4 py-3 border-t border-zinc-800">
         <button
           onClick={() => onSave(selectedShowId, selectedClockId, timeStart, effectiveEnd)}
-          disabled={!timeStart || !effectiveEnd}
+          disabled={!timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
           className="w-full py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
         >
           Schedule
@@ -968,8 +968,8 @@ function EditSlotPopover({
           clocks={clocks}
           selectedShowId={entry.show_id ?? null}
           selectedClockId={entry.clock_id ?? null}
-          onSelectShow={(id) => onChange(id, null)}
-          onSelectClock={(id) => onChange(null, id)}
+          onSelectShow={(id) => { if (id !== null) onChange(id, null); }}
+          onSelectClock={(id) => { if (id !== null) onChange(null, id); }}
         />
       </div>
     );
@@ -992,7 +992,7 @@ function EditSlotPopover({
                   <div className="text-sm font-semibold text-zinc-100 truncate">{clock?.name ?? 'No clock'}</div>
                 </div>
               )
-              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? 'Unscheduled'}</div>
+              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? 'No show'}</div>
             }
             {show?.host && <div className="text-xs text-zinc-400 mt-0.5">{show.host}</div>}
           </div>
@@ -1112,7 +1112,7 @@ function CalNewSlotPopover({
       <div className="px-4 py-3 border-t border-zinc-800">
         <button
           onClick={() => onSave(date, selectedShowId, selectedClockId, timeStart, effectiveEnd, isOverride)}
-          disabled={!timeStart || !effectiveEnd}
+          disabled={!timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
           className="w-full py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
         >
           {isOverride ? 'Override for this day' : 'Schedule'}
@@ -1163,8 +1163,8 @@ function CalEditSlotPopover({
           clocks={clocks}
           selectedShowId={entry.show_id ?? null}
           selectedClockId={entry.clock_id ?? null}
-          onSelectShow={(id) => onChange(id, null)}
-          onSelectClock={(id) => onChange(null, id)}
+          onSelectShow={(id) => { if (id !== null) onChange(id, null); }}
+          onSelectClock={(id) => { if (id !== null) onChange(null, id); }}
         />
       </div>
     );
@@ -1193,7 +1193,7 @@ function CalEditSlotPopover({
                   <div className="text-sm font-semibold text-zinc-100 truncate">{clock?.name ?? 'No clock'}</div>
                 </div>
               )
-              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? 'Unscheduled'}</div>
+              : <div className="text-sm font-semibold text-zinc-100 truncate">{show?.name ?? 'No show'}</div>
             }
             {show?.host && <div className="text-xs text-zinc-400 mt-0.5">{show.host}</div>}
           </div>
