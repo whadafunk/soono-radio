@@ -522,6 +522,8 @@ export const CalendarEntryPatchSchema = z.object({
   show_id: z.number().int().nullable().optional(),
   clock_id: z.number().int().nullable().optional(),
   is_override: z.boolean().optional(),
+  time_start: z.string().optional(),
+  time_end: z.string().optional(),
 });
 export type CalendarEntryPatch = z.infer<typeof CalendarEntryPatchSchema>;
 

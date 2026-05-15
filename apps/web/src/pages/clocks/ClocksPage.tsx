@@ -19,7 +19,7 @@ import {
 } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
 import {
-  Plus, GripVertical, Trash2, Check, X, Clock,
+  Plus, GripVertical, Trash2, Check, X, Clock, Lock,
   ChevronDown, ChevronRight, Radio,
 } from 'lucide-react';
 import {
@@ -472,6 +472,8 @@ export function ClocksPage() {
 
   const total = totalSeconds(draftSegs);
   const overflow = total > 3600;
+  // Clock is structurally locked once it is referenced by any scheduled slot or assigned show.
+  const structureLocked = draftClock !== null && (draftClock.used || draftClock.assigned_shows.length > 0);
 
   return (
     <div className="h-full flex flex-col gap-4">
@@ -765,6 +767,7 @@ export function ClocksPage() {
               total={total}
               overflow={overflow}
               expandedId={expandedId}
+              locked={structureLocked}
               onExpandToggle={(id) => setExpandedId((prev) => prev === id ? null : id)}
               onReorder={reorderSegs}
             />
@@ -782,18 +785,33 @@ export function ClocksPage() {
                   {CLOCK_SEGMENT_TYPES.map((type) => {
                     const meta = SEGMENT_META[type];
                     return (
-                      <button key={type} onClick={() => addSeg(type)} className={`px-2.5 py-1 text-xs rounded border transition-colors ${meta.bg} ${meta.border} ${meta.text} hover:brightness-125`}>
+                      <button
+                        key={type}
+                        onClick={() => !structureLocked && addSeg(type)}
+                        disabled={structureLocked}
+                        title={structureLocked ? 'Structure is locked — clock is scheduled or assigned' : undefined}
+                        className={`px-2.5 py-1 text-xs rounded border transition-colors ${meta.bg} ${meta.border} ${meta.text} ${structureLocked ? 'opacity-30 cursor-not-allowed' : 'hover:brightness-125'}`}
+                      >
                         + {meta.label}
                       </button>
                     );
                   })}
                 </div>
               </div>
+              {structureLocked && (
+                <div className="px-5 py-2.5 bg-amber-500/8 border-b border-amber-500/20 flex items-center gap-2 flex-shrink-0">
+                  <Lock className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+                  <p className="text-xs text-amber-400/80">
+                    Structure locked — scheduled in {draftClock!.slot_count} slot{draftClock!.slot_count !== 1 ? 's' : ''}{draftClock!.assigned_shows.length > 0 ? ` and assigned to ${draftClock!.assigned_shows.length} show${draftClock!.assigned_shows.length !== 1 ? 's' : ''}` : ''}. Segment count, order, types, and durations cannot change.
+                  </p>
+                </div>
+              )}
 
               <div className="flex-1 overflow-auto">
                 <SegmentList
                   segments={draftSegs}
                   expandedId={expandedId}
+                  locked={structureLocked}
                   onExpandToggle={(id) => setExpandedId((prev) => prev === id ? null : id)}
                   onDragStart={() => setExpandedId(null)}
                   onReorder={reorderSegs}
@@ -825,15 +843,16 @@ export function ClocksPage() {
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 
 function SortableTimelineItem({
-  seg, cap, isActive, isDraggingAny, onExpandToggle,
+  seg, cap, isActive, isDraggingAny, locked, onExpandToggle,
 }: {
   seg: SegmentDraft;
   cap: number;
   isActive: boolean;
   isDraggingAny: boolean;
+  locked: boolean;
   onExpandToggle: (id: number) => void;
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: seg.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: seg.id, disabled: locked });
   const meta = SEGMENT_META[seg.type];
   const widthPct = (seg.duration_seconds / cap) * 100;
 
@@ -867,12 +886,13 @@ function SortableTimelineItem({
 }
 
 function ClockTimeline({
-  segments, total, overflow, expandedId, onExpandToggle, onReorder,
+  segments, total, overflow, expandedId, locked, onExpandToggle, onReorder,
 }: {
   segments: SegmentDraft[];
   total: number;
   overflow: boolean;
   expandedId: number | null;
+  locked: boolean;
   onExpandToggle: (id: number) => void;
   onReorder: (oldIndex: number, newIndex: number) => void;
 }) {
@@ -911,6 +931,7 @@ function ClockTimeline({
                 cap={cap}
                 isActive={expandedId === seg.id}
                 isDraggingAny={timelineDragging}
+                locked={locked}
                 onExpandToggle={onExpandToggle}
               />
             ))}
@@ -945,10 +966,11 @@ function ClockTimeline({
 // ─── Segment list (accordion) ─────────────────────────────────────────────────
 
 function SegmentList({
-  segments, expandedId, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
+  segments, expandedId, locked, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
 }: {
   segments: SegmentDraft[];
   expandedId: number | null;
+  locked: boolean;
   onExpandToggle: (id: number) => void;
   onDragStart: () => void;
   onReorder: (oldIndex: number, newIndex: number) => void;
@@ -980,6 +1002,7 @@ function SegmentList({
               key={seg.id}
               segment={seg}
               isExpanded={expandedId === seg.id}
+              locked={locked}
               onExpand={() => onExpandToggle(seg.id)}
               onUpdate={onUpdate}
               onDelete={onDelete}
@@ -998,10 +1021,11 @@ function SegmentList({
 // ─── Sortable segment item ────────────────────────────────────────────────────
 
 function SortableSegmentItem({
-  segment, isExpanded, onExpand, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
+  segment, isExpanded, locked, onExpand, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
 }: {
   segment: SegmentDraft;
   isExpanded: boolean;
+  locked: boolean;
   onExpand: () => void;
   onUpdate: (id: number, patch: Partial<SegmentDraft>) => void;
   onDelete: (id: number) => void;
@@ -1010,7 +1034,7 @@ function SortableSegmentItem({
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
 }) {
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: segment.id });
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: segment.id, disabled: locked });
   const meta = SEGMENT_META[segment.type];
 
   const style = {
@@ -1033,9 +1057,11 @@ function SortableSegmentItem({
       >
         <button
           {...attributes}
-          {...listeners}
+          {...(locked ? {} : listeners)}
           onClick={(e) => e.stopPropagation()}
-          className="cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-300 transition-colors touch-none flex-shrink-0 p-0.5"
+          disabled={locked}
+          className={`touch-none flex-shrink-0 p-0.5 transition-colors ${locked ? 'text-zinc-700 cursor-not-allowed' : 'cursor-grab active:cursor-grabbing text-zinc-600 hover:text-zinc-300'}`}
+          title={locked ? 'Reordering locked' : undefined}
         >
           <GripVertical className="w-4 h-4" />
         </button>
@@ -1062,18 +1088,21 @@ function SortableSegmentItem({
 
         <span className="flex-shrink-0 text-xs text-zinc-400 font-mono w-12 text-right">{fmtDuration(segment.duration_seconds)}</span>
 
-        <button
-          onClick={(e) => { e.stopPropagation(); onDelete(segment.id); }}
-          className="flex-shrink-0 p-1 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors opacity-0 group-hover:opacity-100"
-        >
-          <Trash2 className="w-3.5 h-3.5" />
-        </button>
+        {!locked && (
+          <button
+            onClick={(e) => { e.stopPropagation(); onDelete(segment.id); }}
+            className="flex-shrink-0 p-1 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors opacity-0 group-hover:opacity-100"
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        )}
       </div>
 
       <div className={`overflow-hidden transition-all duration-200 ${isExpanded ? 'max-h-[700px]' : 'max-h-0'}`}>
         {isExpanded && (
           <SegmentDrawer
             segment={segment}
+            locked={locked}
             onApply={(patch) => onUpdate(segment.id, patch)}
             onChangeType={(type) => onChangeType(segment.id, type)}
             playlists={playlists}
@@ -1091,9 +1120,10 @@ function SortableSegmentItem({
 type DrawerTab = 'content' | 'timing' | 'transitions' | 'live';
 
 function SegmentDrawer({
-  segment, onApply, onChangeType, playlists, musicRotations, sweeperRotations,
+  segment, locked, onApply, onChangeType, playlists, musicRotations, sweeperRotations,
 }: {
   segment: SegmentDraft;
+  locked: boolean;
   onApply: (patch: Partial<SegmentDraft>) => void;
   onChangeType: (type: ClockSegmentType) => void;
   playlists: PlaylistSummary[];
@@ -1160,7 +1190,9 @@ function SegmentDrawer({
             <Field label="Type">
               <select
                 value={draft.type}
+                disabled={locked}
                 onChange={(e) => {
+                  if (locked) return;
                   const t = e.target.value as ClockSegmentType;
                   onChangeType(t);
                   const d = TYPE_DEFAULTS[t];
@@ -1175,7 +1207,7 @@ function SegmentDrawer({
                     recovery_tactics: d.recovery_tactics,
                   });
                 }}
-                className={`w-full px-3 py-1.5 rounded border text-sm bg-zinc-900 cursor-pointer focus:outline-none focus:border-indigo-500 ${meta.border} ${meta.text}`}
+                className={`w-full px-3 py-1.5 rounded border text-sm bg-zinc-900 focus:outline-none focus:border-indigo-500 ${meta.border} ${meta.text} ${locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {CLOCK_SEGMENT_TYPES.map((t) => (
                   <option key={t} value={t} className="bg-zinc-900 text-white">{SEGMENT_META[t].label}</option>
@@ -1184,22 +1216,25 @@ function SegmentDrawer({
             </Field>
 
             <Field label="Duration">
-              <div className="flex items-center gap-2">
+              <div className={`flex items-center gap-2 ${locked ? 'opacity-50' : ''}`}>
                 <button
-                  onClick={() => update({ duration_seconds: Math.max(DURATION_STEP[draft.type], draft.duration_seconds - DURATION_STEP[draft.type]) })}
-                  className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors text-sm font-bold"
+                  onClick={() => !locked && update({ duration_seconds: Math.max(DURATION_STEP[draft.type], draft.duration_seconds - DURATION_STEP[draft.type]) })}
+                  disabled={locked}
+                  className={`w-7 h-7 flex items-center justify-center rounded text-sm font-bold transition-colors ${locked ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white'}`}
                 >−</button>
                 <input
                   type="number"
                   min={1}
                   max={7200}
                   value={draft.duration_seconds}
-                  onChange={(e) => { const v = parseInt(e.target.value, 10); if (!isNaN(v) && v >= 1 && v <= 7200) update({ duration_seconds: v }); }}
-                  className="w-20 text-center bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 py-1.5"
+                  disabled={locked}
+                  onChange={(e) => { if (locked) return; const v = parseInt(e.target.value, 10); if (!isNaN(v) && v >= 1 && v <= 7200) update({ duration_seconds: v }); }}
+                  className={`w-20 text-center bg-zinc-900 border border-zinc-700 rounded text-sm text-white py-1.5 focus:outline-none focus:border-indigo-500 ${locked ? 'cursor-not-allowed' : ''}`}
                 />
                 <button
-                  onClick={() => update({ duration_seconds: Math.min(7200, draft.duration_seconds + DURATION_STEP[draft.type]) })}
-                  className="w-7 h-7 flex items-center justify-center rounded bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white transition-colors text-sm font-bold"
+                  onClick={() => !locked && update({ duration_seconds: Math.min(7200, draft.duration_seconds + DURATION_STEP[draft.type]) })}
+                  disabled={locked}
+                  className={`w-7 h-7 flex items-center justify-center rounded text-sm font-bold transition-colors ${locked ? 'bg-zinc-800 text-zinc-600 cursor-not-allowed' : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700 hover:text-white'}`}
                 >+</button>
                 <span className="text-sm text-zinc-400">{fmtDuration(draft.duration_seconds)}</span>
               </div>

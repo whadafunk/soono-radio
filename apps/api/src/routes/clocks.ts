@@ -152,6 +152,35 @@ export async function clockRoutes(fastify: FastifyInstance) {
     const parsed = z.array(ClockSegmentCreateSchema).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
 
+    // Structure lock: when a clock is in use anywhere, its segment count, order, types,
+    // and durations are frozen — only internal config changes are allowed.
+    const [lockRow] = await db.select({
+      usageCount: sql<number>`(
+        (SELECT COUNT(*) FROM ${calendarEntries}      WHERE ${calendarEntries.clock_id}      = ${id}) +
+        (SELECT COUNT(*) FROM ${templateEntries}      WHERE ${templateEntries.clock_id}      = ${id}) +
+        (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${id}) +
+        (SELECT COUNT(*) FROM ${shows}                WHERE ${shows.default_clock_id}        = ${id})
+      )`,
+    }).from(clocks).where(eq(clocks.id, id));
+
+    if (lockRow.usageCount > 0) {
+      const existing = await db.select().from(clockSegments)
+        .where(eq(clockSegments.clock_id, id)).orderBy(asc(clockSegments.sort_order));
+      const incoming = parsed.data;
+      if (existing.length !== incoming.length) {
+        return reply.status(409).send({
+          error: 'Clock structure is locked — cannot add or remove segments while the clock is scheduled or assigned to a show.',
+        });
+      }
+      for (let i = 0; i < existing.length; i++) {
+        if (existing[i].type !== incoming[i].type || existing[i].duration_seconds !== incoming[i].duration_seconds) {
+          return reply.status(409).send({
+            error: `Clock structure is locked — segment ${i + 1} type or duration cannot change while the clock is scheduled or assigned to a show.`,
+          });
+        }
+      }
+    }
+
     // Unassigned clocks (no shows reference this clock) must back every music
     // segment with at least one specific `playlist` source — otherwise nothing
     // will play. See docs/clocks-rotations-redesign.md §2.

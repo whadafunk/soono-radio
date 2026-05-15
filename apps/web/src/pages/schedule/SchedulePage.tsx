@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, Fragment } from 'react';
+import { useState, useEffect, useMemo, Fragment, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle } from 'lucide-react';
@@ -51,6 +51,12 @@ function padHour(h: number): string {
   return `${String(h % 24).padStart(2, '0')}:00`;
 }
 
+function minutesToTime(min: number): string {
+  const h = Math.floor(min / 60) % 24;
+  const m = min % 60;
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
+}
+
 function checkToday(day: Date): boolean {
   const now = new Date();
   return (
@@ -66,23 +72,59 @@ function formatWeekLabel(start: Date, end: Date): string {
   return `${s} – ${e}, ${start.getFullYear()}`;
 }
 
-function isHourOccupied(hour: number, entries: { time_start: string; time_end: string }[]): boolean {
-  const clickMin = hour * 60;
+function isTimeOccupied(startMin: number, entries: { time_start: string; time_end: string }[]): boolean {
   return entries.some((e) => {
     const s  = timeToMinutes(e.time_start);
     const en = timeToMinutes(e.time_end);
-    return en > s ? clickMin >= s && clickMin < en : clickMin >= s || clickMin < en;
+    return en > s ? startMin >= s && startMin < en : startMin >= s || startMin < en;
   });
+}
+
+function clickToStartMin(clientY: number, rectTop: number): number {
+  const pixelOffset = clientY - rectTop;
+  const rawMin = (pixelOffset / TOTAL_HEIGHT) * 24 * 60;
+  return Math.floor(rawMin / 15) * 15;
+}
+
+function gapAfter(startMin: number, entries: { time_start: string; time_end: string }[]): number | null {
+  let next = Infinity;
+  for (const e of entries) {
+    const s = timeToMinutes(e.time_start);
+    if (s > startMin) next = Math.min(next, s);
+  }
+  return next === Infinity ? null : next - startMin;
 }
 
 // ─── Page state types ─────────────────────────────────────────────────────────
 
 type Mode = 'template' | 'calendar';
 
-type NewSlotState     = { dayOfWeek: number; timeStart: string; timeEnd: string; x: number; y: number };
+type NewSlotState     = { dayOfWeek: number; timeStart: string; timeEnd: string; maxDurationMinutes: number | null; x: number; y: number };
 type EditSlotState    = { entry: TemplateEntry; show: Show | undefined; clock: ClockType | undefined; x: number; y: number };
-type CalNewSlotState  = { date: string; timeStart: string; timeEnd: string; templateEntry?: TemplateEntry; x: number; y: number };
+type CalNewSlotState  = { date: string; timeStart: string; timeEnd: string; templateEntry?: TemplateEntry; maxDurationMinutes: number | null; x: number; y: number };
 type CalEditSlotState = { entry: CalendarEntry; show: Show | undefined; clock: ClockType | undefined; x: number; y: number };
+
+type DragOp = 'move' | 'resize-start' | 'resize-end';
+// entryKind:
+//   'template'             → dragging a template entry (template mode)
+//   'calendar'             → dragging an existing calendar entry
+//   'template-in-calendar' → dragging a template slot in calendar mode → creates override on drop
+type DragEntryKind = 'template' | 'calendar' | 'template-in-calendar';
+type DragSibling = { startMin: number; endMin: number };
+type DragState = {
+  op: DragOp;
+  entryKind: DragEntryKind;
+  entry: TemplateEntry | CalendarEntry;
+  dayOfWeek?: number;
+  date?: string;
+  startMin: number;
+  endMin: number;
+  origStartMin: number;
+  origEndMin: number;
+  offsetMin: number;  // for 'move': mouse offset from entry start
+  columnRect: DOMRect;
+  siblings: DragSibling[];
+};
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
@@ -146,6 +188,89 @@ export function SchedulePage() {
     onSuccess: invalidateCal,
   });
   const calDeleteMutation = useMutation({ mutationFn: deleteCalendarEntry, onSuccess: invalidateCal });
+
+  // ── Drag state ──
+  const [activeDrag, setActiveDrag] = useState<DragState | null>(null);
+
+  function startDrag(initial: DragState) {
+    setActiveDrag(initial);
+    document.body.style.cursor = initial.op === 'move' ? 'grabbing' : 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    let current = initial;
+
+    const SNAP_THRESHOLD = 7.5; // minutes ≈ 8px at 64px/hr
+
+    const snapMin = (raw: number): number => {
+      for (const sib of current.siblings) {
+        if (Math.abs(raw - sib.startMin) <= SNAP_THRESHOLD) return sib.startMin;
+        if (Math.abs(raw - sib.endMin)   <= SNAP_THRESHOLD) return sib.endMin;
+      }
+      return Math.round(raw / 15) * 15;
+    };
+
+    const onMove = (e: MouseEvent) => {
+      e.preventDefault();
+      const raw = (e.clientY - current.columnRect.top) / TOTAL_HEIGHT * 24 * 60;
+      const clamped = Math.max(0, Math.min(24 * 60 - 1, raw));
+      let { startMin, endMin } = current;
+
+      if (current.op === 'move') {
+        const rawStart = clamped - current.offsetMin;
+        const dur = current.origEndMin - current.origStartMin;
+        startMin = Math.max(0, Math.min(24 * 60 - dur, snapMin(rawStart)));
+        endMin   = startMin + dur;
+      } else if (current.op === 'resize-start') {
+        startMin = Math.max(0, Math.min(current.endMin - 15, snapMin(clamped)));
+      } else {
+        endMin = Math.max(current.startMin + 15, Math.min(24 * 60, snapMin(clamped)));
+      }
+
+      current = { ...current, startMin, endMin };
+      setActiveDrag({ ...current });
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+
+      const drag = current;
+      setActiveDrag(null);
+
+      const noChange = drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin;
+      const overlaps = drag.siblings.some(
+        (s) => drag.startMin < s.endMin && drag.endMin > s.startMin,
+      );
+      if (noChange || overlaps) return;
+
+      const newStart = minutesToTime(drag.startMin);
+      const newEnd   = minutesToTime(drag.endMin % 1440);
+
+      if (drag.entryKind === 'template') {
+        const e = drag.entry as TemplateEntry;
+        updateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd } });
+      } else if (drag.entryKind === 'calendar') {
+        const e = drag.entry as CalendarEntry;
+        calUpdateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd } });
+      } else {
+        // template-in-calendar: create an override for this specific day
+        const e = drag.entry as TemplateEntry;
+        calCreateMutation.mutate({
+          date: drag.date!,
+          time_start: newStart,
+          time_end: newEnd,
+          show_id:  e.show_id  ?? null,
+          clock_id: e.clock_id ?? null,
+          is_override: true,
+        });
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
 
   const now           = new Date();
   const currentMinute = now.getHours() * 60 + now.getMinutes();
@@ -292,9 +417,12 @@ export function SchedulePage() {
                       clockMap={clockMap}
                       isToday={checkToday(day)}
                       currentTop={currentTop}
-                      onEmptyClick={(timeStart, timeEnd, x, y) => {
+                      dayOfWeek={dayOfWeek}
+                      activeDrag={activeDrag?.entryKind === 'template' ? activeDrag : null}
+                      onDragStart={startDrag}
+                      onEmptyClick={(timeStart, timeEnd, maxDurationMinutes, x, y) => {
                         dismiss();
-                        setNewSlot({ dayOfWeek, timeStart, timeEnd, x, y });
+                        setNewSlot({ dayOfWeek, timeStart, timeEnd, maxDurationMinutes, x, y });
                       }}
                       onEntryClick={(entry, x, y) => {
                         dismiss();
@@ -319,13 +447,21 @@ export function SchedulePage() {
                     clockMap={clockMap}
                     isToday={checkToday(day)}
                     currentTop={currentTop}
-                    onEmptyClick={(date, timeStart, timeEnd, x, y) => {
+                    activeDrag={
+                      activeDrag?.entryKind === 'calendar' || activeDrag?.entryKind === 'template-in-calendar'
+                        ? activeDrag : null
+                    }
+                    onDragStart={startDrag}
+                    onEmptyClick={(date, timeStart, timeEnd, maxDurationMinutes, x, y) => {
                       dismiss();
-                      setCalNewSlot({ date, timeStart, timeEnd, x, y });
+                      setCalNewSlot({ date, timeStart, timeEnd, maxDurationMinutes, x, y });
                     }}
                     onTemplateClick={(entry, date, x, y) => {
                       dismiss();
-                      setCalNewSlot({ date, timeStart: entry.time_start, timeEnd: entry.time_end, templateEntry: entry, x, y });
+                      const s = timeToMinutes(entry.time_start);
+                      const en = timeToMinutes(entry.time_end);
+                      const entryDuration = en > s ? en - s : 1440 - s + en;
+                      setCalNewSlot({ date, timeStart: entry.time_start, timeEnd: entry.time_end, templateEntry: entry, maxDurationMinutes: entryDuration, x, y });
                     }}
                     onCalendarClick={(entry, x, y) => {
                       dismiss();
@@ -351,6 +487,7 @@ export function SchedulePage() {
           dayOfWeek={newSlot.dayOfWeek}
           timeStart={newSlot.timeStart}
           timeEnd={newSlot.timeEnd}
+          maxDurationMinutes={newSlot.maxDurationMinutes}
           shows={activeShows}
           clocks={clocks}
           x={newSlot.x}
@@ -393,6 +530,7 @@ export function SchedulePage() {
           timeStart={calNewSlot.timeStart}
           timeEnd={calNewSlot.timeEnd}
           templateEntry={calNewSlot.templateEntry}
+          maxDurationMinutes={calNewSlot.maxDurationMinutes}
           shows={activeShows}
           clocks={clocks}
           x={calNewSlot.x}
@@ -438,26 +576,54 @@ export function SchedulePage() {
 // ─── Template Day Column ──────────────────────────────────────────────────────
 
 function DayColumn({
-  entries, showMap, clockMap, isToday, currentTop, onEmptyClick, onEntryClick,
+  entries, showMap, clockMap, isToday, currentTop, dayOfWeek, activeDrag, onDragStart, onEmptyClick, onEntryClick,
 }: {
   entries: TemplateEntry[];
   showMap: Map<number, Show>;
   clockMap: Map<number, ClockType>;
   isToday: boolean;
   currentTop: number;
-  onEmptyClick: (timeStart: string, timeEnd: string, x: number, y: number) => void;
+  dayOfWeek: number;
+  activeDrag: DragState | null;
+  onDragStart: (state: DragState) => void;
+  onEmptyClick: (timeStart: string, timeEnd: string, maxDurationMinutes: number | null, x: number, y: number) => void;
   onEntryClick: (entry: TemplateEntry, x: number, y: number) => void;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  function handleBlockDragStart(entry: TemplateEntry, op: DragOp, mouseY: number) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const startMin  = timeToMinutes(entry.time_start);
+    const rawEnd    = timeToMinutes(entry.time_end);
+    const endMin    = rawEnd > startMin ? rawEnd : 24 * 60;
+    const cursorMin = ((mouseY - rect.top) / TOTAL_HEIGHT) * 24 * 60;
+    const offsetMin = op === 'move' ? Math.max(0, cursorMin - startMin) : 0;
+    const siblings  = entries
+      .filter((e) => e.id !== entry.id)
+      .map((e) => {
+        const s  = timeToMinutes(e.time_start);
+        const en = timeToMinutes(e.time_end);
+        return { startMin: s, endMin: en > s ? en : 24 * 60 };
+      });
+    onDragStart({ op, entryKind: 'template', entry, dayOfWeek, startMin, endMin, origStartMin: startMin, origEndMin: endMin, offsetMin, columnRect: rect, siblings });
+  }
+
+  const draggingId = activeDrag?.entryKind === 'template' && entries.some((e) => e.id === activeDrag.entry.id)
+    ? activeDrag.entry.id
+    : null;
+
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
-    const hour = Math.floor((e.clientY - rect.top) / HOUR_HEIGHT);
-    if (isHourOccupied(hour, entries)) return;
-    onEmptyClick(padHour(hour), padHour(hour + 1), e.clientX, e.clientY);
+    const startMin = clickToStartMin(e.clientY, rect.top);
+    if (isTimeOccupied(startMin, entries)) return;
+    onEmptyClick(minutesToTime(startMin), minutesToTime((startMin + 60) % 1440), gapAfter(startMin, entries), e.clientX, e.clientY);
   }
 
   return (
     <div
+      ref={containerRef}
       className={`relative cursor-cell ${isToday ? 'bg-indigo-950/10' : ''}`}
       style={{ height: TOTAL_HEIGHT }}
       onClick={handleClick}
@@ -468,23 +634,31 @@ function DayColumn({
       {HOURS.map((h) => (
         <div key={`hh${h}`} className="absolute left-0 right-0 border-t border-zinc-700/30" style={{ top: h * HOUR_HEIGHT + HOUR_HEIGHT / 2 }} />
       ))}
+      {HOURS.map((h) => (
+        <Fragment key={`q${h}`}>
+          <div className="absolute left-0 right-0 border-t border-zinc-700/15" style={{ top: h * HOUR_HEIGHT + HOUR_HEIGHT / 4 }} />
+          <div className="absolute left-0 right-0 border-t border-zinc-700/15" style={{ top: h * HOUR_HEIGHT + (HOUR_HEIGHT * 3) / 4 }} />
+        </Fragment>
+      ))}
       {entries.flatMap((entry) => {
         const show  = entry.show_id  ? showMap.get(entry.show_id)   : undefined;
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
-        const handler = (e: React.MouseEvent) => { e.stopPropagation(); onEntryClick(entry, e.clientX, e.clientY); };
-        const ovn = isOvernightEntry(entry.time_start, entry.time_end);
+        const isDragging    = entry.id === draggingId;
+        const blockDragStart = (op: DragOp, mouseY: number) => handleBlockDragStart(entry, op, mouseY);
+        const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
           return [
-            <ClockOnlyBlock key={entry.id} entry={entry} clock={clock} onClick={handler} />,
-            wrap && <ClockOnlyBlock key={`w${entry.id}`} entry={wrap} clock={clock} onClick={handler} />,
+            <ClockOnlyBlock key={entry.id}          entry={entry} clock={clock} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onEntryClick(entry, x, y)} />,
+            wrap && <ClockOnlyBlock key={`w${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onEntryClick(entry, x, y)} />,
           ].filter(Boolean) as React.ReactElement[];
         }
         return [
-          <EntryBlock key={entry.id} entry={entry} show={show} onClick={handler} />,
-          wrap && <EntryBlock key={`w${entry.id}`} entry={wrap} show={show} onClick={handler} />,
+          <EntryBlock key={entry.id}          entry={entry} show={show} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onEntryClick(entry, x, y)} />,
+          wrap && <EntryBlock key={`w${entry.id}`} entry={wrap}  show={show} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onEntryClick(entry, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
+      {draggingId !== null && activeDrag && <DragGhost activeDrag={activeDrag} />}
       {isToday && (
         <div data-current-time="" className="absolute left-0 right-0 flex items-center z-10 pointer-events-none" style={{ top: currentTop }}>
           <div className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0 -ml-1" style={{ boxShadow: '0 0 6px rgba(251,113,133,0.6)' }} />
@@ -499,7 +673,7 @@ function DayColumn({
 
 function CalendarDayColumn({
   date, templateEntries, calendarEntries, showMap, clockMap, isToday, currentTop,
-  onEmptyClick, onTemplateClick, onCalendarClick,
+  activeDrag, onDragStart, onEmptyClick, onTemplateClick, onCalendarClick,
 }: {
   date: string;
   templateEntries: TemplateEntry[];
@@ -508,10 +682,14 @@ function CalendarDayColumn({
   clockMap: Map<number, ClockType>;
   isToday: boolean;
   currentTop: number;
-  onEmptyClick: (date: string, timeStart: string, timeEnd: string, x: number, y: number) => void;
+  activeDrag: DragState | null;
+  onDragStart: (state: DragState) => void;
+  onEmptyClick: (date: string, timeStart: string, timeEnd: string, maxDurationMinutes: number | null, x: number, y: number) => void;
   onTemplateClick: (entry: TemplateEntry, date: string, x: number, y: number) => void;
   onCalendarClick: (entry: CalendarEntry, x: number, y: number) => void;
 }) {
+  const containerRef = useRef<HTMLDivElement>(null);
+
   const overriddenStarts = useMemo(
     () => new Set(calendarEntries.filter((e) => e.is_override).map((e) => e.time_start)),
     [calendarEntries],
@@ -522,17 +700,49 @@ function CalendarDayColumn({
     [templateEntries, overriddenStarts],
   );
 
+  function handleBlockDragStart(
+    entry: TemplateEntry | CalendarEntry,
+    kind: DragEntryKind,
+    op: DragOp,
+    mouseY: number,
+  ) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const startMin  = timeToMinutes(entry.time_start);
+    const rawEnd    = timeToMinutes(entry.time_end);
+    const endMin    = rawEnd > startMin ? rawEnd : 24 * 60;
+    const cursorMin = ((mouseY - rect.top) / TOTAL_HEIGHT) * 24 * 60;
+    const offsetMin = op === 'move' ? Math.max(0, cursorMin - startMin) : 0;
+    const allVisible = [...visibleTemplateEntries, ...calendarEntries];
+    const siblings = allVisible
+      .filter((e) => e.id !== entry.id)
+      .map((e) => {
+        const s  = timeToMinutes(e.time_start);
+        const en = timeToMinutes(e.time_end);
+        return { startMin: s, endMin: en > s ? en : 24 * 60 };
+      });
+    onDragStart({ op, entryKind: kind, entry, date, startMin, endMin, origStartMin: startMin, origEndMin: endMin, offsetMin, columnRect: rect, siblings });
+  }
+
+  const templateDraggingId = activeDrag?.entryKind === 'template-in-calendar' && visibleTemplateEntries.some((e) => e.id === activeDrag.entry.id)
+    ? activeDrag.entry.id : null;
+  const calDraggingId = activeDrag?.entryKind === 'calendar' && calendarEntries.some((e) => e.id === activeDrag.entry.id)
+    ? activeDrag.entry.id : null;
+  const isInThisColumn = templateDraggingId !== null || calDraggingId !== null;
+
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
     e.stopPropagation();
     const rect = e.currentTarget.getBoundingClientRect();
-    const hour = Math.floor((e.clientY - rect.top) / HOUR_HEIGHT);
-    if (isHourOccupied(hour, calendarEntries)) return;
-    if (isHourOccupied(hour, visibleTemplateEntries)) return;
-    onEmptyClick(date, padHour(hour), padHour(hour + 1), e.clientX, e.clientY);
+    const startMin = clickToStartMin(e.clientY, rect.top);
+    if (isTimeOccupied(startMin, calendarEntries)) return;
+    if (isTimeOccupied(startMin, visibleTemplateEntries)) return;
+    const allEntries = [...calendarEntries, ...visibleTemplateEntries];
+    onEmptyClick(date, minutesToTime(startMin), minutesToTime((startMin + 60) % 1440), gapAfter(startMin, allEntries), e.clientX, e.clientY);
   }
 
   return (
     <div
+      ref={containerRef}
       className={`relative cursor-cell ${isToday ? 'bg-indigo-950/10' : ''}`}
       style={{ height: TOTAL_HEIGHT }}
       onClick={handleClick}
@@ -543,23 +753,30 @@ function CalendarDayColumn({
       {HOURS.map((h) => (
         <div key={`hh${h}`} className="absolute left-0 right-0 border-t border-zinc-700/30" style={{ top: h * HOUR_HEIGHT + HOUR_HEIGHT / 2 }} />
       ))}
+      {HOURS.map((h) => (
+        <Fragment key={`q${h}`}>
+          <div className="absolute left-0 right-0 border-t border-zinc-700/15" style={{ top: h * HOUR_HEIGHT + HOUR_HEIGHT / 4 }} />
+          <div className="absolute left-0 right-0 border-t border-zinc-700/15" style={{ top: h * HOUR_HEIGHT + (HOUR_HEIGHT * 3) / 4 }} />
+        </Fragment>
+      ))}
 
       {/* Template base layer — full color, same as template mode */}
       {visibleTemplateEntries.flatMap((entry) => {
         const show  = entry.show_id  ? showMap.get(entry.show_id)   : undefined;
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
-        const handler = (e: React.MouseEvent) => { e.stopPropagation(); onTemplateClick(entry, date, e.clientX, e.clientY); };
-        const ovn = isOvernightEntry(entry.time_start, entry.time_end);
+        const isDragging    = entry.id === templateDraggingId;
+        const blockDragStart = (op: DragOp, mouseY: number) => handleBlockDragStart(entry, 'template-in-calendar', op, mouseY);
+        const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
           return [
-            <ClockOnlyBlock key={`t${entry.id}`} entry={entry} clock={clock} onClick={handler} />,
-            wrap && <ClockOnlyBlock key={`tw${entry.id}`} entry={wrap} clock={clock} onClick={handler} />,
+            <ClockOnlyBlock key={`t${entry.id}`}    entry={entry} clock={clock} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
+            wrap && <ClockOnlyBlock key={`tw${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
           ].filter(Boolean) as React.ReactElement[];
         }
         return [
-          <EntryBlock key={`t${entry.id}`} entry={entry} show={show} onClick={handler} />,
-          wrap && <EntryBlock key={`tw${entry.id}`} entry={wrap} show={show} onClick={handler} />,
+          <EntryBlock key={`t${entry.id}`}    entry={entry} show={show} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
+          wrap && <EntryBlock key={`tw${entry.id}`} entry={wrap}  show={show} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
 
@@ -567,21 +784,23 @@ function CalendarDayColumn({
       {calendarEntries.flatMap((entry) => {
         const show  = entry.show_id  ? showMap.get(entry.show_id)   : undefined;
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
-        const handler = (e: React.MouseEvent) => { e.stopPropagation(); onCalendarClick(entry, e.clientX, e.clientY); };
-        const ovn = isOvernightEntry(entry.time_start, entry.time_end);
+        const isDragging    = entry.id === calDraggingId;
+        const blockDragStart = (op: DragOp, mouseY: number) => handleBlockDragStart(entry, 'calendar', op, mouseY);
+        const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
           return [
-            <CalendarClockOnlyBlock key={`c${entry.id}`} entry={entry} clock={clock} onClick={handler} />,
-            wrap && <CalendarClockOnlyBlock key={`cw${entry.id}`} entry={wrap} clock={clock} onClick={handler} />,
+            <CalendarClockOnlyBlock key={`c${entry.id}`}    entry={entry} clock={clock} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+            wrap && <CalendarClockOnlyBlock key={`cw${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
           ].filter(Boolean) as React.ReactElement[];
         }
         return [
-          <CalendarEntryBlock key={`c${entry.id}`} entry={entry} show={show} onClick={handler} />,
-          wrap && <CalendarEntryBlock key={`cw${entry.id}`} entry={wrap} show={show} onClick={handler} />,
+          <CalendarEntryBlock key={`c${entry.id}`}    entry={entry} show={show} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+          wrap && <CalendarEntryBlock key={`cw${entry.id}`} entry={wrap}  show={show} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
 
+      {isInThisColumn && activeDrag && <DragGhost activeDrag={activeDrag} />}
       {isToday && (
         <div data-current-time="" className="absolute left-0 right-0 flex items-center z-10 pointer-events-none" style={{ top: currentTop }}>
           <div className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0 -ml-1" style={{ boxShadow: '0 0 6px rgba(251,113,133,0.6)' }} />
@@ -620,24 +839,74 @@ function isOvernightEntry(timeStart: string, timeEnd: string): boolean {
   return timeToMinutes(timeEnd) <= timeToMinutes(timeStart);
 }
 
+// ─── Drag Ghost ───────────────────────────────────────────────────────────────
+
+function DragGhost({ activeDrag }: { activeDrag: DragState }) {
+  const { startMin, endMin, siblings } = activeDrag;
+  const top    = (startMin / 60) * HOUR_HEIGHT + 1;
+  const durMin = Math.max(endMin - startMin, 1);
+  const height = Math.max((durMin / 60) * HOUR_HEIGHT - 2, 3);
+  const overlaps = siblings.some((s) => startMin < s.endMin && endMin > s.startMin);
+
+  return (
+    <div
+      className="absolute right-1 rounded-r-[3px] pointer-events-none z-20"
+      style={{
+        top,
+        height,
+        left: '3px',
+        border: `2px dashed ${overlaps ? 'rgba(248,113,113,0.8)' : 'rgba(255,255,255,0.4)'}`,
+        backgroundColor: overlaps ? 'rgba(248,113,113,0.1)' : 'rgba(255,255,255,0.05)',
+      }}
+    />
+  );
+}
+
 // ─── Entry Block (show slot) ──────────────────────────────────────────────────
 
-function EntryBlock({ entry, show, onClick }: {
+function EntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
   entry: TemplateEntry;
   show: Show | undefined;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: (x: number, y: number) => void;
+  onDragStart: (op: DragOp, mouseY: number) => void;
+  isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
   const isOrphaned = !show && !!entry.show_id;
   const hex = show ? COLOR_HEX[show.color] : isOrphaned ? '#f59e0b' : '#71717a';
 
+  function handleMouseDown(e: React.MouseEvent, op: DragOp) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    let didDrag = false;
+    const onMove = (ev: MouseEvent) => {
+      if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
+        didDrag = true;
+        onDragStart(op, startY);
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+    };
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (!didDrag) onClick(ev.clientX, ev.clientY);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
   return (
     <div
-      className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: `${hex}12`, borderLeft: `3px solid ${hex}` }}
-      onClick={onClick}
+      className="absolute right-1 rounded-r-[3px] overflow-hidden transition-all hover:brightness-110"
+      style={{ top: top + 1, height, left: '3px', backgroundColor: `${hex}12`, borderLeft: `3px solid ${hex}`, opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The show assigned to this slot was deleted' : undefined}
     >
+      <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
+      <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden">
           <div className="flex items-center gap-1.5 min-w-0">
@@ -665,23 +934,50 @@ function EntryBlock({ entry, show, onClick }: {
 
 // ─── Clock-Only Block (template mode) ────────────────────────────────────────
 
-function ClockOnlyBlock({ entry, clock, onClick }: {
+function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
   entry: TemplateEntry;
   clock: ClockType | undefined;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: (x: number, y: number) => void;
+  onDragStart: (op: DragOp, mouseY: number) => void;
+  isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
   const isOrphaned = !clock && !!entry.clock_id;
   const borderColor = isOrphaned ? '#f59e0b' : '#ffffff';
   const bgColor = isOrphaned ? '#f59e0b0a' : '#ffffff0a';
 
+  function handleMouseDown(e: React.MouseEvent, op: DragOp) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    let didDrag = false;
+    const onMove = (ev: MouseEvent) => {
+      if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
+        didDrag = true;
+        onDragStart(op, startY);
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+    };
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (!didDrag) onClick(ev.clientX, ev.clientY);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
   return (
     <div
-      className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}` }}
-      onClick={onClick}
+      className="absolute right-1 rounded-r-[3px] overflow-hidden transition-all hover:brightness-110"
+      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}`, opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The clock assigned to this slot was deleted' : undefined}
     >
+      <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
+      <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden pb-[7px]">
           <div className="flex items-center gap-1.5 min-w-0">
@@ -706,22 +1002,49 @@ function ClockOnlyBlock({ entry, clock, onClick }: {
 
 // ─── Calendar Entry Block (show slot) ────────────────────────────────────────
 
-function CalendarEntryBlock({ entry, show, onClick }: {
+function CalendarEntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
   entry: CalendarEntry;
   show: Show | undefined;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: (x: number, y: number) => void;
+  onDragStart: (op: DragOp, mouseY: number) => void;
+  isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
   const isOrphaned = !show && !!entry.show_id;
   const hex = show ? COLOR_HEX[show.color] : isOrphaned ? '#f59e0b' : '#71717a';
 
+  function handleMouseDown(e: React.MouseEvent, op: DragOp) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    let didDrag = false;
+    const onMove = (ev: MouseEvent) => {
+      if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
+        didDrag = true;
+        onDragStart(op, startY);
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+    };
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (!didDrag) onClick(ev.clientX, ev.clientY);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
   return (
     <div
-      className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110 z-[1]"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: `${hex}12`, borderLeft: `3px solid ${hex}` }}
-      onClick={onClick}
+      className="absolute right-1 rounded-r-[3px] overflow-hidden transition-all hover:brightness-110 z-[1]"
+      style={{ top: top + 1, height, left: '3px', backgroundColor: `${hex}12`, borderLeft: `3px solid ${hex}`, opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The show assigned to this slot was deleted' : undefined}
     >
+      <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
+      <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden relative">
           {entry.is_override && (
@@ -752,23 +1075,50 @@ function CalendarEntryBlock({ entry, show, onClick }: {
 
 // ─── Calendar Clock-Only Block ────────────────────────────────────────────────
 
-function CalendarClockOnlyBlock({ entry, clock, onClick }: {
+function CalendarClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
   entry: CalendarEntry;
   clock: ClockType | undefined;
-  onClick: (e: React.MouseEvent) => void;
+  onClick: (x: number, y: number) => void;
+  onDragStart: (op: DragOp, mouseY: number) => void;
+  isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
   const isOrphaned = !clock && !!entry.clock_id;
   const borderColor = isOrphaned ? '#f59e0b' : '#ffffff';
   const bgColor = isOrphaned ? '#f59e0b0a' : '#ffffff0a';
 
+  function handleMouseDown(e: React.MouseEvent, op: DragOp) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    const startX = e.clientX, startY = e.clientY;
+    let didDrag = false;
+    const onMove = (ev: MouseEvent) => {
+      if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
+        didDrag = true;
+        onDragStart(op, startY);
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+      }
+    };
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      if (!didDrag) onClick(ev.clientX, ev.clientY);
+    };
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
   return (
     <div
-      className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110 z-[1]"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}` }}
-      onClick={onClick}
+      className="absolute right-1 rounded-r-[3px] overflow-hidden transition-all hover:brightness-110 z-[1]"
+      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}`, opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
+      onClick={(e) => e.stopPropagation()}
+      onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The clock assigned to this slot was deleted' : undefined}
     >
+      <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
+      <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden relative pb-[7px]">
           {entry.is_override && (
@@ -797,12 +1147,13 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
 // ─── Slot picker (pill toggle + list) ────────────────────────────────────────
 
 function SlotPicker({
-  shows, clocks,
+  shows, clocks, maxDurationMinutes,
   selectedShowId, selectedClockId,
   onSelectShow, onSelectClock,
 }: {
   shows: Show[];
   clocks: ClockType[];
+  maxDurationMinutes: number | null;
   selectedShowId: number | null;
   selectedClockId: number | null;
   onSelectShow: (id: number | null) => void;
@@ -810,6 +1161,12 @@ function SlotPicker({
 }) {
   // Default pill to whichever type has a current selection; otherwise shows
   const [tab, setTab] = useState<'shows' | 'clocks'>(selectedClockId ? 'clocks' : 'shows');
+
+  const fitsGap = (durationMin: number) =>
+    maxDurationMinutes === null || durationMin <= maxDurationMinutes;
+
+  const visibleShows  = shows.filter((s) => fitsGap(s.duration_minutes));
+  const visibleClocks = clocks.filter((c) => c.duration_seconds > 0 && fitsGap(Math.round(c.duration_seconds / 60)));
 
   return (
     <div>
@@ -828,9 +1185,17 @@ function SlotPicker({
         ))}
       </div>
 
+      {maxDurationMinutes !== null && (
+        <div className="px-4 py-1.5 border-b border-zinc-800 flex items-center gap-1.5">
+          <span className="text-[11px] text-zinc-500">Fits in</span>
+          <span className="text-[11px] font-mono text-zinc-400">{maxDurationMinutes}m</span>
+          <span className="text-[11px] text-zinc-500">gap</span>
+        </div>
+      )}
+
       {/* List */}
       <div className="overflow-y-auto" style={{ maxHeight: 208 }}>
-        {tab === 'shows' && shows.map((show) => (
+        {tab === 'shows' && visibleShows.map((show) => (
           <button
             key={show.id}
             onClick={() => onSelectShow(show.id === selectedShowId ? null : show.id)}
@@ -846,7 +1211,7 @@ function SlotPicker({
           </button>
         ))}
 
-        {tab === 'clocks' && clocks.filter((c) => c.duration_seconds > 0).map((clock) => (
+        {tab === 'clocks' && visibleClocks.map((clock) => (
           <button
             key={clock.id}
             onClick={() => onSelectClock(clock.id === selectedClockId ? null : clock.id)}
@@ -864,11 +1229,15 @@ function SlotPicker({
           </button>
         ))}
 
-        {tab === 'shows' && shows.length === 0 && (
-          <p className="px-4 py-4 text-sm text-zinc-600 italic">No shows defined</p>
+        {tab === 'shows' && visibleShows.length === 0 && (
+          <p className="px-4 py-4 text-sm text-zinc-600 italic">
+            {maxDurationMinutes !== null ? `No shows ≤ ${maxDurationMinutes}m` : 'No shows defined'}
+          </p>
         )}
-        {tab === 'clocks' && clocks.filter((c) => c.duration_seconds > 0).length === 0 && (
-          <p className="px-4 py-4 text-sm text-zinc-600 italic">No clocks with segments</p>
+        {tab === 'clocks' && visibleClocks.length === 0 && (
+          <p className="px-4 py-4 text-sm text-zinc-600 italic">
+            {maxDurationMinutes !== null ? `No clocks ≤ ${maxDurationMinutes}m` : 'No clocks with segments'}
+          </p>
         )}
       </div>
     </div>
@@ -878,11 +1247,12 @@ function SlotPicker({
 // ─── New Slot Popover (template mode) ─────────────────────────────────────────
 
 function NewSlotPopover({
-  timeStart: initStart, shows, clocks, x, y, onClose, onSave,
+  timeStart: initStart, maxDurationMinutes, shows, clocks, x, y, onClose, onSave,
 }: {
   dayOfWeek: number;
   timeStart: string;
   timeEnd: string;
+  maxDurationMinutes: number | null;
   shows: Show[];
   clocks: ClockType[];
   x: number;
@@ -947,6 +1317,7 @@ function NewSlotPopover({
       <SlotPicker
         shows={shows}
         clocks={clocks}
+        maxDurationMinutes={maxDurationMinutes}
         selectedShowId={selectedShowId}
         selectedClockId={selectedClockId}
         onSelectShow={(id) => { setSelectedShowId(id); setSelectedClockId(null); }}
@@ -1005,6 +1376,7 @@ function EditSlotPopover({
         <SlotPicker
           shows={shows}
           clocks={clocks}
+          maxDurationMinutes={null}
           selectedShowId={entry.show_id ?? null}
           selectedClockId={entry.clock_id ?? null}
           onSelectShow={(id) => { if (id !== null) onChange(id, null); }}
@@ -1082,12 +1454,13 @@ function EditSlotPopover({
 // ─── Cal New Slot Popover (calendar mode) ─────────────────────────────────────
 
 function CalNewSlotPopover({
-  date, timeStart: initStart, templateEntry, shows, clocks, x, y, onClose, onSave,
+  date, timeStart: initStart, templateEntry, maxDurationMinutes, shows, clocks, x, y, onClose, onSave,
 }: {
   date: string;
   timeStart: string;
   timeEnd: string;
   templateEntry?: TemplateEntry;
+  maxDurationMinutes: number | null;
   shows: Show[];
   clocks: ClockType[];
   x: number;
@@ -1164,6 +1537,7 @@ function CalNewSlotPopover({
       <SlotPicker
         shows={shows}
         clocks={clocks}
+        maxDurationMinutes={maxDurationMinutes}
         selectedShowId={selectedShowId}
         selectedClockId={selectedClockId}
         onSelectShow={(id) => { setSelectedShowId(id); setSelectedClockId(null); }}
@@ -1223,6 +1597,7 @@ function CalEditSlotPopover({
         <SlotPicker
           shows={shows}
           clocks={clocks}
+          maxDurationMinutes={null}
           selectedShowId={entry.show_id ?? null}
           selectedClockId={entry.clock_id ?? null}
           onSelectShow={(id) => { if (id !== null) onChange(id, null); }}
