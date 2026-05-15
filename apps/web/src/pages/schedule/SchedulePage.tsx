@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, Fragment } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle } from 'lucide-react';
 import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
@@ -628,20 +628,25 @@ function EntryBlock({ entry, show, onClick }: {
   onClick: (e: React.MouseEvent) => void;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
-  const hex = show ? COLOR_HEX[show.color] : '#71717a';
+  const isOrphaned = !show && !!entry.show_id;
+  const hex = show ? COLOR_HEX[show.color] : isOrphaned ? '#f59e0b' : '#71717a';
 
   return (
     <div
       className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110"
       style={{ top: top + 1, height, left: '3px', backgroundColor: `${hex}12`, borderLeft: `3px solid ${hex}` }}
       onClick={onClick}
+      title={isOrphaned ? 'The show assigned to this slot was deleted' : undefined}
     >
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden">
           <div className="flex items-center gap-1.5 min-w-0">
-            <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
-            <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300">
-              {show?.name ?? (entry.show_id ? 'Orphaned entry' : 'No show')}
+            {isOrphaned
+              ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
+              : <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
+            }
+            <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : 'text-zinc-300'}`}>
+              {show?.name ?? (isOrphaned ? 'Deleted show' : 'No show')}
             </span>
           </div>
           {height >= 60 && show?.host && (
@@ -666,23 +671,30 @@ function ClockOnlyBlock({ entry, clock, onClick }: {
   onClick: (e: React.MouseEvent) => void;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
+  const isOrphaned = !clock && !!entry.clock_id;
+  const borderColor = isOrphaned ? '#f59e0b' : '#ffffff';
+  const bgColor = isOrphaned ? '#f59e0b0a' : '#ffffff0a';
 
   return (
     <div
       className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: '#ffffff0a', borderLeft: '3px solid #ffffff' }}
+      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}` }}
       onClick={onClick}
+      title={isOrphaned ? 'The clock assigned to this slot was deleted' : undefined}
     >
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden pb-[7px]">
           <div className="flex items-center gap-1.5 min-w-0">
-            <Clock className="w-5 h-5 text-white flex-shrink-0" />
-            <span className={`text-[13px] font-semibold leading-tight truncate ${clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
-              {clock?.name ?? 'No clock'}
+            {isOrphaned
+              ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
+              : <Clock className="w-5 h-5 text-white flex-shrink-0" />
+            }
+            <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
+              {clock?.name ?? (isOrphaned ? 'Deleted clock' : 'No clock')}
             </span>
           </div>
           {height >= 44 && (
-            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: '#ffffff60' }}>
+            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
               {entry.time_start}–{entry.time_end}
             </span>
           )}
@@ -700,13 +712,15 @@ function CalendarEntryBlock({ entry, show, onClick }: {
   onClick: (e: React.MouseEvent) => void;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
-  const hex = show ? COLOR_HEX[show.color] : '#71717a';
+  const isOrphaned = !show && !!entry.show_id;
+  const hex = show ? COLOR_HEX[show.color] : isOrphaned ? '#f59e0b' : '#71717a';
 
   return (
     <div
       className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110 z-[1]"
       style={{ top: top + 1, height, left: '3px', backgroundColor: `${hex}12`, borderLeft: `3px solid ${hex}` }}
       onClick={onClick}
+      title={isOrphaned ? 'The show assigned to this slot was deleted' : undefined}
     >
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden relative">
@@ -714,9 +728,12 @@ function CalendarEntryBlock({ entry, show, onClick }: {
             <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
           )}
           <div className="flex items-center gap-1.5 min-w-0 pr-3">
-            <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
-            <span className="text-[13px] font-semibold leading-tight truncate text-zinc-300">
-              {show?.name ?? (entry.show_id ? 'Orphaned entry' : 'No show')}
+            {isOrphaned
+              ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
+              : <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
+            }
+            <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : 'text-zinc-300'}`}>
+              {show?.name ?? (isOrphaned ? 'Deleted show' : 'No show')}
             </span>
           </div>
           {height >= 60 && show?.host && (
@@ -741,12 +758,16 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
   onClick: (e: React.MouseEvent) => void;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
+  const isOrphaned = !clock && !!entry.clock_id;
+  const borderColor = isOrphaned ? '#f59e0b' : '#ffffff';
+  const bgColor = isOrphaned ? '#f59e0b0a' : '#ffffff0a';
 
   return (
     <div
       className="absolute right-1 rounded-r-[3px] overflow-hidden cursor-pointer transition-all hover:brightness-110 z-[1]"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: '#ffffff0a', borderLeft: '3px solid #ffffff' }}
+      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}` }}
       onClick={onClick}
+      title={isOrphaned ? 'The clock assigned to this slot was deleted' : undefined}
     >
       {height >= 22 && (
         <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden relative pb-[7px]">
@@ -754,13 +775,16 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
             <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
           )}
           <div className="flex items-center gap-1.5 min-w-0 pr-3">
-            <Clock className="w-5 h-5 text-white flex-shrink-0" />
-            <span className={`text-[13px] font-semibold leading-tight truncate ${clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
-              {clock?.name ?? 'No clock'}
+            {isOrphaned
+              ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
+              : <Clock className="w-5 h-5 text-white flex-shrink-0" />
+            }
+            <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
+              {clock?.name ?? (isOrphaned ? 'Deleted clock' : 'No clock')}
             </span>
           </div>
           {height >= 44 && (
-            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: '#ffffff60' }}>
+            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
               {entry.time_start}–{entry.time_end}
             </span>
           )}

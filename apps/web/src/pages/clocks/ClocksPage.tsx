@@ -552,17 +552,24 @@ export function ClocksPage() {
                     </div>
                   </button>
                   {confirmingDelete ? (
-                    <div className="px-4 pb-3 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                      <span className="text-xs text-zinc-400 flex-1">Delete?</span>
-                      <button
-                        onClick={() => deleteMutation.mutate(clock.id)}
-                        disabled={deleteMutation.isPending}
-                        className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
-                      >Yes</button>
-                      <button
-                        onClick={() => setListConfirmDeleteId(null)}
-                        className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
-                      >Cancel</button>
+                    <div className="px-4 pb-3 flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
+                      {clock.used && (
+                        <span className="text-[11px] text-amber-400 leading-tight">
+                          Clock is in the schedule. Slots will be cleared.
+                        </span>
+                      )}
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-400 flex-1">Delete?</span>
+                        <button
+                          onClick={() => deleteMutation.mutate(clock.id)}
+                          disabled={deleteMutation.isPending}
+                          className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
+                        >Yes</button>
+                        <button
+                          onClick={() => setListConfirmDeleteId(null)}
+                          className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
+                        >Cancel</button>
+                      </div>
                     </div>
                   ) : (
                     <button
@@ -599,7 +606,7 @@ export function ClocksPage() {
                   <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
                     {draftClock.used ? 'Used in schedule' : 'Not used'}
                   </span>
-                  <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete}
+                  <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} isUsed={draftClock.used}
                     onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
                     onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
                     onDeleteCancel={() => setConfirmDelete(false)} row
@@ -720,7 +727,7 @@ export function ClocksPage() {
 
                   {/* Actions */}
                   <div className="flex-shrink-0 px-3 py-4 flex flex-col items-center justify-center gap-2">
-                    <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete}
+                    <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} isUsed={draftClock.used}
                       onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
                       onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
                       onDeleteCancel={() => setConfirmDelete(false)}
@@ -2132,8 +2139,8 @@ function SegmentSweeperEditor({
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
-function ClockActions({ dirty, isPending, confirmDelete, onSave, onDiscard, onDeleteRequest, onDeleteConfirm, onDeleteCancel, row }: {
-  dirty: boolean; isPending: boolean; confirmDelete: boolean; row?: boolean;
+function ClockActions({ dirty, isPending, confirmDelete, isUsed, onSave, onDiscard, onDeleteRequest, onDeleteConfirm, onDeleteCancel, row }: {
+  dirty: boolean; isPending: boolean; confirmDelete: boolean; isUsed?: boolean; row?: boolean;
   onSave: () => void; onDiscard: () => void;
   onDeleteRequest: () => void; onDeleteConfirm: () => void; onDeleteCancel: () => void;
 }) {
@@ -2146,10 +2153,17 @@ function ClockActions({ dirty, isPending, confirmDelete, onSave, onDiscard, onDe
     </div>
   );
   if (confirmDelete) return (
-    <div className={`flex ${row ? 'flex-row' : 'flex-col'} items-center gap-1.5`}>
-      <span className="text-xs text-zinc-400">Delete?</span>
-      <button onClick={onDeleteConfirm} className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Yes</button>
-      <button onClick={onDeleteCancel} className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
+    <div className={`flex ${row ? 'flex-row' : 'flex-col'} items-end gap-1.5`}>
+      {isUsed && (
+        <span className="text-[11px] text-amber-400 leading-tight text-right">
+          Clock is in the schedule. Slots will be cleared.
+        </span>
+      )}
+      <div className="flex items-center gap-1.5">
+        <span className="text-xs text-zinc-400">Delete?</span>
+        <button onClick={onDeleteConfirm} className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Yes</button>
+        <button onClick={onDeleteCancel} className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
+      </div>
     </div>
   );
   return (

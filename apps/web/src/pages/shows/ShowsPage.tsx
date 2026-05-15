@@ -54,6 +54,7 @@ export function ShowsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
+  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   const showToast = (type: 'success' | 'error', message: string) => {
@@ -79,7 +80,12 @@ export function ShowsPage() {
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => deleteShow(id),
-    onSuccess: () => { qc.invalidateQueries({ queryKey: ['shows'] }); showToast('success', 'Show deleted'); },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['shows'] });
+      qc.invalidateQueries({ queryKey: ['template-entries'] });
+      setConfirmDeleteId(null);
+      showToast('success', 'Show deleted');
+    },
     onError: (err: Error) => showToast('error', err.message),
   });
 
@@ -137,8 +143,8 @@ export function ShowsPage() {
                 return (
                   <tr
                     key={show.id}
-                    className="hover:bg-zinc-800/40 transition-colors cursor-pointer group"
-                    onClick={() => navigate(`/shows/${show.id}`)}
+                    className={`transition-colors cursor-pointer group ${confirmDeleteId === show.id ? 'bg-red-900/10' : 'hover:bg-zinc-800/40'}`}
+                    onClick={() => confirmDeleteId === show.id ? undefined : navigate(`/shows/${show.id}`)}
                   >
                     <td className="px-4 py-3 border-r border-zinc-800/60">
                       <div className={`w-3 h-3 rounded-full ${cm.dot} mx-auto`} />
@@ -163,14 +169,35 @@ export function ShowsPage() {
                       )}
                     </td>
                     <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                      <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button
-                          onClick={() => deleteMutation.mutate(show.id)}
-                          className="p-1 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
-                      </div>
+                      {confirmDeleteId === show.id ? (
+                        <div className="flex flex-col items-end gap-1.5">
+                          {showEntries.length > 0 && (
+                            <span className="text-[11px] text-amber-400 text-right leading-tight">
+                              Scheduled in {showEntries.length} slot{showEntries.length !== 1 ? 's' : ''}. Slots will be cleared.
+                            </span>
+                          )}
+                          <div className="flex items-center gap-1.5 justify-end">
+                            <button
+                              onClick={() => deleteMutation.mutate(show.id)}
+                              disabled={deleteMutation.isPending}
+                              className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
+                            >Delete</button>
+                            <button
+                              onClick={() => setConfirmDeleteId(null)}
+                              className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
+                            >Cancel</button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
+                          <button
+                            onClick={() => setConfirmDeleteId(show.id)}
+                            className="p-1 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        </div>
+                      )}
                     </td>
                   </tr>
                 );
