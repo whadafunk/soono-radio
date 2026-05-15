@@ -528,11 +528,6 @@ export function ClocksPage() {
               const isSelected = clock.id === selectedId;
               const confirmingDelete = listConfirmDeleteId === clock.id;
               const assignedShows = clock.assigned_shows ?? [];
-              const showsLabel = assignedShows.length === 0
-                ? 'Unassigned'
-                : assignedShows.length === 1
-                  ? assignedShows[0].name
-                  : `${assignedShows[0].name} +${assignedShows.length - 1}`;
               return (
                 <div key={clock.id} className={`group relative border-b border-zinc-800/60 transition-colors ${isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'}`}>
                   <button onClick={() => handleClockClick(clock)} className="w-full text-left px-4 py-3">
@@ -541,14 +536,14 @@ export function ClocksPage() {
                       <span className="text-sm font-medium text-white truncate">{clock.name}</span>
                     </div>
                     <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 ml-5 items-center">
-                      <span className={`text-[10px] px-1 py-0.5 rounded ${clock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                        {clock.used ? 'Used' : 'Not used'}
-                      </span>
                       <span
-                        className="text-[10px] text-zinc-500 truncate"
-                        title={assignedShows.length > 1 ? assignedShows.map((s) => s.name).join(', ') : undefined}
+                        className={`text-[10px] px-1 py-0.5 rounded cursor-default ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}
+                        title={assignedShows.length > 0 ? assignedShows.map((s) => s.name).join(', ') : undefined}
                       >
-                        {showsLabel}
+                        Used{assignedShows.length > 0 ? ` (${assignedShows.length})` : ''}
+                      </span>
+                      <span className={`text-[10px] px-1 py-0.5 rounded ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                        Scheduled{clock.slot_count > 0 ? ` (${clock.slot_count})` : ''}
                       </span>
                       <span className="basis-full" />
                       <span className={`text-xs ${secs > 3600 ? 'text-red-400' : 'text-zinc-400'}`}>{fmtDuration(secs)}</span>
@@ -623,8 +618,8 @@ export function ClocksPage() {
                     onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
                     className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
                   />
-                  <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                    {draftClock.used ? 'Used in schedule' : 'Not used'}
+                  <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                    Scheduled{draftClock.slot_count > 0 ? ` (${draftClock.slot_count})` : ''}
                   </span>
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
@@ -695,8 +690,8 @@ export function ClocksPage() {
                   {/* Right: used by + playlists */}
                   <div className="flex-shrink-0 w-56 px-5 py-4 space-y-4">
                     {/* Used by */}
-                    <div>
-                      <p className="text-xs font-medium text-zinc-400 mb-2">Used by</p>
+                    <div className="rounded-lg bg-zinc-800/60 px-3 py-2.5 space-y-2">
+                      <p className="text-xs font-medium text-zinc-400">Used by</p>
                       {draftClock.assigned_shows.length === 0 ? (
                         <p className="text-xs text-zinc-500 italic">No shows assigned</p>
                       ) : (
@@ -714,9 +709,9 @@ export function ClocksPage() {
                           )}
                         </div>
                       )}
-                      <div className="mt-2 flex flex-wrap gap-1.5">
-                        <span className={`text-xs px-2 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                          {draftClock.used ? 'Used in schedule' : 'Not used'}
+                      <div className="flex flex-wrap gap-1.5 pt-0.5">
+                        <span className={`text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-700 text-zinc-500'}`}>
+                          Scheduled{draftClock.slot_count > 0 ? ` (${draftClock.slot_count})` : ''}
                         </span>
                         {draftClock.assigned_shows.length === 0 && (
                           <span className="text-xs text-amber-400">Segments need explicit playlist sources</span>
