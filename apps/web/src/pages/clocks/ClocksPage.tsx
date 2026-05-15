@@ -731,17 +731,15 @@ export function ClocksPage() {
                           categories={['jingle']}
                         />
                       </div>
-                      {draftClock.assigned_shows.length === 0 && (
-                        <div>
-                          <p className="text-xs text-zinc-400 mb-1">Jingle</p>
-                          <PlaylistDropdown
-                            value={draftClock.jingle_playlist_id ?? null}
-                            onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
-                            playlists={allPlaylists}
-                            categories={['jingle']}
-                          />
-                        </div>
-                      )}
+                      <div>
+                        <p className="text-xs text-zinc-400 mb-1">Jingle</p>
+                        <PlaylistDropdown
+                          value={draftClock.jingle_playlist_id ?? null}
+                          onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
+                          playlists={allPlaylists}
+                          categories={['jingle']}
+                        />
+                      </div>
                     </div>
                   </div>
 
