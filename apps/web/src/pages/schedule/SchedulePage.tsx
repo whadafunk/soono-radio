@@ -115,15 +115,18 @@ type DragState = {
   op: DragOp;
   entryKind: DragEntryKind;
   entry: TemplateEntry | CalendarEntry;
-  dayOfWeek?: number;
-  date?: string;
+  dayOfWeek?: number;         // source day (template)
+  date?: string;              // source date (calendar)
+  targetDayOfWeek?: number;   // current target day (updated during drag)
+  targetDate?: string;        // current target date (updated during drag)
   startMin: number;
   endMin: number;
   origStartMin: number;
   origEndMin: number;
-  offsetMin: number;  // for 'move': mouse offset from entry start
+  offsetMin: number;
   columnRect: DOMRect;
-  siblings: DragSibling[];
+  siblings: DragSibling[];    // current target column's other entries
+  isCopy: boolean;
 };
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -194,12 +197,36 @@ export function SchedulePage() {
 
   function startDrag(initial: DragState) {
     setActiveDrag(initial);
-    document.body.style.cursor = initial.op === 'move' ? 'grabbing' : 'ns-resize';
+    document.body.style.cursor = initial.isCopy ? 'copy' : initial.op === 'move' ? 'grabbing' : 'ns-resize';
     document.body.style.userSelect = 'none';
 
     let current = initial;
 
-    const SNAP_THRESHOLD = 7.5; // minutes ≈ 8px at 64px/hr
+    const SNAP_THRESHOLD = 7.5;
+
+    // Compute source day (1-7) — used to map cursor X to target column
+    const startDayOfWeek = initial.dayOfWeek
+      ?? (initial.date ? weekDays.findIndex((d) => toISODate(d) === initial.date) + 1 : 1);
+
+    const toSibling = (e: { time_start: string; time_end: string }): DragSibling => {
+      const s  = timeToMinutes(e.time_start);
+      const en = timeToMinutes(e.time_end);
+      return { startMin: s, endMin: en > s ? en : 24 * 60 };
+    };
+
+    const computeSiblings = (targetDay: number): DragSibling[] => {
+      const excludeId = initial.entry.id;
+      if (mode === 'template') {
+        return templateEntries
+          .filter((e) => e.day_of_week === targetDay && e.id !== excludeId)
+          .map(toSibling);
+      }
+      const tDate = toISODate(weekDays[targetDay - 1]);
+      const calE  = calEntryByDate.get(tDate) ?? [];
+      const overridden = new Set(calE.filter((e) => e.is_override).map((e) => e.time_start));
+      const visT = templateEntries.filter((e) => e.day_of_week === targetDay && !overridden.has(e.time_start));
+      return [...calE, ...visT].filter((e) => e.id !== excludeId).map(toSibling);
+    };
 
     const snapMin = (raw: number): number => {
       for (const sib of current.siblings) {
@@ -211,7 +238,7 @@ export function SchedulePage() {
 
     const onMove = (e: MouseEvent) => {
       e.preventDefault();
-      const raw = (e.clientY - current.columnRect.top) / TOTAL_HEIGHT * 24 * 60;
+      const raw     = (e.clientY - current.columnRect.top) / TOTAL_HEIGHT * 24 * 60;
       const clamped = Math.max(0, Math.min(24 * 60 - 1, raw));
       let { startMin, endMin } = current;
 
@@ -226,7 +253,20 @@ export function SchedulePage() {
         endMin = Math.max(current.startMin + 15, Math.min(24 * 60, snapMin(clamped)));
       }
 
-      current = { ...current, startMin, endMin };
+      // Cross-day: only for move op
+      let targetDayOfWeek = startDayOfWeek;
+      if (current.op === 'move') {
+        const deltaCol = Math.floor((e.clientX - initial.columnRect.left) / initial.columnRect.width);
+        targetDayOfWeek = Math.min(7, Math.max(1, startDayOfWeek + deltaCol));
+      }
+      const targetDate = mode === 'calendar' ? toISODate(weekDays[targetDayOfWeek - 1]) : undefined;
+
+      // Recompute siblings when target column changes
+      const siblings = targetDayOfWeek !== (current.targetDayOfWeek ?? startDayOfWeek)
+        ? computeSiblings(targetDayOfWeek)
+        : current.siblings;
+
+      current = { ...current, startMin, endMin, targetDayOfWeek, targetDate, siblings };
       setActiveDrag({ ...current });
     };
 
@@ -239,32 +279,34 @@ export function SchedulePage() {
       const drag = current;
       setActiveDrag(null);
 
-      const noChange = drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin;
-      const overlaps = drag.siblings.some(
-        (s) => drag.startMin < s.endMin && drag.endMin > s.startMin,
-      );
+      const tDay = drag.targetDayOfWeek ?? startDayOfWeek;
+      const tDate = drag.targetDate ?? drag.date;
+      const dayChanged  = tDay !== startDayOfWeek || tDate !== drag.date;
+      const posChanged  = drag.startMin !== drag.origStartMin || drag.endMin !== drag.origEndMin;
+      const noChange    = !dayChanged && !posChanged;
+      const overlaps    = drag.siblings.some((s) => drag.startMin < s.endMin && drag.endMin > s.startMin);
       if (noChange || overlaps) return;
 
       const newStart = minutesToTime(drag.startMin);
       const newEnd   = minutesToTime(drag.endMin % 1440);
 
-      if (drag.entryKind === 'template') {
+      if (drag.isCopy) {
+        if (drag.entryKind === 'template') {
+          const e = drag.entry as TemplateEntry;
+          createMutation.mutate({ day_of_week: tDay, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null });
+        } else {
+          const e = drag.entry as TemplateEntry | CalendarEntry;
+          calCreateMutation.mutate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
+        }
+      } else if (drag.entryKind === 'template') {
         const e = drag.entry as TemplateEntry;
-        updateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd } });
+        updateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, day_of_week: tDay } });
       } else if (drag.entryKind === 'calendar') {
         const e = drag.entry as CalendarEntry;
-        calUpdateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd } });
+        calUpdateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, date: tDate } });
       } else {
-        // template-in-calendar: create an override for this specific day
         const e = drag.entry as TemplateEntry;
-        calCreateMutation.mutate({
-          date: drag.date!,
-          time_start: newStart,
-          time_end: newEnd,
-          show_id:  e.show_id  ?? null,
-          clock_id: e.clock_id ?? null,
-          is_override: true,
-        });
+        calCreateMutation.mutate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
       }
     };
 
@@ -591,7 +633,7 @@ function DayColumn({
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
-  function handleBlockDragStart(entry: TemplateEntry, op: DragOp, mouseY: number) {
+  function handleBlockDragStart(entry: TemplateEntry, op: DragOp, mouseY: number, isCopy: boolean) {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
     const startMin  = timeToMinutes(entry.time_start);
@@ -606,7 +648,7 @@ function DayColumn({
         const en = timeToMinutes(e.time_end);
         return { startMin: s, endMin: en > s ? en : 24 * 60 };
       });
-    onDragStart({ op, entryKind: 'template', entry, dayOfWeek, startMin, endMin, origStartMin: startMin, origEndMin: endMin, offsetMin, columnRect: rect, siblings });
+    onDragStart({ op, entryKind: 'template', entry, dayOfWeek, targetDayOfWeek: dayOfWeek, startMin, endMin, origStartMin: startMin, origEndMin: endMin, offsetMin, columnRect: rect, siblings, isCopy });
   }
 
   const draggingId = activeDrag?.entryKind === 'template' && entries.some((e) => e.id === activeDrag.entry.id)
@@ -643,8 +685,8 @@ function DayColumn({
       {entries.flatMap((entry) => {
         const show  = entry.show_id  ? showMap.get(entry.show_id)   : undefined;
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
-        const isDragging    = entry.id === draggingId;
-        const blockDragStart = (op: DragOp, mouseY: number) => handleBlockDragStart(entry, op, mouseY);
+        const isDragging     = entry.id === draggingId && !activeDrag?.isCopy;
+        const blockDragStart = (op: DragOp, mouseY: number, isCopy: boolean) => handleBlockDragStart(entry, op, mouseY, isCopy);
         const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
@@ -658,7 +700,7 @@ function DayColumn({
           wrap && <EntryBlock key={`w${entry.id}`} entry={wrap}  show={show} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onEntryClick(entry, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
-      {draggingId !== null && activeDrag && <DragGhost activeDrag={activeDrag} />}
+      {activeDrag?.targetDayOfWeek === dayOfWeek && <DragGhost activeDrag={activeDrag} />}
       {isToday && (
         <div data-current-time="" className="absolute left-0 right-0 flex items-center z-10 pointer-events-none" style={{ top: currentTop }}>
           <div className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0 -ml-1" style={{ boxShadow: '0 0 6px rgba(251,113,133,0.6)' }} />
@@ -705,6 +747,7 @@ function CalendarDayColumn({
     kind: DragEntryKind,
     op: DragOp,
     mouseY: number,
+    isCopy: boolean,
   ) {
     const rect = containerRef.current?.getBoundingClientRect();
     if (!rect) return;
@@ -721,14 +764,13 @@ function CalendarDayColumn({
         const en = timeToMinutes(e.time_end);
         return { startMin: s, endMin: en > s ? en : 24 * 60 };
       });
-    onDragStart({ op, entryKind: kind, entry, date, startMin, endMin, origStartMin: startMin, origEndMin: endMin, offsetMin, columnRect: rect, siblings });
+    onDragStart({ op, entryKind: kind, entry, date, targetDate: date, startMin, endMin, origStartMin: startMin, origEndMin: endMin, offsetMin, columnRect: rect, siblings, isCopy });
   }
 
   const templateDraggingId = activeDrag?.entryKind === 'template-in-calendar' && visibleTemplateEntries.some((e) => e.id === activeDrag.entry.id)
     ? activeDrag.entry.id : null;
   const calDraggingId = activeDrag?.entryKind === 'calendar' && calendarEntries.some((e) => e.id === activeDrag.entry.id)
     ? activeDrag.entry.id : null;
-  const isInThisColumn = templateDraggingId !== null || calDraggingId !== null;
 
   function handleClick(e: React.MouseEvent<HTMLDivElement>) {
     e.stopPropagation();
@@ -764,8 +806,8 @@ function CalendarDayColumn({
       {visibleTemplateEntries.flatMap((entry) => {
         const show  = entry.show_id  ? showMap.get(entry.show_id)   : undefined;
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
-        const isDragging    = entry.id === templateDraggingId;
-        const blockDragStart = (op: DragOp, mouseY: number) => handleBlockDragStart(entry, 'template-in-calendar', op, mouseY);
+        const isDragging     = entry.id === templateDraggingId && !activeDrag?.isCopy;
+        const blockDragStart = (op: DragOp, mouseY: number, isCopy: boolean) => handleBlockDragStart(entry, 'template-in-calendar', op, mouseY, isCopy);
         const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
@@ -784,8 +826,8 @@ function CalendarDayColumn({
       {calendarEntries.flatMap((entry) => {
         const show  = entry.show_id  ? showMap.get(entry.show_id)   : undefined;
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
-        const isDragging    = entry.id === calDraggingId;
-        const blockDragStart = (op: DragOp, mouseY: number) => handleBlockDragStart(entry, 'calendar', op, mouseY);
+        const isDragging     = entry.id === calDraggingId && !activeDrag?.isCopy;
+        const blockDragStart = (op: DragOp, mouseY: number, isCopy: boolean) => handleBlockDragStart(entry, 'calendar', op, mouseY, isCopy);
         const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
@@ -800,7 +842,7 @@ function CalendarDayColumn({
         ].filter(Boolean) as React.ReactElement[];
       })}
 
-      {isInThisColumn && activeDrag && <DragGhost activeDrag={activeDrag} />}
+      {activeDrag?.targetDate === date && <DragGhost activeDrag={activeDrag} />}
       {isToday && (
         <div data-current-time="" className="absolute left-0 right-0 flex items-center z-10 pointer-events-none" style={{ top: currentTop }}>
           <div className="w-2 h-2 rounded-full bg-rose-400 flex-shrink-0 -ml-1" style={{ boxShadow: '0 0 6px rgba(251,113,133,0.6)' }} />
@@ -842,22 +884,19 @@ function isOvernightEntry(timeStart: string, timeEnd: string): boolean {
 // ─── Drag Ghost ───────────────────────────────────────────────────────────────
 
 function DragGhost({ activeDrag }: { activeDrag: DragState }) {
-  const { startMin, endMin, siblings } = activeDrag;
+  const { startMin, endMin, siblings, isCopy } = activeDrag;
   const top    = (startMin / 60) * HOUR_HEIGHT + 1;
   const durMin = Math.max(endMin - startMin, 1);
   const height = Math.max((durMin / 60) * HOUR_HEIGHT - 2, 3);
   const overlaps = siblings.some((s) => startMin < s.endMin && endMin > s.startMin);
 
+  const borderColor = overlaps ? 'rgba(248,113,113,0.8)' : isCopy ? 'rgba(74,222,128,0.6)' : 'rgba(255,255,255,0.4)';
+  const bgColor     = overlaps ? 'rgba(248,113,113,0.1)' : isCopy ? 'rgba(74,222,128,0.08)' : 'rgba(255,255,255,0.05)';
+
   return (
     <div
       className="absolute right-1 rounded-r-[3px] pointer-events-none z-20"
-      style={{
-        top,
-        height,
-        left: '3px',
-        border: `2px dashed ${overlaps ? 'rgba(248,113,113,0.8)' : 'rgba(255,255,255,0.4)'}`,
-        backgroundColor: overlaps ? 'rgba(248,113,113,0.1)' : 'rgba(255,255,255,0.05)',
-      }}
+      style={{ top, height, left: '3px', border: `2px dashed ${borderColor}`, backgroundColor: bgColor }}
     />
   );
 }
@@ -868,7 +907,7 @@ function EntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
   entry: TemplateEntry;
   show: Show | undefined;
   onClick: (x: number, y: number) => void;
-  onDragStart: (op: DragOp, mouseY: number) => void;
+  onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
@@ -879,11 +918,12 @@ function EntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
     if (e.button !== 0) return;
     e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
+    const isCopy = e.ctrlKey || e.metaKey;
     let didDrag = false;
     const onMove = (ev: MouseEvent) => {
       if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
         didDrag = true;
-        onDragStart(op, startY);
+        onDragStart(op, startY, isCopy);
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
       }
@@ -938,7 +978,7 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
   entry: TemplateEntry;
   clock: ClockType | undefined;
   onClick: (x: number, y: number) => void;
-  onDragStart: (op: DragOp, mouseY: number) => void;
+  onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
@@ -950,11 +990,12 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
     if (e.button !== 0) return;
     e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
+    const isCopy = e.ctrlKey || e.metaKey;
     let didDrag = false;
     const onMove = (ev: MouseEvent) => {
       if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
         didDrag = true;
-        onDragStart(op, startY);
+        onDragStart(op, startY, isCopy);
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
       }
@@ -1006,7 +1047,7 @@ function CalendarEntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
   entry: CalendarEntry;
   show: Show | undefined;
   onClick: (x: number, y: number) => void;
-  onDragStart: (op: DragOp, mouseY: number) => void;
+  onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
@@ -1017,11 +1058,12 @@ function CalendarEntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
     if (e.button !== 0) return;
     e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
+    const isCopy = e.ctrlKey || e.metaKey;
     let didDrag = false;
     const onMove = (ev: MouseEvent) => {
       if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
         didDrag = true;
-        onDragStart(op, startY);
+        onDragStart(op, startY, isCopy);
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
       }
@@ -1079,7 +1121,7 @@ function CalendarClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging
   entry: CalendarEntry;
   clock: ClockType | undefined;
   onClick: (x: number, y: number) => void;
-  onDragStart: (op: DragOp, mouseY: number) => void;
+  onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
 }) {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
@@ -1091,11 +1133,12 @@ function CalendarClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging
     if (e.button !== 0) return;
     e.stopPropagation();
     const startX = e.clientX, startY = e.clientY;
+    const isCopy = e.ctrlKey || e.metaKey;
     let didDrag = false;
     const onMove = (ev: MouseEvent) => {
       if (!didDrag && (Math.abs(ev.clientX - startX) > 4 || Math.abs(ev.clientY - startY) > 4)) {
         didDrag = true;
-        onDragStart(op, startY);
+        onDragStart(op, startY, isCopy);
         document.removeEventListener('mousemove', onMove);
         document.removeEventListener('mouseup', onUp);
       }

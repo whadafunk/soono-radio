@@ -488,6 +488,7 @@ export type TemplateEntryCreate = z.infer<typeof TemplateEntryCreateSchema>;
 export const TemplateEntryPatchSchema = z.object({
   time_start: z.string().optional(),
   time_end: z.string().optional(),
+  day_of_week: z.number().int().min(1).max(7).optional(),
   show_id: z.number().int().nullable().optional(),
   clock_id: z.number().int().nullable().optional(),
 });
@@ -524,6 +525,7 @@ export const CalendarEntryPatchSchema = z.object({
   is_override: z.boolean().optional(),
   time_start: z.string().optional(),
   time_end: z.string().optional(),
+  date: z.string().optional(),
 });
 export type CalendarEntryPatch = z.infer<typeof CalendarEntryPatchSchema>;
 
