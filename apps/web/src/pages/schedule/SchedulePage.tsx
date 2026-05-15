@@ -1860,6 +1860,12 @@ function IntervalsTab() {
       } else {
         startMin = timeToMinutes(interval.default_start_time);
       }
+      const wouldOverlap = slots.some(
+        (s) => s.day_of_week === targetDayOfWeek &&
+               timeToMinutes(s.end_time) > startMin &&
+               timeToMinutes(s.start_time) < startMin + dur,
+      );
+      if (wouldOverlap) return;
       createSlotMut.mutate({
         interval_id: interval.id,
         day_of_week: targetDayOfWeek,
@@ -1887,7 +1893,7 @@ function IntervalsTab() {
         {/* Day headers */}
         <div className="sticky top-0 z-10 flex-shrink-0 flex border-b border-zinc-700 rounded-tl-[10px] rounded-tr-[10px] bg-zinc-800">
           <div className="w-16 flex-shrink-0 bg-zinc-900/70 border-r border-zinc-700 flex items-center justify-center">
-            <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Intervals</span>
+            <Clock className="w-4 h-4 text-zinc-500" />
           </div>
           {DAY_NAMES.map((name, i) => (
             <div key={i} className={`flex-1 py-4 text-center ${i < 6 ? 'border-r border-zinc-500/80 [box-shadow:inset_-1px_0_0_rgba(0,0,0,0.55)]' : ''}`}>
@@ -2059,7 +2065,7 @@ function IntervalRibbonColumn({
         const raw      = (ev.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
         const clamped  = Math.max(0, Math.min(24 * 60, raw));
         const rawStart = Math.round((clamped - offsetMin) / 15) * 15;
-        const newStart = Math.max(prevEnd, Math.min(nextStart - dur, rawStart));
+        const newStart = Math.max(prevEnd, Math.min(Math.min(nextStart, 24 * 60 - 15) - dur, rawStart));
         current = { ...current, startMin: newStart, endMin: newStart + dur };
         setBlockDrag({ ...current });
       }
@@ -2079,7 +2085,7 @@ function IntervalRibbonColumn({
         return;
       }
       if (phase === 'moving' && drag.startMin !== drag.origStartMin) {
-        onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin >= 24 * 60 ? 0 : drag.endMin));
+        onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(Math.min(drag.endMin, 24 * 60 - 15)));
       }
     };
 
@@ -2112,7 +2118,7 @@ function IntervalRibbonColumn({
       if (op === 'resize-start') {
         startMin = Math.max(prevEnd, Math.min(current.endMin - 15, snapped));
       } else {
-        endMin = Math.max(current.startMin + 15, Math.min(nextStart, snapped));
+        endMin = Math.max(current.startMin + 15, Math.min(Math.min(nextStart, 24 * 60 - 15), snapped));
       }
 
       current = { ...current, startMin, endMin };
@@ -2127,7 +2133,7 @@ function IntervalRibbonColumn({
       const drag = current;
       setBlockDrag(null);
       if (drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin) return;
-      onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin >= 24 * 60 ? 0 : drag.endMin));
+      onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(Math.min(drag.endMin, 24 * 60 - 15)));
     };
 
     document.addEventListener('mousemove', onMove);
@@ -2164,9 +2170,10 @@ function IntervalRibbonColumn({
 
       {/* Interval blocks — colored strip only, no text (click to edit/see name) */}
       {intervals.map((iv) => {
-        const isDragging = blockDrag?.iv.id === iv.id;
-        const startMin   = isDragging ? blockDrag!.startMin : timeToMinutes(iv.default_start_time);
-        const endMin     = isDragging ? blockDrag!.endMin   : timeToMinutes(iv.default_end_time);
+        const isDragging  = blockDrag?.iv.id === iv.id;
+        const startMin    = isDragging ? blockDrag!.startMin : timeToMinutes(iv.default_start_time);
+        const rawEndMin   = isDragging ? blockDrag!.endMin   : timeToMinutes(iv.default_end_time);
+        const endMin      = rawEndMin === 0 && startMin > 0 ? 24 * 60 : rawEndMin;
         const top        = (startMin / (24 * 60)) * TOTAL_HEIGHT;
         const height     = Math.max(((endMin - startMin) / (24 * 60)) * TOTAL_HEIGHT, 8);
         const isPlacing  = placeDragIntervalId === iv.id;
@@ -2226,16 +2233,35 @@ function IntervalDayColumn({
     if (!rect) return;
     const dur     = Math.max(15, timeToMinutes(placeDragInterval.default_end_time) - timeToMinutes(placeDragInterval.default_start_time));
     const raw     = (e.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
-    const start   = Math.max(0, Math.min(24 * 60 - dur, Math.round(raw / 15) * 15));
-    const end     = start + dur;
-    const top     = (start / (24 * 60)) * TOTAL_HEIGHT;
-    const height  = Math.max((dur / (24 * 60)) * TOTAL_HEIGHT, 20);
+    const snapped = Math.round(raw / 15) * 15;
+
+    // Find the free gap that contains the cursor
+    const sorted = [...slots].sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+    let validStart: number | null = null;
+    let prev = 0;
+    for (let i = 0; i <= sorted.length; i++) {
+      const gapStart = prev;
+      const gapEnd   = i < sorted.length ? timeToMinutes(sorted[i].start_time) : 24 * 60;
+      if (gapEnd - gapStart >= dur && snapped >= gapStart && snapped <= gapEnd) {
+        validStart = Math.max(gapStart, Math.min(gapEnd - dur, snapped));
+        break;
+      }
+      if (i < sorted.length) prev = timeToMinutes(sorted[i].end_time);
+    }
+
+    if (validStart === null) { ghostRef.current.style.display = 'none'; return; }
+    ghostRef.current.style.display = 'block';
+
+    const start  = validStart;
+    const end    = start + dur;
+    const top    = (start / (24 * 60)) * TOTAL_HEIGHT;
+    const height = Math.max((dur / (24 * 60)) * TOTAL_HEIGHT, 20);
     ghostRef.current.style.top    = `${top}px`;
     ghostRef.current.style.height = `${height}px`;
     const timeEl = ghostRef.current.querySelector<HTMLElement>('[data-ghost-time]');
     if (timeEl) {
-      timeEl.textContent    = `${minutesToTime(start)}–${minutesToTime(end >= 24 * 60 ? 0 : end)}`;
-      timeEl.style.display  = height >= 40 ? '' : 'none';
+      timeEl.textContent   = `${minutesToTime(start)}–${minutesToTime(end >= 24 * 60 ? 0 : end)}`;
+      timeEl.style.display = height >= 40 ? '' : 'none';
     }
   }
 
@@ -2300,7 +2326,7 @@ function IntervalDayColumn({
         return;
       }
       if (drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin) return;
-      onSlotUpdate(slot.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin >= 24 * 60 ? 0 : drag.endMin));
+      onSlotUpdate(slot.id, minutesToTime(drag.startMin), minutesToTime(Math.min(drag.endMin, 24 * 60 - 15)));
     };
 
     document.addEventListener('mousemove', onMove);
