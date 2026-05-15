@@ -1391,7 +1391,7 @@ function CreateCampaignForm({
               >
                 <option value="">No interval</option>
                 {intervals.map((iv) => (
-                  <option key={iv.id} value={iv.id}>{iv.name} ({iv.default_start_time}–{iv.default_end_time})</option>
+                  <option key={iv.id} value={iv.id}>{iv.name}</option>
                 ))}
               </select>
             </div>
@@ -2420,7 +2420,7 @@ function CampaignEditForm({
             >
               <option value="">No interval</option>
               {intervals.map((iv) => (
-                <option key={iv.id} value={iv.id}>{iv.name} ({iv.default_start_time}–{iv.default_end_time})</option>
+                <option key={iv.id} value={iv.id}>{iv.name}</option>
               ))}
             </select>
           </div>
