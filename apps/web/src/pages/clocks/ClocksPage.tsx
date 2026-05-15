@@ -50,7 +50,6 @@ import {
   OverrunPolicy,
   Rotation,
   Show,
-  SupervisorConfig,
 } from '@radio/shared';
 import {
   fetchClocks,
@@ -283,6 +282,7 @@ export function ClocksPage() {
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  const [headerOpen, setHeaderOpen] = useState(true);
 
   const dirty = clockDirty || segsDirty;
 
@@ -475,13 +475,6 @@ export function ClocksPage() {
 
   return (
     <div className="h-full flex flex-col gap-4">
-      <div className="flex items-center justify-between flex-shrink-0">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Clocks</h1>
-          <p className="text-zinc-400 mt-1 text-sm">Build reusable hour templates — drag segments to reorder.</p>
-        </div>
-      </div>
-
       {toast && (
         <div className={`flex-shrink-0 px-4 py-2.5 rounded-lg text-sm ${toast.type === 'success' ? 'bg-green-900/20 border border-green-800 text-green-300' : 'bg-red-900/20 border border-red-800 text-red-300'}`}>
           {toast.message}
@@ -559,103 +552,152 @@ export function ClocksPage() {
         {/* Right: editor */}
         {draftClock ? (
           <div className="flex-1 min-w-0 flex flex-col gap-4">
-            {/* Clock header */}
-            <div className="flex-shrink-0 flex items-start gap-3 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-4">
-              <div className="flex-1 min-w-0">
-                <input
-                  value={draftClock.name}
-                  onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
-                  className="text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-full transition-colors pb-0.5"
-                />
-                <input
-                  value={draftClock.description ?? ''}
-                  onChange={(e) => updateDraftClock((c) => ({ ...c, description: e.target.value || null }))}
-                  placeholder="Add a description…"
-                  className="mt-1 text-sm text-zinc-300 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-full transition-colors pb-0.5 placeholder:text-zinc-500"
-                />
+            {/* Clock header — collapsible */}
+            <div className="flex-shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
 
-                {/* Show assignment + used badge */}
-                <div className="mt-3 flex items-center gap-3 flex-wrap">
-                  <div className="flex items-center gap-2">
-                    <Radio className="w-3.5 h-3.5 text-zinc-500" />
-                    <span className="text-xs text-zinc-500">Show</span>
-                    <select
-                      value={draftClock.show_id ?? ''}
-                      onChange={(e) =>
-                        updateDraftClock((c) => ({ ...c, show_id: e.target.value === '' ? null : Number(e.target.value) }))
-                      }
-                      className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
-                    >
-                      <option value="" className="bg-zinc-900">Unassigned</option>
-                      {allShows.map((s) => (
-                        <option key={s.id} value={s.id} className="bg-zinc-900">{s.name}</option>
-                      ))}
-                    </select>
-                  </div>
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
+              {/* Collapsed bar */}
+              {!headerOpen && (
+                <div className="flex items-center gap-3 px-4 py-3">
+                  <button type="button" onClick={() => setHeaderOpen(true)} className="flex-shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors">
+                    <ChevronRight className="w-3.5 h-3.5" />
+                  </button>
+                  <input
+                    value={draftClock.name}
+                    onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
+                    className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
+                  />
+                  <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
                     {draftClock.used ? 'Used in schedule' : 'Not used'}
                   </span>
-                  {draftClock.show_id === null && (
-                    <span className="text-[10px] text-amber-400">
-                      Music segments require an explicit playlist source
-                    </span>
-                  )}
+                  <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete}
+                    onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
+                    onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
+                    onDeleteCancel={() => setConfirmDelete(false)} row
+                  />
                 </div>
+              )}
 
-                <HandoverEditor
-                  finish={draftClock.finish_policy}
-                  join={draftClock.join_policy}
-                  overrun={draftClock.overrun_policy}
-                  supervisorConfig={supervisorConfig}
-                  onChange={(p) => updateDraftClock((c) => ({ ...c, ...p }))}
-                />
-
-                {/* Sweeper playlist sources — clock-level, shared across all segments */}
-                <div className="mt-3 pt-3 border-t border-zinc-700/60 flex flex-wrap gap-4">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-500">Station ID playlist</span>
-                    <PlaylistDropdown
-                      value={draftClock.station_id_playlist_id ?? null}
-                      onChange={(id) => updateDraftClock((c) => ({ ...c, station_id_playlist_id: id }))}
-                      playlists={allPlaylists}
-                      categories={['jingle']}
-                    />
-                  </div>
-                  {draftClock.show_id === null && (
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-zinc-500">Jingle playlist</span>
-                      <PlaylistDropdown
-                        value={draftClock.jingle_playlist_id ?? null}
-                        onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
-                        playlists={allPlaylists}
-                        categories={['jingle']}
+              {/* Expanded: two-panel */}
+              {headerOpen && (
+                <div className="flex items-stretch">
+                  {/* Left: identity + handover */}
+                  <div className="flex-1 min-w-0 px-5 py-4 space-y-4">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => setHeaderOpen(false)} className="flex-shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors">
+                          <ChevronDown className="w-3.5 h-3.5" />
+                        </button>
+                        <input
+                          value={draftClock.name}
+                          onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
+                          className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
+                        />
+                      </div>
+                      <input
+                        value={draftClock.description ?? ''}
+                        onChange={(e) => updateDraftClock((c) => ({ ...c, description: e.target.value || null }))}
+                        placeholder="Add a description…"
+                        className="mt-2 ml-5 text-sm text-zinc-400 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-[calc(100%-1.25rem)] transition-colors pb-0.5 placeholder:text-zinc-600"
                       />
                     </div>
-                  )}
-                </div>
-              </div>
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {dirty && (
-                  <>
-                    <button onClick={handleDiscard} className="px-3 py-1.5 text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors">Discard</button>
-                    <button onClick={() => saveMutation.mutate()} disabled={saveMutation.isPending} className="px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50">
-                      {saveMutation.isPending ? 'Saving…' : 'Save'}
-                    </button>
-                  </>
-                )}
-                {!dirty && !confirmDelete && (
-                  <button onClick={() => setConfirmDelete(true)} className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors" title="Delete clock">
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                {confirmDelete && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-400">Delete?</span>
-                    <button onClick={() => deleteMutation.mutate(draftClock.id)} disabled={deleteMutation.isPending} className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Yes</button>
-                    <button onClick={() => setConfirmDelete(false)} className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
+
+                    {/* Handover */}
+                    <div className="space-y-3">
+                      <p className="text-xs font-medium text-zinc-400">Handover</p>
+                      {(
+                        [
+                          { key: 'finish_policy',  label: 'Finish policy',  options: FINISH_POLICIES,  def: supervisorConfig?.finish_policy  ?? 'finish_segment', labelsMap: FINISH_POLICY_LABELS  },
+                          { key: 'join_policy',    label: 'Join policy',    options: JOIN_POLICIES,    def: supervisorConfig?.join_policy    ?? 'join_top',        labelsMap: JOIN_POLICY_LABELS    },
+                          { key: 'overrun_policy', label: 'Overrun policy', options: OVERRUN_POLICIES, def: supervisorConfig?.overrun_policy ?? 'loop_top',        labelsMap: OVERRUN_POLICY_LABELS },
+                        ] as const
+                      ).map(({ key, label, options, def, labelsMap }) => {
+                        const lm = labelsMap as Record<string, { label: string; desc: string }>;
+                        return (
+                          <div key={key}>
+                            <p className="text-xs text-zinc-400 mb-1">{label}</p>
+                            <select
+                              value={(draftClock[key as keyof ClockType] as string | null) ?? ''}
+                              onChange={(e) => updateDraftClock((c) => ({ ...c, [key]: e.target.value === '' ? null : e.target.value }))}
+                              className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-indigo-500"
+                            >
+                              <option value="" className="bg-zinc-900 text-zinc-400">Station default — {lm[def].label}</option>
+                              {options.map((o) => (
+                                <option key={o} value={o} className="bg-zinc-900">{lm[o].label}</option>
+                              ))}
+                            </select>
+                          </div>
+                        );
+                      })}
+                    </div>
                   </div>
-                )}
-              </div>
+
+                  {/* Divider */}
+                  <div className="w-px bg-zinc-800 flex-shrink-0" />
+
+                  {/* Right: show + playlists */}
+                  <div className="flex-shrink-0 w-56 px-5 py-4 space-y-4">
+                    {/* Show */}
+                    <div>
+                      <p className="text-xs font-medium text-zinc-400 mb-1">Show</p>
+                      <select
+                        value={draftClock.show_id ?? ''}
+                        onChange={(e) => updateDraftClock((c) => ({ ...c, show_id: e.target.value === '' ? null : Number(e.target.value) }))}
+                        className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="" className="bg-zinc-900">Unassigned</option>
+                        {allShows.map((s) => (
+                          <option key={s.id} value={s.id} className="bg-zinc-900">{s.name}</option>
+                        ))}
+                      </select>
+                      <div className="mt-2 flex flex-wrap gap-1.5">
+                        <span className={`text-xs px-2 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                          {draftClock.used ? 'Used in schedule' : 'Not used'}
+                        </span>
+                        {draftClock.show_id === null && (
+                          <span className="text-xs text-amber-400">Segments need explicit playlist sources</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Playlists */}
+                    <div className="space-y-3">
+                      <p className="text-xs font-medium text-zinc-400">Playlists</p>
+                      <div>
+                        <p className="text-xs text-zinc-400 mb-1">Station ID</p>
+                        <PlaylistDropdown
+                          value={draftClock.station_id_playlist_id ?? null}
+                          onChange={(id) => updateDraftClock((c) => ({ ...c, station_id_playlist_id: id }))}
+                          playlists={allPlaylists}
+                          categories={['jingle']}
+                        />
+                      </div>
+                      {draftClock.show_id === null && (
+                        <div>
+                          <p className="text-xs text-zinc-400 mb-1">Jingle</p>
+                          <PlaylistDropdown
+                            value={draftClock.jingle_playlist_id ?? null}
+                            onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
+                            playlists={allPlaylists}
+                            categories={['jingle']}
+                          />
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Divider */}
+                  <div className="w-px bg-zinc-800 flex-shrink-0" />
+
+                  {/* Actions */}
+                  <div className="flex-shrink-0 px-3 py-4 flex flex-col items-center justify-center gap-2">
+                    <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete}
+                      onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
+                      onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
+                      onDeleteCancel={() => setConfirmDelete(false)}
+                    />
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Timeline */}
@@ -702,7 +744,6 @@ export function ClocksPage() {
                   playlists={allPlaylists}
                   musicRotations={musicRotations}
                   sweeperRotations={sweeperRotations}
-                  clockShowId={draftClock.show_id}
                 />
                 {draftSegs.length === 0 && (
                   <div className="px-5 py-10 text-center text-zinc-400 text-sm">
@@ -845,7 +886,7 @@ function ClockTimeline({
 // ─── Segment list (accordion) ─────────────────────────────────────────────────
 
 function SegmentList({
-  segments, expandedId, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations, clockShowId,
+  segments, expandedId, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
 }: {
   segments: SegmentDraft[];
   expandedId: number | null;
@@ -858,7 +899,6 @@ function SegmentList({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
-  clockShowId: number | null;
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -888,7 +928,6 @@ function SegmentList({
               playlists={playlists}
               musicRotations={musicRotations}
               sweeperRotations={sweeperRotations}
-              clockShowId={clockShowId}
             />
           ))}
         </div>
@@ -900,7 +939,7 @@ function SegmentList({
 // ─── Sortable segment item ────────────────────────────────────────────────────
 
 function SortableSegmentItem({
-  segment, isExpanded, onExpand, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations, clockShowId,
+  segment, isExpanded, onExpand, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
 }: {
   segment: SegmentDraft;
   isExpanded: boolean;
@@ -911,7 +950,6 @@ function SortableSegmentItem({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
-  clockShowId: number | null;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: segment.id });
   const meta = SEGMENT_META[segment.type];
@@ -982,7 +1020,6 @@ function SortableSegmentItem({
             playlists={playlists}
             musicRotations={musicRotations}
             sweeperRotations={sweeperRotations}
-            clockShowId={clockShowId}
           />
         )}
       </div>
@@ -995,7 +1032,7 @@ function SortableSegmentItem({
 type DrawerTab = 'content' | 'timing' | 'transitions' | 'live';
 
 function SegmentDrawer({
-  segment, onApply, onChangeType, playlists, musicRotations, sweeperRotations, clockShowId,
+  segment, onApply, onChangeType, playlists, musicRotations, sweeperRotations,
 }: {
   segment: SegmentDraft;
   onApply: (patch: Partial<SegmentDraft>) => void;
@@ -1003,7 +1040,6 @@ function SegmentDrawer({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
-  clockShowId: number | null;
 }) {
   const [tab, setTab] = useState<DrawerTab>('content');
   const [draft, setDraft] = useState<SegmentDraft>({ ...segment });
@@ -1117,16 +1153,42 @@ function SegmentDrawer({
                 segType={draft.type}
                 onChange={(sources) => update({ sources })}
                 playlists={playlists}
-                musicRotations={musicRotations}
-                clockShowId={clockShowId}
               />
             </div>
 
-            {/* Live segments: simple rotation visible only when at least one non-harbor source is present.
+            {/* Music rotation — one rotation document for ALL playlists in this segment collectively.
+                Shown at segment level; the rotation_id is written to every playlist source on change. */}
+            {draft.type === 'music' && draft.sources.some((s) => s.type === 'playlist') && (
+              <Field label="Music rotation">
+                <select
+                  value={(() => {
+                    const pl = draft.sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined;
+                    return pl?.rotation_id ?? '';
+                  })()}
+                  onChange={(e) => {
+                    const rid = e.target.value === '' ? null : Number(e.target.value);
+                    update({
+                      sources: draft.sources.map((s) =>
+                        s.type === 'playlist' ? { ...s, rotation_id: rid } : s
+                      ),
+                    });
+                  }}
+                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="" className="bg-zinc-900">Default rotation</option>
+                  {musicRotations.map((r) => (
+                    <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
+                  ))}
+                </select>
+              </Field>
+            )}
+
+            {/* Live segments: bed rotation visible when at least one bed source (show_beds or playlist) is
+                present. This rotates across ALL bed sources collectively — it is not per-playlist.
                 Stop-set rotation lives per slot inside SourcesEditor; no segment-level rotation here. */}
             {(draft.type === 'live' || draft.type === 'live_audience') &&
               draft.sources.some((s) => s.type !== 'live') && (
-                <Field label="Rotation">
+                <Field label="Bed rotation">
                   <select
                     value={draft.rotation_type ?? ''}
                     onChange={(e) => update({ rotation_type: e.target.value === '' ? null : e.target.value as SimpleRotationType })}
@@ -1261,7 +1323,7 @@ function SegmentDrawer({
 
             {draft.type === 'music' && (
               <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1">
-                <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Interstitial jingles</p>
+                <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Between-track jingles</p>
                 <div className="grid grid-cols-2 gap-4">
                   <Field label="Jingle playlist" hint="Short station IDs or show jingles inserted between tracks">
                     <PlaylistDropdown
@@ -1372,14 +1434,12 @@ function playlistCategoriesForSegType(segType: ClockSegmentType): string[] {
 }
 
 function SourcesEditor({
-  sources, segType, onChange, playlists, musicRotations, clockShowId,
+  sources, segType, onChange, playlists,
 }: {
   sources: SegmentSourceEntry[];
   segType: ClockSegmentType;
   onChange: (sources: SegmentSourceEntry[]) => void;
   playlists: PlaylistSummary[];
-  musicRotations: Rotation[];
-  clockShowId: number | null;
 }) {
   // Live types — harbor is implicit, nothing to configure
   if (IMPLICIT_LIVE_TYPES.includes(segType)) {
@@ -1423,11 +1483,7 @@ function SourcesEditor({
   }
 
   // Music, live, live_audience — multi-source list
-  let validTypes = VALID_SOURCE_TYPES[segType];
-  // Unassigned clocks can't use show-* sources (no show context at runtime).
-  if (clockShowId === null) {
-    validTypes = validTypes.filter((t) => !t.startsWith('show_'));
-  }
+  const validTypes = VALID_SOURCE_TYPES[segType];
   const showWeight = segType === 'music';
 
   // 'playlist' can appear multiple times; all other types are single-use
@@ -1466,7 +1522,12 @@ function SourcesEditor({
     onChange(sources.filter((_, idx) => idx !== i));
 
   const usedSingles = new Set(sources.filter((s) => !REPEATABLE.has(s.type)).map((s) => s.type));
-  const canAdd = validTypes.some((t) => REPEATABLE.has(t)) || validTypes.some((t) => !usedSingles.has(t));
+  // Live segments allow only one bed playlist (show_beds counts separately as a single-use type).
+  const bedPlaylistCapped = (segType === 'live' || segType === 'live_audience') &&
+    sources.filter((s) => s.type === 'playlist').length >= 1;
+  const canAdd = !bedPlaylistCapped && (
+    validTypes.some((t) => REPEATABLE.has(t)) || validTypes.some((t) => !usedSingles.has(t))
+  );
 
   return (
     <div className="space-y-2">
@@ -1486,8 +1547,6 @@ function SourcesEditor({
             usedTypes={usedByOthers}
             usedPlaylistIds={usedPlaylistIds(i)}
             showWeight={showWeight}
-            showRotationIdPicker={segType === 'music' && src.type === 'playlist'}
-            musicRotations={musicRotations}
             onChange={(entry) => updateSource(i, entry)}
             onRemove={() => removeSource(i)}
             playlists={playlists}
@@ -1505,6 +1564,12 @@ function SourcesEditor({
 }
 
 // ─── Stop-set two-slot editor ────────────────────────────────────────────────
+//
+// Each slot (Campaigns, Promos) has a "Creative rotation" selector. This controls
+// how the supervisor cycles through multiple creatives within the SAME campaign or
+// promo — e.g. round-robin across spots booked for this break. It does NOT
+// determine which campaigns or promos are eligible to play in this segment; that
+// eligibility is resolved by the campaign scheduler based on booking rules.
 
 type StopSetCampaignsMode = 'none' | 'campaigns' | 'playlist';
 type StopSetPromosMode    = 'none' | 'promos' | 'playlist';
@@ -1676,7 +1741,7 @@ function StopSetSlot({
             </div>
           )}
           <div className="flex items-center gap-1.5 ml-auto">
-            <span className="text-xs text-zinc-500">Rotation</span>
+            <span className="text-xs text-zinc-500">Creative rotation</span>
             <select
               value={rotation ?? ''}
               onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
@@ -1699,15 +1764,13 @@ function getSourceLabel(type: SegmentSourceEntry['type'], segType: ClockSegmentT
 }
 
 function SourceRow({
-  source, validTypes, usedTypes, usedPlaylistIds, showWeight, showRotationIdPicker, musicRotations, onChange, onRemove, playlists, segType,
+  source, validTypes, usedTypes, usedPlaylistIds, showWeight, onChange, onRemove, playlists, segType,
 }: {
   source: SegmentSourceEntry;
   validTypes: SegmentSourceEntry['type'][];
   usedTypes: Set<SegmentSourceEntry['type']>;
   usedPlaylistIds: Set<number>;
   showWeight: boolean;
-  showRotationIdPicker: boolean;
-  musicRotations: Rotation[];
   onChange: (entry: SegmentSourceEntry) => void;
   onRemove: () => void;
   playlists: PlaylistSummary[];
@@ -1825,22 +1888,6 @@ function SourceRow({
             </div>
           )}
         </div>
-        {/* Rotation document picker (music segments only) */}
-        {showRotationIdPicker && (
-          <div className="flex items-center gap-3 px-3 pb-2.5">
-            <span className="text-xs text-zinc-500">Rotation</span>
-            <select
-              value={playlistSrc.rotation_id ?? ''}
-              onChange={(e) => onChange({ ...playlistSrc, rotation_id: e.target.value === '' ? null : Number(e.target.value) })}
-              className="flex-1 px-2 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="" className="bg-zinc-900">Default rotation</option>
-              {musicRotations.map((r) => (
-                <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
-              ))}
-            </select>
-          </div>
-        )}
       </div>
     );
   }
@@ -2035,89 +2082,35 @@ function SegmentSweeperEditor({
 
 // ─── Handover policy editor ───────────────────────────────────────────────────
 
-function HandoverEditor({
-  finish, join, overrun, supervisorConfig, onChange,
-}: {
-  finish: FinishPolicy | null;
-  join: JoinPolicy | null;
-  overrun: OverrunPolicy | null;
-  supervisorConfig: SupervisorConfig | undefined;
-  onChange: (patch: { finish_policy?: FinishPolicy | null; join_policy?: JoinPolicy | null; overrun_policy?: OverrunPolicy | null }) => void;
-}) {
-  const [open, setOpen] = useState(true);
-  return (
-    <div className="mt-3 pt-3 border-t border-zinc-700/60">
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        className="flex items-center gap-2 text-xs font-semibold text-zinc-400 uppercase tracking-wider hover:text-zinc-200 transition-colors"
-      >
-        {open ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        Handover policies
-      </button>
-      {open && (
-        <div className="mt-3 grid grid-cols-1 gap-3">
-          <PolicyRow
-            label="Finish"
-            value={finish}
-            options={FINISH_POLICIES}
-            labelsMap={FINISH_POLICY_LABELS}
-            defaultLabel={supervisorConfig ? FINISH_POLICY_LABELS[supervisorConfig.finish_policy].label : 'Finish segment'}
-            onChange={(v) => onChange({ finish_policy: v as FinishPolicy | null })}
-          />
-          <PolicyRow
-            label="Join"
-            value={join}
-            options={JOIN_POLICIES}
-            labelsMap={JOIN_POLICY_LABELS}
-            defaultLabel={supervisorConfig ? JOIN_POLICY_LABELS[supervisorConfig.join_policy].label : 'Join at top'}
-            onChange={(v) => onChange({ join_policy: v as JoinPolicy | null })}
-          />
-          <PolicyRow
-            label="Overrun"
-            value={overrun}
-            options={OVERRUN_POLICIES}
-            labelsMap={OVERRUN_POLICY_LABELS}
-            defaultLabel={supervisorConfig ? OVERRUN_POLICY_LABELS[supervisorConfig.overrun_policy].label : 'Loop from top'}
-            onChange={(v) => onChange({ overrun_policy: v as OverrunPolicy | null })}
-          />
-        </div>
-      )}
-    </div>
-  );
-}
-
-function PolicyRow<T extends string>({
-  label, value, options, labelsMap, defaultLabel, onChange,
-}: {
-  label: string;
-  value: T | null;
-  options: readonly T[];
-  labelsMap: Record<T, { label: string; desc: string }>;
-  defaultLabel: string;
-  onChange: (v: T | null) => void;
-}) {
-  const selectValue = value ?? '';
-  const desc = value ? labelsMap[value].desc : null;
-  return (
-    <div className="flex items-start gap-3">
-      <span className="text-xs text-zinc-500 w-16 pt-1.5">{label}</span>
-      <select
-        value={selectValue}
-        onChange={(e) => onChange((e.target.value === '' ? null : e.target.value as T))}
-        className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-200 focus:outline-none focus:border-indigo-500"
-      >
-        <option value="" className="bg-zinc-900 text-zinc-400">Station default ({defaultLabel})</option>
-        {options.map((o) => (
-          <option key={o} value={o} className="bg-zinc-900">{labelsMap[o].label}</option>
-        ))}
-      </select>
-      {desc && <span className="text-[11px] text-zinc-500 flex-1">{desc}</span>}
-    </div>
-  );
-}
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
+
+function ClockActions({ dirty, isPending, confirmDelete, onSave, onDiscard, onDeleteRequest, onDeleteConfirm, onDeleteCancel, row }: {
+  dirty: boolean; isPending: boolean; confirmDelete: boolean; row?: boolean;
+  onSave: () => void; onDiscard: () => void;
+  onDeleteRequest: () => void; onDeleteConfirm: () => void; onDeleteCancel: () => void;
+}) {
+  if (dirty) return (
+    <div className={`flex ${row ? 'flex-row' : 'flex-col'} items-center gap-2`}>
+      <button onClick={onSave} disabled={isPending} className="px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50">
+        {isPending ? 'Saving…' : 'Save'}
+      </button>
+      <button onClick={onDiscard} className="px-3 py-1.5 text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors">Discard</button>
+    </div>
+  );
+  if (confirmDelete) return (
+    <div className={`flex ${row ? 'flex-row' : 'flex-col'} items-center gap-1.5`}>
+      <span className="text-xs text-zinc-400">Delete?</span>
+      <button onClick={onDeleteConfirm} className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Yes</button>
+      <button onClick={onDeleteCancel} className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
+    </div>
+  );
+  return (
+    <button onClick={onDeleteRequest} className="p-1.5 text-zinc-600 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors" title="Delete clock">
+      <Trash2 className="w-3.5 h-3.5" />
+    </button>
+  );
+}
 
 function Field({ label, hint, className, children }: { label: string; hint?: string; className?: string; children: React.ReactNode }) {
   return (
