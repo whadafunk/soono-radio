@@ -1,15 +1,15 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { Plus, Trash2, Mic2, X, CalendarClock } from 'lucide-react';
+import { Plus, Trash2, Mic2, X, CalendarClock, ChevronUp, ChevronDown } from 'lucide-react';
 import {
   ShowCreate, ShowCreateSchema,
   ShowColor, SHOW_COLORS,
   TemplateEntry,
 } from '@radio/shared';
-import { fetchShows, createShow, deleteShow, fetchTemplateEntries } from '../../api';
+import { fetchShows, createShow, deleteShow, fetchTemplateEntries, fetchClocks } from '../../api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -50,16 +50,33 @@ function getNextOccurrence(entries: TemplateEntry[]): string | null {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+type SortCol = 'name' | 'host' | 'clock' | 'duration' | 'next';
+
+function formatDuration(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h`;
+  return `${h}h ${m}m`;
+}
+
 export function ShowsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [sortCol, setSortCol] = useState<SortCol>('name');
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
   const showToast = (type: 'success' | 'error', message: string) => {
     setToast({ type, message });
     setTimeout(() => setToast(null), 3000);
+  };
+
+  const handleSort = (col: SortCol) => {
+    if (col === sortCol) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
   };
 
   const { data: shows = [], isLoading } = useQuery({ queryKey: ['shows'], queryFn: fetchShows });
@@ -67,6 +84,7 @@ export function ShowsPage() {
     queryKey: ['template-entries'],
     queryFn: fetchTemplateEntries,
   });
+  const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
 
   const createMutation = useMutation({
     mutationFn: (data: ShowCreate) => createShow(data),
@@ -88,6 +106,47 @@ export function ShowsPage() {
     },
     onError: (err: Error) => showToast('error', err.message),
   });
+
+  const clockById = useMemo(() => new Map(clocks.map((c) => [c.id, c.name])), [clocks]);
+
+  const rows = useMemo(() => {
+    const enriched = shows.map((show) => {
+      const showEntries = templateEntries.filter((e) => e.show_id === show.id);
+      const next = getNextOccurrence(showEntries);
+      const clockName = show.default_clock_id != null ? (clockById.get(show.default_clock_id) ?? null) : null;
+      return { show, showEntries, next, clockName };
+    });
+
+    const cmp = (a: typeof enriched[0], b: typeof enriched[0]): number => {
+      let v = 0;
+      if (sortCol === 'name')     v = a.show.name.localeCompare(b.show.name);
+      if (sortCol === 'host')     v = (a.show.host ?? '').localeCompare(b.show.host ?? '');
+      if (sortCol === 'clock')    v = (a.clockName ?? '').localeCompare(b.clockName ?? '');
+      if (sortCol === 'duration') v = a.show.duration_minutes - b.show.duration_minutes;
+      if (sortCol === 'next') {
+        const toKey = (r: typeof enriched[0]) => r.next ?? 'ZZZ';
+        v = toKey(a).localeCompare(toKey(b));
+      }
+      return sortDir === 'asc' ? v : -v;
+    };
+    return [...enriched].sort(cmp);
+  }, [shows, templateEntries, clockById, sortCol, sortDir]);
+
+  const SortTh = ({ col, children }: { col: SortCol; children: React.ReactNode }) => {
+    const active = sortCol === col;
+    const Icon = active && sortDir === 'desc' ? ChevronDown : ChevronUp;
+    return (
+      <th
+        className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800 cursor-pointer select-none hover:text-zinc-200 transition-colors"
+        onClick={() => handleSort(col)}
+      >
+        <span className="flex items-center gap-1">
+          {children}
+          <Icon className={`w-3 h-3 flex-shrink-0 ${active ? 'text-indigo-400' : 'text-zinc-600'}`} />
+        </span>
+      </th>
+    );
+  };
 
   return (
     <div className="space-y-4">
@@ -128,18 +187,18 @@ export function ShowsPage() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-zinc-800">
-                <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800 w-10"></th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Name</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Host</th>
-                <th className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800">Next</th>
-                <th className="px-4 py-3 w-28"></th>
+                <th className="px-4 py-3 border-r border-zinc-800 w-10"></th>
+                <SortTh col="name">Name</SortTh>
+                <SortTh col="host">Host</SortTh>
+                <SortTh col="clock">Clock</SortTh>
+                <SortTh col="duration">Duration</SortTh>
+                <SortTh col="next">Next</SortTh>
+                <th className="px-4 py-3 w-24"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
-              {shows.map((show) => {
+              {rows.map(({ show, showEntries, next, clockName }) => {
                 const cm = COLOR_META[show.color];
-                const showEntries = templateEntries.filter((e) => e.show_id === show.id);
-                const next = getNextOccurrence(showEntries);
                 return (
                   <tr
                     key={show.id}
@@ -157,6 +216,15 @@ export function ShowsPage() {
                         ? <span className="text-zinc-300 text-sm">{show.host}</span>
                         : <span className="text-zinc-500 italic text-sm">—</span>
                       }
+                    </td>
+                    <td className="px-4 py-3">
+                      {clockName
+                        ? <span className="text-zinc-300 text-sm">{clockName}</span>
+                        : <span className="text-zinc-500 italic text-sm">—</span>
+                      }
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-zinc-300 text-sm">{formatDuration(show.duration_minutes)}</span>
                     </td>
                     <td className="px-4 py-3">
                       {next ? (

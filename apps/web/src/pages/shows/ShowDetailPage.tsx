@@ -267,7 +267,7 @@ export function ShowDetailPage() {
           </Field>
 
           {/* Clock */}
-          <Field label="Default Clock">
+          <Field label="Assigned Clock">
             <Controller
               control={control}
               name="default_clock_id"
