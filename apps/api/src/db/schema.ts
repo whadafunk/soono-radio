@@ -521,6 +521,8 @@ export const templateEntries = sqliteTable(
     time_end: text('time_end').notNull(),          // "10:00"
     show_id: integer('show_id'),
     clock_id: integer('clock_id'),
+    orphaned_show_name: text('orphaned_show_name'),
+    orphaned_clock_name: text('orphaned_clock_name'),
   },
   (t) => ({
     dowIdx: index('template_entries_dow_idx').on(t.day_of_week),
@@ -559,6 +561,8 @@ export const calendarEntries = sqliteTable(
     time_end: text('time_end').notNull(),
     show_id: integer('show_id'),
     clock_id: integer('clock_id'),
+    orphaned_show_name: text('orphaned_show_name'),
+    orphaned_clock_name: text('orphaned_clock_name'),
     is_override: integer('is_override', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => ({

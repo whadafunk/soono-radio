@@ -473,6 +473,8 @@ export const TemplateEntrySchema = z.object({
   time_end: z.string(),
   show_id: z.number().int().nullable(),
   clock_id: z.number().int().nullable(),
+  orphaned_show_name: z.string().nullable().optional(),
+  orphaned_clock_name: z.string().nullable().optional(),
 });
 export type TemplateEntry = z.infer<typeof TemplateEntrySchema>;
 
@@ -502,6 +504,8 @@ export const CalendarEntrySchema = z.object({
   time_end: z.string(),
   show_id: z.number().int().nullable(),
   clock_id: z.number().int().nullable(),
+  orphaned_show_name: z.string().nullable().optional(),
+  orphaned_clock_name: z.string().nullable().optional(),
   is_override: z.boolean(),
 });
 export type CalendarEntry = z.infer<typeof CalendarEntrySchema>;

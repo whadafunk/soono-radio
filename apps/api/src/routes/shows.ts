@@ -7,7 +7,7 @@ import {
   ShowPlaylistPatchSchema,
 } from '@radio/shared';
 import { db } from '../db/index.js';
-import { shows, showPlaylists, playlists } from '../db/schema.js';
+import { shows, showPlaylists, playlists, templateEntries, calendarEntries } from '../db/schema.js';
 
 export async function showRoutes(fastify: FastifyInstance) {
   fastify.get('/shows', async (_request, reply) => {
@@ -51,9 +51,11 @@ export async function showRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/shows/:id', async (request, reply) => {
     const id = Number(request.params.id);
-    // showPlaylists has a cascading FK; delete it first.
-    // Calendar/template entries have no FK on show_id, so their stale show_id
-    // is preserved for orphaned-slot detection in the UI.
+    const [show] = await db.select({ name: shows.name }).from(shows).where(eq(shows.id, id));
+    if (show) {
+      await db.update(templateEntries).set({ orphaned_show_name: show.name }).where(eq(templateEntries.show_id, id));
+      await db.update(calendarEntries).set({ orphaned_show_name: show.name }).where(eq(calendarEntries.show_id, id));
+    }
     await db.delete(showPlaylists).where(eq(showPlaylists.show_id, id));
     await db.delete(shows).where(eq(shows.id, id));
     return reply.status(204).send();
