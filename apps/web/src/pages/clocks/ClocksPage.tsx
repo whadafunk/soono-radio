@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams, Link } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -229,7 +229,7 @@ function makeDefaultSource(type: SegmentSourceEntry['type']): SegmentSourceEntry
     case 'show_jingles':  return { type, weight: 1 };
     case 'show_beds':     return { type, weight: 1 };
     case 'promos':        return { type, weight: 1 };
-    case 'playlist':      return { type, playlist_id: 1, weight: 1, hot_play: false, heavy_rotation: false };
+    case 'playlist':      return { type, playlist_id: 0, weight: 1, hot_play: false, heavy_rotation: false };
     case 'campaigns':     return { type };
     case 'live':          return { type };
     case 'recording':     return { type };
@@ -283,6 +283,7 @@ export function ClocksPage() {
   const [newName, setNewName] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [headerOpen, setHeaderOpen] = useState(true);
+  const [listConfirmDeleteId, setListConfirmDeleteId] = useState<number | null>(null);
 
   const dirty = clockDirty || segsDirty;
 
@@ -313,10 +314,12 @@ export function ClocksPage() {
       if (draftClock && draftClock.show_id === null) {
         const offending = draftSegs
           .map((s, i) => ({ s, i }))
-          .filter(({ s }) => s.type === 'music' && !s.sources.some((src) => src.type === 'playlist'));
+          .filter(({ s }) => s.type === 'music' && !s.sources.some(
+            (src) => src.type === 'playlist' && (src as Extract<typeof src, { type: 'playlist' }>).playlist_id > 0,
+          ));
         if (offending.length > 0) {
           throw new Error(
-            `Unassigned clock requires a playlist source on every music segment (segment${
+            `Unassigned clock requires a specific playlist source (with a playlist selected) on every music segment (segment${
               offending.length > 1 ? 's' : ''
             } #${offending.map(({ i }) => i + 1).join(', #')})`,
           );
@@ -372,6 +375,7 @@ export function ClocksPage() {
       setSegsDirty(false);
       setConfirmDelete(false);
       setExpandedId(null);
+      setListConfirmDeleteId(null);
       showToast('success', 'Clock deleted');
     },
     onError: (e) => showToast('error', (e as Error).message),
@@ -483,11 +487,12 @@ export function ClocksPage() {
 
       <div className="flex-1 min-h-0 flex gap-4">
         {/* Left: clock list */}
-        <div className="w-56 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
-            <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Clocks</span>
-            <button onClick={() => setCreatingNew(true)} className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition-colors" title="New clock">
+        <div className="w-64 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          <div className="px-4 py-4 border-b border-zinc-700 bg-zinc-800/50 flex items-center justify-between">
+            <span className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Clocks</span>
+            <button onClick={() => setCreatingNew(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors">
               <Plus className="w-3.5 h-3.5" />
+              New Clock
             </button>
           </div>
 
@@ -526,24 +531,49 @@ export function ClocksPage() {
               const secs = totalSeconds(segs);
               const isSelected = clock.id === selectedId;
               const assignedShow = clock.show_id != null ? allShows.find((s) => s.id === clock.show_id) : null;
+              const confirmingDelete = listConfirmDeleteId === clock.id;
               return (
-                <button key={clock.id} onClick={() => handleClockClick(clock)} className={`w-full text-left px-4 py-3 border-b border-zinc-800/60 transition-colors ${isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'}`}>
-                  <div className="flex items-center gap-2">
-                    <Clock className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
-                    <span className="text-sm font-medium text-white truncate">{clock.name}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 ml-5 items-center">
-                    <span className={`text-[10px] px-1 py-0.5 rounded ${clock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                      {clock.used ? 'Used' : 'Not used'}
-                    </span>
-                    <span className="text-[10px] text-zinc-500 truncate">
-                      {assignedShow ? assignedShow.name : 'Unassigned'}
-                    </span>
-                    <span className="basis-full" />
-                    <span className={`text-xs ${secs > 3600 ? 'text-red-400' : 'text-zinc-400'}`}>{fmtDuration(secs)}</span>
-                    <span className="text-xs text-zinc-400">· {segs.length} seg</span>
-                  </div>
-                </button>
+                <div key={clock.id} className={`group relative border-b border-zinc-800/60 transition-colors ${isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'}`}>
+                  <button onClick={() => handleClockClick(clock)} className="w-full text-left px-4 py-3">
+                    <div className="flex items-center gap-2 pr-6">
+                      <Clock className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
+                      <span className="text-sm font-medium text-white truncate">{clock.name}</span>
+                    </div>
+                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 ml-5 items-center">
+                      <span className={`text-[10px] px-1 py-0.5 rounded ${clock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                        {clock.used ? 'Used' : 'Not used'}
+                      </span>
+                      <span className="text-[10px] text-zinc-500 truncate">
+                        {assignedShow ? assignedShow.name : 'Unassigned'}
+                      </span>
+                      <span className="basis-full" />
+                      <span className={`text-xs ${secs > 3600 ? 'text-red-400' : 'text-zinc-400'}`}>{fmtDuration(secs)}</span>
+                      <span className="text-xs text-zinc-400">· {segs.length} seg</span>
+                    </div>
+                  </button>
+                  {confirmingDelete ? (
+                    <div className="px-4 pb-3 flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                      <span className="text-xs text-zinc-400 flex-1">Delete?</span>
+                      <button
+                        onClick={() => deleteMutation.mutate(clock.id)}
+                        disabled={deleteMutation.isPending}
+                        className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
+                      >Yes</button>
+                      <button
+                        onClick={() => setListConfirmDeleteId(null)}
+                        className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
+                      >Cancel</button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={(e) => { e.stopPropagation(); setListConfirmDeleteId(clock.id); }}
+                      className="absolute top-2.5 right-2.5 p-1 text-zinc-600 hover:text-red-400 hover:bg-red-900/20 rounded opacity-0 group-hover:opacity-100 transition-opacity"
+                      title="Delete clock"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
               );
             })}
           </div>
@@ -1159,28 +1189,37 @@ function SegmentDrawer({
             {/* Music rotation — one rotation document for ALL playlists in this segment collectively.
                 Shown at segment level; the rotation_id is written to every playlist source on change. */}
             {draft.type === 'music' && draft.sources.some((s) => s.type === 'playlist') && (
-              <Field label="Music rotation">
-                <select
-                  value={(() => {
-                    const pl = draft.sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined;
-                    return pl?.rotation_id ?? '';
-                  })()}
-                  onChange={(e) => {
-                    const rid = e.target.value === '' ? null : Number(e.target.value);
-                    update({
-                      sources: draft.sources.map((s) =>
-                        s.type === 'playlist' ? { ...s, rotation_id: rid } : s
-                      ),
-                    });
-                  }}
-                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="" className="bg-zinc-900">Default rotation</option>
-                  {musicRotations.map((r) => (
-                    <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
-                  ))}
-                </select>
-              </Field>
+              musicRotations.length > 0 ? (
+                <Field label="Music rotation">
+                  <select
+                    value={(() => {
+                      const pl = draft.sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined;
+                      return pl?.rotation_id ?? musicRotations[0]?.id ?? '';
+                    })()}
+                    onChange={(e) => {
+                      const rid = e.target.value === '' ? null : Number(e.target.value);
+                      update({
+                        sources: draft.sources.map((s) =>
+                          s.type === 'playlist' ? { ...s, rotation_id: rid } : s
+                        ),
+                      });
+                    }}
+                    className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+                  >
+                    {musicRotations.map((r) => (
+                      <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
+                    ))}
+                  </select>
+                </Field>
+              ) : (
+                <p className="text-xs text-zinc-500">
+                  No rotation documents —{' '}
+                  <Link to="/rotations" className="text-indigo-400 hover:text-indigo-300 underline-offset-2 hover:underline">
+                    create one in Rotations
+                  </Link>{' '}
+                  to control play order.
+                </p>
+              )
             )}
 
             {/* Live segments: bed rotation visible when at least one bed source (show_beds or playlist) is
@@ -1509,7 +1548,7 @@ function SourcesEditor({
       );
       const candidates = cats.length ? playlists.filter((p) => cats.includes(p.type)) : playlists;
       const first = candidates.find((p) => !usedIds.has(p.id)) ?? candidates[0];
-      onChange([...sources, { type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false, rotation_id: null }]);
+      onChange([...sources, { type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false, rotation_id: null }]);
     } else {
       onChange([...sources, makeDefaultSource(pick)]);
     }
@@ -1525,9 +1564,11 @@ function SourcesEditor({
   // Live segments allow only one bed playlist (show_beds counts separately as a single-use type).
   const bedPlaylistCapped = (segType === 'live' || segType === 'live_audience') &&
     sources.filter((s) => s.type === 'playlist').length >= 1;
-  const canAdd = !bedPlaylistCapped && (
-    validTypes.some((t) => REPEATABLE.has(t)) || validTypes.some((t) => !usedSingles.has(t))
-  );
+  const cats = playlistCategoriesForSegType(segType);
+  const eligiblePlaylists = cats.length ? playlists.filter((p) => cats.includes(p.type)) : playlists;
+  const canAddPlaylist = !bedPlaylistCapped && validTypes.includes('playlist') && eligiblePlaylists.length > 0;
+  const canAddOther = validTypes.some((t) => !REPEATABLE.has(t) && !usedSingles.has(t));
+  const canAdd = canAddPlaylist || canAddOther;
 
   return (
     <div className="space-y-2">
@@ -1815,11 +1856,11 @@ function SourceRow({
     if (val === 'playlist_promo') {
       setStopSetVariant('playlist_promo');
       const first = playlists.find(p => p.type === 'promo');
-      onChange({ type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false });
+      onChange({ type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false });
     } else if (val === 'playlist_spot') {
       setStopSetVariant('playlist_spot');
       const first = playlists.find(p => p.type === 'spot');
-      onChange({ type: 'playlist', playlist_id: first?.id ?? 1, weight: 1, hot_play: false, heavy_rotation: false });
+      onChange({ type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false });
     } else {
       onChange(makeDefaultSource(val as SegmentSourceEntry['type']));
     }
@@ -1846,6 +1887,7 @@ function SourceRow({
     const filteredPlaylists = playlists.filter(
       (p) => p.id === playlistSrc.playlist_id || !usedPlaylistIds.has(p.id),
     );
+    const noPlaylistSelected = !playlistSrc.playlist_id;
     return (
       <div className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
         {/* Header row: type selector + remove */}
@@ -1863,13 +1905,18 @@ function SourceRow({
         </div>
         {/* Fields row: playlist picker + optional weight */}
         <div className="flex items-center gap-4 px-3 py-2">
-          <div className="flex-1 min-w-0">
+          <div className="flex-1 min-w-0 space-y-1">
             <PlaylistDropdown
               value={playlistSrc.playlist_id || null}
-              onChange={(v) => onChange({ ...playlistSrc, playlist_id: v ?? 1 })}
+              onChange={(v) => onChange({ ...playlistSrc, playlist_id: v ?? 0 })}
               playlists={filteredPlaylists}
               categories={playlistCategories}
+              invalid={noPlaylistSelected}
+              allowNone={false}
             />
+            {noPlaylistSelected && (
+              <p className="text-xs text-red-400">A playlist must be selected.</p>
+            )}
           </div>
           {showWeight && (
             <div className="flex items-center gap-1.5 flex-shrink-0">
@@ -2138,11 +2185,13 @@ function PlaylistIdInput({ value, onChange }: { value: number | null; onChange: 
   );
 }
 
-function PlaylistDropdown({ value, onChange, playlists, categories }: {
+function PlaylistDropdown({ value, onChange, playlists, categories, invalid, allowNone = true }: {
   value: number | null;
   onChange: (v: number | null) => void;
   playlists: PlaylistSummary[];
   categories?: string[];
+  invalid?: boolean;
+  allowNone?: boolean;
 }) {
   const filtered = categories?.length ? playlists.filter(p => categories.includes(p.type)) : playlists;
   return (
@@ -2152,9 +2201,12 @@ function PlaylistDropdown({ value, onChange, playlists, categories }: {
         const v = parseInt(e.target.value, 10);
         onChange(isNaN(v) || v <= 0 ? null : v);
       }}
-      className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+      className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${invalid ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-indigo-500'}`}
     >
-      <option value="" className="bg-zinc-900 text-zinc-500">— None —</option>
+      {allowNone && <option value="" className="bg-zinc-900 text-zinc-500">— None —</option>}
+      {!allowNone && filtered.length === 0 && (
+        <option value="" disabled className="bg-zinc-900 text-zinc-500">No playlists available</option>
+      )}
       {filtered.map(p => (
         <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
       ))}
