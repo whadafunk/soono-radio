@@ -47,6 +47,8 @@ export type DynamicRules = z.infer<typeof DynamicRulesSchema>;
 
 // ─────────────────────────────────────────────────────────────────────────────
 
+export const PLAYLIST_DEFAULT_TYPES = ['music', 'jingle', 'bed'] as const satisfies readonly PlaylistType[];
+
 export const PlaylistSchema = z.object({
   id: z.number().int(),
   name: z.string(),
@@ -54,6 +56,7 @@ export const PlaylistSchema = z.object({
   type: z.enum(PLAYLIST_TYPES),
   kind: z.enum(PLAYLIST_KINDS),
   rules: DynamicRulesSchema.nullable(),
+  is_default: z.boolean().optional().default(false),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
@@ -65,6 +68,7 @@ export const PlaylistCreateSchema = z.object({
   type: z.enum(PLAYLIST_TYPES),
   kind: z.enum(PLAYLIST_KINDS).default('static'),
   rules: DynamicRulesSchema.nullable().optional(),
+  is_default: z.boolean().optional(),
 });
 export type PlaylistCreate = z.infer<typeof PlaylistCreateSchema>;
 
@@ -72,6 +76,7 @@ export const PlaylistPatchSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
   rules: DynamicRulesSchema.nullable().optional(),
+  is_default: z.boolean().optional(),
 });
 export type PlaylistPatch = z.infer<typeof PlaylistPatchSchema>;
 
@@ -184,6 +189,7 @@ export const RotationSchema = z.object({
   type: z.enum(ROTATION_TYPES),
   song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()),
+  is_default: z.boolean().optional().default(false),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
@@ -195,6 +201,7 @@ export const RotationCreateSchema = z.object({
   type: z.enum(ROTATION_TYPES),
   song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()).default({}),
+  is_default: z.boolean().optional(),
 });
 export type RotationCreate = z.infer<typeof RotationCreateSchema>;
 
@@ -204,6 +211,7 @@ export const RotationPatchSchema = z.object({
   type: z.enum(ROTATION_TYPES).optional(),
   song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()).optional(),
+  is_default: z.boolean().optional(),
 });
 export type RotationPatch = z.infer<typeof RotationPatchSchema>;
 

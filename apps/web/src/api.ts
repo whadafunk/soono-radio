@@ -549,6 +549,7 @@ export interface PlaylistSummary {
   name: string;
   type: string;
   kind: string;
+  is_default?: boolean;
 }
 
 export async function fetchPlaylists(): Promise<PlaylistSummary[]> {

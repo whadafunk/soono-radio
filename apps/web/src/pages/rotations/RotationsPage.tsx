@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Check, X, Trash2, Repeat, Music, Megaphone } from 'lucide-react';
+import { Plus, Check, X, Trash2, Music, Megaphone } from 'lucide-react';
 import { Rotation, RotationType, RotationKind, SongPosition, ROTATION_TYPES, ROTATION_KINDS, SONG_POSITIONS } from '@radio/shared';
 import { fetchRotations, createRotation, updateRotation, deleteRotation } from '../../api';
 
@@ -113,6 +113,12 @@ export function RotationsPage() {
       setConfirmDelete(false);
       showToast('success', 'Rotation deleted');
     },
+    onError: (e) => showToast('error', (e as Error).message),
+  });
+
+  const setDefaultMutation = useMutation({
+    mutationFn: (id: number) => updateRotation(id, { is_default: true }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rotations'] }),
     onError: (e) => showToast('error', (e as Error).message),
   });
 
@@ -269,13 +275,26 @@ export function RotationsPage() {
                   <button
                     key={r.id}
                     onClick={() => selectRotation(r)}
-                    className={`w-full text-left px-4 py-3 border-b border-zinc-800/60 transition-colors ${
+                    className={`group w-full text-left px-4 py-3 border-b border-zinc-800/60 transition-colors ${
                       isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'
                     }`}
                   >
                     <div className="flex items-center gap-2">
                       <KindIcon className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
-                      <span className="text-sm font-medium text-white truncate">{r.name}</span>
+                      <span className="text-sm font-medium text-white truncate flex-1">{r.name}</span>
+                      {r.is_default ? (
+                        <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
+                          default
+                        </span>
+                      ) : (
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setDefaultMutation.mutate(r.id); }}
+                          className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded text-zinc-600 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                          title="Set as default"
+                        >
+                          default
+                        </button>
+                      )}
                     </div>
                     <div className="mt-1.5 ml-5 flex gap-1.5">
                       <span className="text-[10px] uppercase tracking-wider text-zinc-500">{KIND_META[kind].label}</span>
@@ -300,6 +319,19 @@ export function RotationsPage() {
                 onChange={(e) => updateDraft((d) => ({ ...d, name: e.target.value }))}
                 className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
               />
+              {rotations.find((r) => r.id === draft.id)?.is_default ? (
+                <span className="flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
+                  Default
+                </span>
+              ) : (
+                <button
+                  onClick={() => setDefaultMutation.mutate(draft.id)}
+                  disabled={setDefaultMutation.isPending}
+                  className="flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full text-zinc-500 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+                >
+                  Set as default
+                </button>
+              )}
               <div className="flex items-center gap-2 flex-shrink-0">
                 {dirty && (
                   <>

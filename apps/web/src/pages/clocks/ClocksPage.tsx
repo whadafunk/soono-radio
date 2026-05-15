@@ -1021,7 +1021,7 @@ function SortableSegmentItem({
 
         <span className="flex-1 min-w-0 text-sm text-zinc-200 truncate">{segment.name}</span>
 
-        <span className={`flex-shrink-0 text-xs px-1.5 py-0.5 rounded ${segment.start_policy.type === 'hard' ? 'bg-red-900/20 text-red-400' : 'bg-zinc-800 text-zinc-400'}`}>
+        <span className={`flex-shrink-0 text-xs px-1.5 py-0.5 rounded ${segment.start_policy.type === 'hard' ? 'bg-red-900/20 text-red-400' : 'bg-green-900/20 text-green-400'}`}>
           {segment.start_policy.type === 'hard' ? 'hard' : 'soft'} start
         </span>
 
@@ -1207,7 +1207,7 @@ function SegmentDrawer({
                     className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
                   >
                     {musicRotations.map((r) => (
-                      <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
+                      <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}{r.is_default ? ' (default)' : ''}</option>
                     ))}
                   </select>
                 </Field>
@@ -2104,7 +2104,7 @@ function SegmentSweeperEditor({
                   >
                     <option value="" className="bg-zinc-900">Default rotation</option>
                     {sweeperRotations.map((r) => (
-                      <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}</option>
+                      <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}{r.is_default ? ' (default)' : ''}</option>
                     ))}
                   </select>
                   <button type="button" onClick={() => removeSource(i)}
@@ -2208,7 +2208,7 @@ function PlaylistDropdown({ value, onChange, playlists, categories, invalid, all
         <option value="" disabled className="bg-zinc-900 text-zinc-500">No playlists available</option>
       )}
       {filtered.map(p => (
-        <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
+        <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}{p.is_default ? ' (default)' : ''}</option>
       ))}
     </select>
   );

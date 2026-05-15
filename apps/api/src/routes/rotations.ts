@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 import { RotationCreateSchema, RotationPatchSchema } from '@radio/shared';
 import { db } from '../db/index.js';
 import { rotations } from '../db/schema.js';
@@ -13,12 +13,17 @@ export async function rotationRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/rotations', async (request, reply) => {
     const parsed = RotationCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const kind = parsed.data.kind ?? 'music';
+    if (parsed.data.is_default) {
+      await db.update(rotations).set({ is_default: false }).where(eq(rotations.kind, kind));
+    }
     const [rotation] = await db.insert(rotations).values({
       name: parsed.data.name,
-      kind: parsed.data.kind ?? 'music',
+      kind,
       type: parsed.data.type,
       song_position: parsed.data.song_position ?? null,
       params: parsed.data.params ?? {},
+      is_default: parsed.data.is_default ?? false,
     }).returning();
     return reply.status(201).send(rotation);
   });
@@ -27,6 +32,12 @@ export async function rotationRoutes(fastify: FastifyInstance) {
     const id = Number(request.params.id);
     const parsed = RotationPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.is_default) {
+      const [existing] = await db.select({ kind: rotations.kind }).from(rotations).where(eq(rotations.id, id));
+      if (!existing) return reply.status(404).send({ error: 'Rotation not found' });
+      const kind = parsed.data.kind ?? existing.kind;
+      await db.update(rotations).set({ is_default: false }).where(and(eq(rotations.kind, kind), ne(rotations.id, id)));
+    }
     const [updated] = await db.update(rotations)
       .set({ ...parsed.data, updated_at: sql`(unixepoch())` })
       .where(eq(rotations.id, id))

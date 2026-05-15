@@ -173,6 +173,8 @@ export const playlists = sqliteTable(
     kind: text('kind', { enum: PLAYLIST_KINDS }).notNull().default('static'),
     // JSON rules for dynamic playlists: { match: 'all'|'any', conditions: [...] }
     rules: text('rules', { mode: 'json' }),
+    // One default per type (music/jingle/bed only — not promo/spot)
+    is_default: integer('is_default', { mode: 'boolean' }).notNull().default(false),
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -256,6 +258,8 @@ export const rotations = sqliteTable('rotations', {
   // Type-specific params: separation_minutes, artist_separation_minutes,
   // pool_size, order_by, distribution, etc.
   params: text('params', { mode: 'json' }).notNull().default('{}'),
+  // One default per kind (music/sweeper)
+  is_default: integer('is_default', { mode: 'boolean' }).notNull().default(false),
   created_at: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),

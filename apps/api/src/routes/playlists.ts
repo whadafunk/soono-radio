@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, asc, inArray, and, or, like, gte, lte, between, sql, SQL } from 'drizzle-orm';
+import { eq, ne, asc, inArray, and, or, like, gte, lte, between, sql, SQL } from 'drizzle-orm';
 import {
   PlaylistCreateSchema,
   PlaylistPatchSchema,
@@ -8,11 +8,15 @@ import {
   PlaylistTracksReorderSchema,
   DynamicRulesSchema,
   MediaTagsUpdateSchema,
+  PLAYLIST_DEFAULT_TYPES,
   type DynamicRuleCondition,
   type DynamicRules,
+  type PlaylistType,
 } from '@radio/shared';
 import { db } from '../db/index.js';
 import { playlists, playlistMedia, media, mediaTags, MEDIA_CATEGORIES } from '../db/schema.js';
+
+const DEFAULT_ELIGIBLE = new Set<PlaylistType>(PLAYLIST_DEFAULT_TYPES);
 
 // ── Dynamic rule → SQL ────────────────────────────────────────────────────────
 
@@ -105,13 +109,17 @@ export async function playlistRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/playlists', async (request, reply) => {
     const parsed = PlaylistCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
-    const { name, description, type, kind, rules } = parsed.data;
+    const { name, description, type, kind, rules, is_default } = parsed.data;
+    if (is_default && DEFAULT_ELIGIBLE.has(type)) {
+      await db.update(playlists).set({ is_default: false }).where(eq(playlists.type, type));
+    }
     const [row] = await db.insert(playlists).values({
       name,
       description: description ?? null,
       type,
       kind,
       rules: kind === 'dynamic' ? (rules ?? { match: 'all', conditions: [] }) : null,
+      is_default: is_default && DEFAULT_ELIGIBLE.has(type) ? true : false,
     }).returning();
     return reply.status(201).send(row);
   });
@@ -127,8 +135,18 @@ export async function playlistRoutes(fastify: FastifyInstance) {
     const id = Number(request.params.id);
     const parsed = PlaylistPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const patch = { ...parsed.data };
+    if (patch.is_default) {
+      const [existing] = await db.select({ type: playlists.type }).from(playlists).where(eq(playlists.id, id));
+      if (!existing) return reply.status(404).send({ error: 'Playlist not found' });
+      if (DEFAULT_ELIGIBLE.has(existing.type)) {
+        await db.update(playlists).set({ is_default: false }).where(and(eq(playlists.type, existing.type), ne(playlists.id, id)));
+      } else {
+        patch.is_default = false;
+      }
+    }
     const [updated] = await db.update(playlists)
-      .set({ ...parsed.data, updated_at: sql`(unixepoch())` })
+      .set({ ...patch, updated_at: sql`(unixepoch())` })
       .where(eq(playlists.id, id))
       .returning();
     if (!updated) return reply.status(404).send({ error: 'Playlist not found' });

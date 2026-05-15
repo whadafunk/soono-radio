@@ -20,11 +20,14 @@ import {
 } from 'lucide-react';
 import {
   PLAYLIST_TYPES,
+  PLAYLIST_DEFAULT_TYPES,
   DYNAMIC_RULE_FIELDS,
   type Playlist, type PlaylistCreate,
   type DynamicRules, type DynamicRuleCondition, type DynamicRuleField, type DynamicRuleOp,
   type PlaylistPreview, type MoodConditionValue,
 } from '@radio/shared';
+
+const DEFAULT_ELIGIBLE_TYPES = new Set<string>(PLAYLIST_DEFAULT_TYPES);
 
 // ─── API base ─────────────────────────────────────────────────────────────────
 
@@ -345,6 +348,12 @@ export function PlaylistsPage() {
     onError: (e) => showToast('error', (e as Error).message),
   });
 
+  const setDefaultMutation = useMutation({
+    mutationFn: (id: number) => apiPatch<Playlist>(`/playlists/${id}`, { is_default: true }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playlists'] }),
+    onError: (e) => showToast('error', (e as Error).message),
+  });
+
   const selectedPlaylist = playlists.find((p) => p.id === selectedId) ?? null;
 
   return (
@@ -404,11 +413,12 @@ export function PlaylistsPage() {
                     </div>
                     {group.map((pl) => {
                       const isSelected = pl.id === selectedId;
+                      const canBeDefault = DEFAULT_ELIGIBLE_TYPES.has(pl.type);
                       return (
                         <button
                           key={pl.id}
                           onClick={() => setSelectedId(pl.id)}
-                          className={`w-full text-left px-3 py-2 border-b border-zinc-800/40 transition-colors ${
+                          className={`group w-full text-left px-3 py-2 border-b border-zinc-800/40 transition-colors ${
                             isSelected
                               ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
                               : 'hover:bg-zinc-800/50'
@@ -421,6 +431,19 @@ export function PlaylistsPage() {
                                 dynamic
                               </span>
                             )}
+                            {canBeDefault && (pl.is_default ? (
+                              <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
+                                default
+                              </span>
+                            ) : (
+                              <button
+                                onClick={(e) => { e.stopPropagation(); setDefaultMutation.mutate(pl.id); }}
+                                className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded text-zinc-600 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors opacity-0 group-hover:opacity-100"
+                                title="Set as default"
+                              >
+                                default
+                              </button>
+                            ))}
                           </div>
                         </button>
                       );
@@ -500,6 +523,12 @@ function PlaylistHeader({
     onError: (e) => showToast('error', (e as Error).message),
   });
 
+  const setDefaultMutation = useMutation({
+    mutationFn: () => apiPatch<Playlist>(`/playlists/${playlist.id}`, { is_default: true }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playlists'] }),
+    onError: (e) => showToast('error', (e as Error).message),
+  });
+
   const deleteMutation = useMutation({
     mutationFn: () => apiDelete(`/playlists/${playlist.id}`),
     onSuccess: () => {
@@ -510,6 +539,8 @@ function PlaylistHeader({
     },
     onError: (e) => showToast('error', (e as Error).message),
   });
+
+  const canBeDefault = DEFAULT_ELIGIBLE_TYPES.has(playlist.type);
 
   const commitRename = () => {
     const trimmed = draftName.trim();
@@ -551,9 +582,23 @@ function PlaylistHeader({
         }`}>
           {playlist.kind}
         </span>
+        {canBeDefault && playlist.is_default && (
+          <span className="flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
+            Default
+          </span>
+        )}
       </div>
 
       <div className="flex items-center gap-2 flex-shrink-0">
+        {canBeDefault && !playlist.is_default && !confirmDelete && (
+          <button
+            onClick={() => setDefaultMutation.mutate()}
+            disabled={setDefaultMutation.isPending}
+            className="text-xs px-2.5 py-0.5 rounded-full text-zinc-500 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+          >
+            Set as default
+          </button>
+        )}
         {confirmDelete ? (
           <>
             <span className="text-xs text-zinc-400">Delete this playlist?</span>
