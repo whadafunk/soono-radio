@@ -277,6 +277,8 @@ export async function customerRoutes(fastify: FastifyInstance) {
       advertiser_separation_spots: parsed.data.advertiser_separation_spots ?? 1,
       competing_exclusions: parsed.data.competing_exclusions ?? [],
       priority: parsed.data.priority ?? 'best_effort',
+      interval_id: parsed.data.interval_id ?? null,
+      interval_plays_per_week: parsed.data.interval_plays_per_week ?? null,
       show_id: parsed.data.show_id ?? null,
       plays_per_show: parsed.data.plays_per_show ?? null,
       notes: parsed.data.notes ?? null,

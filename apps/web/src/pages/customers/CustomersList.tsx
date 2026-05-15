@@ -25,6 +25,7 @@ import {
   CampaignPatch,
   CampaignPatchSchema,
   FIRST_IN_SLOT_MODES,
+  BroadcastInterval,
   Contact,
   ContactCreate,
   ContactCreateSchema,
@@ -63,6 +64,7 @@ import {
   updateCampaignMedia,
   fetchUsers,
   fetchShows,
+  fetchIntervals,
 } from '../../api';
 
 type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
@@ -1252,7 +1254,8 @@ function CreateCampaignForm({
   onCancel: () => void;
   isLoading: boolean;
 }) {
-  const { data: shows = [] } = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
+  const { data: shows = [] }     = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
+  const { data: intervals = [] } = useQuery<BroadcastInterval[]>({ queryKey: ['intervals'], queryFn: fetchIntervals });
 
   const { control, register, handleSubmit, formState } = useForm<CampaignCreate>({
     resolver: zodResolver(CampaignCreateSchema),
@@ -1270,8 +1273,9 @@ function CreateCampaignForm({
   });
 
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
-  const firstInSlot = useWatch({ control, name: 'first_in_slot' });
+  const firstInSlot    = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId = useWatch({ control, name: 'show_id' });
+  const selectedIntervalId = useWatch({ control, name: 'interval_id' });
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
@@ -1367,6 +1371,42 @@ function CreateCampaignForm({
                 {...register('max_sweeps_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
                 disabled={isLoading}
                 className={INPUT}
+              />
+            </div>
+          </div>
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Interval</p>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>
+                Broadcast Interval
+                <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window." />
+              </label>
+              <select
+                {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
+                disabled={isLoading}
+                className={INPUT}
+              >
+                <option value="">No interval</option>
+                {intervals.map((iv) => (
+                  <option key={iv.id} value={iv.id}>{iv.name} ({iv.default_start_time}–{iv.default_end_time})</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={LABEL + (!selectedIntervalId ? ' opacity-40' : '')}>
+                Plays / Week (interval)
+                <HelpTooltip text="How many times this campaign must air within the selected interval per week." />
+              </label>
+              <input
+                type="number"
+                min={1}
+                placeholder="—"
+                {...register('interval_plays_per_week', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+                disabled={isLoading || !selectedIntervalId}
+                className={INPUT + (!selectedIntervalId ? ' opacity-40' : '')}
               />
             </div>
           </div>
@@ -2183,7 +2223,8 @@ function CampaignEditForm({
     queryFn: () => fetchCampaignMedia(campaign.id),
   });
 
-  const { data: shows = [] } = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
+  const { data: shows = [] }     = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
+  const { data: intervals = [] } = useQuery<BroadcastInterval[]>({ queryKey: ['intervals'], queryFn: fetchIntervals });
 
   const { control, register, handleSubmit, formState } = useForm<CampaignPatch>({
     resolver: zodResolver(CampaignPatchSchema),
@@ -2195,6 +2236,8 @@ function CampaignEditForm({
       max_plays_per_day: campaign.max_plays_per_day ?? undefined,
       sweeps_per_month: campaign.sweeps_per_month ?? undefined,
       max_sweeps_per_day: campaign.max_sweeps_per_day ?? undefined,
+      interval_id: campaign.interval_id ?? undefined,
+      interval_plays_per_week: campaign.interval_plays_per_week ?? undefined,
       priority: campaign.priority,
       show_id: campaign.show_id ?? undefined,
       plays_per_show: campaign.plays_per_show ?? undefined,
@@ -2208,9 +2251,10 @@ function CampaignEditForm({
   });
 
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
-  const sweepsPerMonth = useWatch({ control, name: 'sweeps_per_month' });
-  const firstInSlot = useWatch({ control, name: 'first_in_slot' });
-  const selectedShowId = useWatch({ control, name: 'show_id' });
+  const sweepsPerMonth     = useWatch({ control, name: 'sweeps_per_month' });
+  const firstInSlot        = useWatch({ control, name: 'first_in_slot' });
+  const selectedShowId     = useWatch({ control, name: 'show_id' });
+  const selectedIntervalId = useWatch({ control, name: 'interval_id' });
   const [mediaError, setMediaError] = useState<string | null>(null);
 
   // Clear media error whenever clips change (user added/removed a clip)
@@ -2360,6 +2404,42 @@ function CampaignEditForm({
           </div>
         </div>
       )}
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Interval</p>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Broadcast Interval
+              <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window." />
+            </label>
+            <select
+              {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
+              disabled={isLoading}
+              className={INPUT}
+            >
+              <option value="">No interval</option>
+              {intervals.map((iv) => (
+                <option key={iv.id} value={iv.id}>{iv.name} ({iv.default_start_time}–{iv.default_end_time})</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={LABEL + (!selectedIntervalId ? ' opacity-40' : '')}>
+              Plays / Week (interval)
+              <HelpTooltip text="How many times this campaign must air within the selected interval per week." />
+            </label>
+            <input
+              type="number"
+              min={1}
+              placeholder="—"
+              {...register('interval_plays_per_week', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading || !selectedIntervalId}
+              className={INPUT + (!selectedIntervalId ? ' opacity-40' : '')}
+            />
+          </div>
+        </div>
+      </div>
 
       <div className="space-y-3">
         <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Placement</p>

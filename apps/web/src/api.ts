@@ -682,6 +682,12 @@ import {
   Rotation,
   RotationCreate,
   RotationPatch,
+  BroadcastInterval,
+  BroadcastIntervalCreate,
+  BroadcastIntervalPatch,
+  BroadcastIntervalSlot,
+  BroadcastIntervalSlotCreate,
+  BroadcastIntervalSlotPatch,
 } from '@radio/shared';
 
 export type CampaignMediaAdd = CampaignMediaCreate & {
@@ -811,6 +817,40 @@ export function updateCampaignMedia(
 
 export function removeCampaignMedia(id: number): Promise<void> {
   return del(`/campaign-media/${id}`);
+}
+
+// ─── Broadcast Intervals ──────────────────────────────────────────────────────
+
+export function fetchIntervals(): Promise<BroadcastInterval[]> {
+  return apiFetch('/intervals');
+}
+
+export function createInterval(data: BroadcastIntervalCreate): Promise<BroadcastInterval> {
+  return post('/intervals', data);
+}
+
+export function updateInterval(id: number, patch_: BroadcastIntervalPatch): Promise<BroadcastInterval> {
+  return patch(`/intervals/${id}`, patch_);
+}
+
+export function deleteInterval(id: number): Promise<void> {
+  return del(`/intervals/${id}`);
+}
+
+export function fetchIntervalSlots(): Promise<BroadcastIntervalSlot[]> {
+  return apiFetch('/interval-slots');
+}
+
+export function createIntervalSlot(data: BroadcastIntervalSlotCreate): Promise<BroadcastIntervalSlot> {
+  return post('/interval-slots', data);
+}
+
+export function updateIntervalSlot(id: number, patch_: BroadcastIntervalSlotPatch): Promise<BroadcastIntervalSlot> {
+  return patch(`/interval-slots/${id}`, patch_);
+}
+
+export function deleteIntervalSlot(id: number): Promise<void> {
+  return del(`/interval-slots/${id}`);
 }
 
 // ─── Contacts ────────────────────────────────────────────────────────────────

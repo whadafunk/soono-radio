@@ -658,6 +658,47 @@ export const customerContacts = sqliteTable(
 export type CustomerContact = typeof customerContacts.$inferSelect;
 export type CustomerContactInsert = typeof customerContacts.$inferInsert;
 
+// ─── Broadcast Intervals ──────────────────────────────────────────────────────
+
+export const broadcastIntervals = sqliteTable('broadcast_intervals', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  name: text('name').notNull(),
+  color: text('color').notNull().default('#818cf8'),
+  default_start_time: text('default_start_time').notNull().default('06:00'),
+  default_end_time: text('default_end_time').notNull().default('09:00'),
+  created_at: integer('created_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+  updated_at: integer('updated_at', { mode: 'timestamp' })
+    .notNull()
+    .default(sql`(unixepoch())`),
+});
+
+export type BroadcastInterval = typeof broadcastIntervals.$inferSelect;
+export type BroadcastIntervalInsert = typeof broadcastIntervals.$inferInsert;
+
+export const broadcastIntervalSlots = sqliteTable(
+  'broadcast_interval_slots',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    interval_id: integer('interval_id')
+      .notNull()
+      .references(() => broadcastIntervals.id, { onDelete: 'cascade' }),
+    day_of_week: integer('day_of_week').notNull(), // 1=Mon … 7=Sun
+    start_time: text('start_time').notNull(),
+    end_time: text('end_time').notNull(),
+    created_at: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    uniq: unique('interval_slot_day_uniq').on(t.interval_id, t.day_of_week),
+  }),
+);
+
+export type BroadcastIntervalSlot = typeof broadcastIntervalSlots.$inferSelect;
+export type BroadcastIntervalSlotInsert = typeof broadcastIntervalSlots.$inferInsert;
+
 // ─── Campaigns ────────────────────────────────────────────────────────────────
 
 export const PRIORITY_LEVELS = ['hard', 'best_effort'] as const;
@@ -692,6 +733,8 @@ export const campaigns = sqliteTable(
     priority: text('priority', { enum: PRIORITY_LEVELS }).notNull().default('best_effort'),
     show_id: integer('show_id').references(() => shows.id, { onDelete: 'set null' }),
     plays_per_show: integer('plays_per_show'),
+    interval_id: integer('interval_id').references(() => broadcastIntervals.id, { onDelete: 'set null' }),
+    interval_plays_per_week: integer('interval_plays_per_week'),
     first_in_slot: integer('first_in_slot', { mode: 'boolean' }).notNull().default(false),
     first_in_slot_mode: text('first_in_slot_mode', { enum: FIRST_IN_SLOT_MODES }),
     notes: text('notes'),

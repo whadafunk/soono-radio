@@ -148,6 +148,20 @@
       "when": 1779581000000,
       "tag": "0024_campaign_show_association",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "6",
+      "when": 1778878330161,
+      "tag": "0021_tan_yellow_claw",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "6",
+      "when": 1779581000002,
+      "tag": "0025_interval_slots",
+      "breakpoints": true
     }
   ]
 }

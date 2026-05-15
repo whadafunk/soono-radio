@@ -2,12 +2,14 @@ import { useState, useEffect, useMemo, Fragment, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle } from 'lucide-react';
-import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType } from '@radio/shared';
+import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
   createTemplateEntry, updateTemplateEntry, deleteTemplateEntry,
   fetchCalendarEntries, createCalendarEntry, updateCalendarEntry, deleteCalendarEntry,
   fetchClocks,
+  fetchIntervals, createInterval, updateInterval, deleteInterval,
+  fetchIntervalSlots, createIntervalSlot, updateIntervalSlot, deleteIntervalSlot,
 } from '../../api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -97,7 +99,7 @@ function gapAfter(startMin: number, entries: { time_start: string; time_end: str
 
 // ─── Page state types ─────────────────────────────────────────────────────────
 
-type Mode = 'template' | 'calendar';
+type Mode = 'template' | 'calendar' | 'intervals';
 
 type NewSlotState     = { dayOfWeek: number; timeStart: string; timeEnd: string; maxDurationMinutes: number | null; x: number; y: number };
 type EditSlotState    = { entry: TemplateEntry; show: Show | undefined; clock: ClockType | undefined; x: number; y: number };
@@ -342,7 +344,7 @@ export function SchedulePage() {
 
         {/* Mode toggle */}
         <div className="flex rounded-lg overflow-hidden border border-zinc-700">
-          {(['template', 'calendar'] as Mode[]).map((m) => (
+          {(['template', 'calendar', 'intervals'] as Mode[]).map((m) => (
             <button
               key={m}
               onClick={(e) => { e.stopPropagation(); setMode(m); dismiss(); }}
@@ -385,9 +387,12 @@ export function SchedulePage() {
         )}
       </div>
 
+      {/* ── Intervals tab ── */}
+      {mode === 'intervals' && <IntervalsTab />}
+
       {/* ── Grid wrapper ── */}
       {/* No overflow-hidden here — it would break sticky positioning on the header */}
-      <div className={`rounded-xl border-4 flex flex-col ${
+      {mode !== 'intervals' && <div className={`rounded-xl border-4 flex flex-col ${
         mode === 'template' ? 'border-indigo-500/50' : 'border-cyan-500/40'
       }`}>
 
@@ -521,7 +526,7 @@ export function SchedulePage() {
             <div className="w-3 flex-shrink-0" />
           </div>
         </div>
-      </div>
+      </div>}
 
       {/* ── Template mode popovers ── */}
       {newSlot && (
@@ -1723,6 +1728,837 @@ function CalEditSlotPopover({
             className="p-1.5 text-zinc-500 hover:text-red-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
           >
             <Trash2 className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Broadcast Intervals Tab ──────────────────────────────────────────────────
+
+const INTERVAL_COLORS = [
+  '#818cf8', '#a78bfa', '#22d3ee', '#34d399',
+  '#fbbf24', '#fb7185', '#fb923c', '#2dd4bf',
+  '#f472b6', '#a3e635',
+];
+
+type RibbonCreateDrag = { startMin: number; endMin: number; columnRect: DOMRect };
+type RibbonPending    = { startMin: number; endMin: number; x: number; y: number };
+type RibbonBlockDrag  = {
+  op: 'move' | 'resize-start' | 'resize-end';
+  iv: BroadcastInterval;
+  startMin: number;
+  endMin: number;
+  origStartMin: number;
+  origEndMin: number;
+};
+type PlaceDrag        = { interval: BroadcastInterval; targetDayOfWeek: number | null };
+type SlotBlockDrag    = {
+  op: 'move' | 'resize-start' | 'resize-end';
+  slot: BroadcastIntervalSlot;
+  startMin: number;
+  endMin: number;
+  origStartMin: number;
+  origEndMin: number;
+};
+type EditingInterval = { interval: BroadcastInterval; x: number; y: number };
+type DeletingSlot    = { slot: BroadcastIntervalSlot; x: number; y: number };
+
+function IntervalsTab() {
+  const qc = useQueryClient();
+  const { data: intervals = [] } = useQuery({ queryKey: ['intervals'],      queryFn: fetchIntervals });
+  const { data: slots = [] }     = useQuery({ queryKey: ['interval-slots'], queryFn: fetchIntervalSlots });
+
+  const invalidateIntervals = () => qc.invalidateQueries({ queryKey: ['intervals'] });
+  const invalidateSlots     = () => qc.invalidateQueries({ queryKey: ['interval-slots'] });
+  const invalidateAll       = () => { invalidateIntervals(); invalidateSlots(); };
+
+  const createIntervalMut = useMutation({ mutationFn: createInterval, onSuccess: invalidateIntervals });
+  const updateIntervalMut = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: BroadcastIntervalPatch }) => updateInterval(id, patch),
+    onSuccess: invalidateIntervals,
+  });
+  const deleteIntervalMut = useMutation({ mutationFn: deleteInterval, onSuccess: invalidateAll });
+  const createSlotMut     = useMutation({ mutationFn: createIntervalSlot, onSuccess: invalidateSlots });
+  const updateSlotMut     = useMutation({
+    mutationFn: ({ id, patch }: { id: number; patch: BroadcastIntervalSlotPatch }) => updateIntervalSlot(id, patch),
+    onSuccess: invalidateSlots,
+  });
+  const deleteSlotMut = useMutation({ mutationFn: deleteIntervalSlot, onSuccess: invalidateSlots });
+
+  const [ribbonCreateDrag, setRibbonCreateDrag] = useState<RibbonCreateDrag | null>(null);
+  const [ribbonPending,    setRibbonPending]    = useState<RibbonPending | null>(null);
+  const [placeDrag,        setPlaceDrag]        = useState<PlaceDrag | null>(null);
+  const [editingInterval,  setEditingInterval]  = useState<EditingInterval | null>(null);
+  const [deletingSlot,     setDeletingSlot]     = useState<DeletingSlot | null>(null);
+
+  const placeDragTargetRef     = useRef<number | null>(null);
+  const placeDragMouseYRef     = useRef<number>(0);
+  const placeDragColumnRectRef = useRef<DOMRect | null>(null);
+
+  function startRibbonCreateDrag(startMin: number, rect: DOMRect) {
+    let current: RibbonCreateDrag = { startMin, endMin: startMin + 60, columnRect: rect };
+    setRibbonCreateDrag(current);
+    document.body.style.cursor = 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (e: MouseEvent) => {
+      const raw    = (e.clientY - current.columnRect.top) / TOTAL_HEIGHT * 24 * 60;
+      const endMin = Math.max(current.startMin + 15, Math.round(Math.min(24 * 60, raw) / 15) * 15);
+      current = { ...current, endMin };
+      setRibbonCreateDrag({ ...current });
+    };
+
+    const onUp = (e: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      const drag = current;
+      setRibbonCreateDrag(null);
+      if (drag.endMin - drag.startMin < 15) return;
+      setRibbonPending({ startMin: drag.startMin, endMin: drag.endMin, x: e.clientX, y: e.clientY });
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  function startPlaceDrag(interval: BroadcastInterval) {
+    placeDragTargetRef.current     = null;
+    placeDragColumnRectRef.current = null;
+    placeDragMouseYRef.current     = 0;
+    setPlaceDrag({ interval, targetDayOfWeek: null });
+    document.body.style.cursor    = 'grabbing';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: MouseEvent) => { placeDragMouseYRef.current = ev.clientY; };
+    document.addEventListener('mousemove', onMove);
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor    = '';
+      document.body.style.userSelect = '';
+      const targetDayOfWeek = placeDragTargetRef.current;
+      const columnRect      = placeDragColumnRectRef.current;
+      const mouseY          = placeDragMouseYRef.current;
+      setPlaceDrag(null);
+      placeDragTargetRef.current     = null;
+      placeDragColumnRectRef.current = null;
+      if (!targetDayOfWeek) return;
+      const alreadyPlaced = slots.some(
+        (s) => s.interval_id === interval.id && s.day_of_week === targetDayOfWeek,
+      );
+      if (alreadyPlaced) return;
+      const dur = Math.max(15, timeToMinutes(interval.default_end_time) - timeToMinutes(interval.default_start_time));
+      let startMin: number;
+      if (columnRect && mouseY > 0) {
+        const raw = (mouseY - columnRect.top) / TOTAL_HEIGHT * 24 * 60;
+        startMin  = Math.max(0, Math.min(24 * 60 - dur, Math.round(raw / 15) * 15));
+      } else {
+        startMin = timeToMinutes(interval.default_start_time);
+      }
+      createSlotMut.mutate({
+        interval_id: interval.id,
+        day_of_week: targetDayOfWeek,
+        start_time: minutesToTime(startMin),
+        end_time:   minutesToTime(startMin + dur),
+      });
+    };
+
+    document.addEventListener('mouseup', onUp);
+  }
+
+  function setPlaceDragTarget(dayOfWeek: number | null, rect?: DOMRect) {
+    placeDragTargetRef.current = dayOfWeek;
+    if (rect) placeDragColumnRectRef.current = rect;
+    setPlaceDrag((prev) => (prev ? { ...prev, targetDayOfWeek: dayOfWeek } : null));
+  }
+
+  return (
+    <div onClick={() => { setEditingInterval(null); setDeletingSlot(null); }}>
+      <p className="mb-3 text-xs text-zinc-500">
+        Drag on ribbon to define intervals · Drag interval blocks into weekday columns to schedule
+      </p>
+
+      <div className="rounded-xl border-4 border-amber-500/40 flex flex-col">
+        {/* Day headers */}
+        <div className="sticky top-0 z-10 flex-shrink-0 flex border-b border-zinc-700 rounded-tl-[10px] rounded-tr-[10px] bg-zinc-800">
+          <div className="w-16 flex-shrink-0 bg-zinc-900/70 border-r border-zinc-700 flex items-center justify-center">
+            <span className="text-[10px] text-zinc-500 uppercase tracking-wider">Intervals</span>
+          </div>
+          {DAY_NAMES.map((name, i) => (
+            <div key={i} className={`flex-1 py-4 text-center ${i < 6 ? 'border-r border-zinc-500/80 [box-shadow:inset_-1px_0_0_rgba(0,0,0,0.55)]' : ''}`}>
+              <div className="text-[15px] font-semibold text-zinc-100">{name}</div>
+            </div>
+          ))}
+          <div className="w-3 flex-shrink-0" />
+        </div>
+
+        {/* Body */}
+        <div className="bg-zinc-950 overflow-hidden">
+          <div className="flex pt-2" style={{ height: TOTAL_HEIGHT + 8 }}>
+            <IntervalRibbonColumn
+              intervals={intervals}
+              activeDrag={ribbonCreateDrag}
+              placeDragIntervalId={placeDrag?.interval.id ?? null}
+              onDragStart={(startMin, rect) => startRibbonCreateDrag(startMin, rect)}
+              onBlockDragStart={(iv) => startPlaceDrag(iv)}
+              onBlockUpdate={(id, defaultStart, defaultEnd) =>
+                updateIntervalMut.mutate({ id, patch: { default_start_time: defaultStart, default_end_time: defaultEnd } })
+              }
+              onBlockClick={(iv, x, y) => setEditingInterval({ interval: iv, x, y })}
+            />
+            <div className="flex-1 grid grid-cols-7 divide-x divide-zinc-700/50">
+              {DAY_NAMES.map((_, i) => {
+                const dayOfWeek    = i + 1;
+                const daySlots     = slots.filter((s) => s.day_of_week === dayOfWeek);
+                const isValidTarget = placeDrag !== null && !slots.some(
+                  (s) => s.interval_id === placeDrag.interval.id && s.day_of_week === dayOfWeek,
+                );
+                return (
+                  <IntervalDayColumn
+                    key={i}
+                    slots={daySlots}
+                    intervals={intervals}
+                    isValidTarget={isValidTarget}
+                    isActiveTarget={placeDrag?.targetDayOfWeek === dayOfWeek}
+                    isDraggingPlace={placeDrag !== null}
+                    placeDragInterval={placeDrag?.interval ?? null}
+                    onSlotClick={(slot, x, y) => setDeletingSlot({ slot, x, y })}
+                    onSlotUpdate={(id, startTime, endTime) =>
+                      updateSlotMut.mutate({ id, patch: { start_time: startTime, end_time: endTime } })
+                    }
+                    onMouseEnter={(rect) => { if (placeDrag) setPlaceDragTarget(dayOfWeek, rect); }}
+                    onMouseLeave={() => { if (placeDrag) setPlaceDragTarget(null); }}
+                  />
+                );
+              })}
+            </div>
+            <div className="w-3 flex-shrink-0" />
+          </div>
+        </div>
+      </div>
+
+      {ribbonPending && (
+        <IntervalCreatePopover
+          startMin={ribbonPending.startMin}
+          endMin={ribbonPending.endMin}
+          x={ribbonPending.x}
+          y={ribbonPending.y}
+          onClose={() => setRibbonPending(null)}
+          onSave={(name, color) => {
+            createIntervalMut.mutate({
+              name,
+              color,
+              default_start_time: minutesToTime(ribbonPending.startMin),
+              default_end_time:   minutesToTime(ribbonPending.endMin >= 24 * 60 ? 0 : ribbonPending.endMin),
+            });
+            setRibbonPending(null);
+          }}
+        />
+      )}
+
+      {editingInterval && (
+        <IntervalEditPopover
+          interval={editingInterval.interval}
+          x={editingInterval.x}
+          y={editingInterval.y}
+          onClose={() => setEditingInterval(null)}
+          onSave={(patch) => {
+            updateIntervalMut.mutate({ id: editingInterval.interval.id, patch });
+            setEditingInterval(null);
+          }}
+          onDelete={() => { deleteIntervalMut.mutate(editingInterval.interval.id); setEditingInterval(null); }}
+        />
+      )}
+
+      {deletingSlot && (() => {
+        const iv = intervals.find((i) => i.id === deletingSlot.slot.interval_id);
+        return (
+          <SlotDeletePopover
+            slot={deletingSlot.slot}
+            intervalName={iv?.name ?? '?'}
+            intervalColor={iv?.color ?? '#818cf8'}
+            x={deletingSlot.x}
+            y={deletingSlot.y}
+            onClose={() => setDeletingSlot(null)}
+            onDelete={() => { deleteSlotMut.mutate(deletingSlot.slot.id); setDeletingSlot(null); }}
+          />
+        );
+      })()}
+    </div>
+  );
+}
+
+function IntervalRibbonColumn({
+  intervals, activeDrag, placeDragIntervalId,
+  onDragStart, onBlockDragStart, onBlockUpdate, onBlockClick,
+}: {
+  intervals: BroadcastInterval[];
+  activeDrag: RibbonCreateDrag | null;
+  placeDragIntervalId: number | null;
+  onDragStart: (startMin: number, rect: DOMRect) => void;
+  onBlockDragStart: (iv: BroadcastInterval) => void;
+  onBlockUpdate: (id: number, defaultStart: string, defaultEnd: string) => void;
+  onBlockClick: (iv: BroadcastInterval, x: number, y: number) => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [blockDrag, setBlockDrag] = useState<RibbonBlockDrag | null>(null);
+
+  // Returns the time bounds within which this interval can move/resize
+  function getNeighborBounds(iv: BroadcastInterval) {
+    const sorted    = [...intervals].sort((a, b) => timeToMinutes(a.default_start_time) - timeToMinutes(b.default_start_time));
+    const idx       = sorted.findIndex((i) => i.id === iv.id);
+    const prevEnd   = idx > 0 ? timeToMinutes(sorted[idx - 1].default_end_time) : 0;
+    const nextStart = idx < sorted.length - 1 ? timeToMinutes(sorted[idx + 1].default_start_time) : 24 * 60;
+    return { prevEnd, nextStart };
+  }
+
+  // Body drag: horizontal → place drag, vertical → move, no movement → click/edit
+  function handleBodyMouseDown(e: React.MouseEvent, iv: BroadcastInterval) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const startX       = e.clientX;
+    const startY       = e.clientY;
+    const origStartMin = timeToMinutes(iv.default_start_time);
+    const origEndMin   = timeToMinutes(iv.default_end_time);
+    const dur          = origEndMin - origStartMin;
+    const cursorMin    = (startY - rect.top) / TOTAL_HEIGHT * 24 * 60;
+    const offsetMin    = Math.max(0, cursorMin - origStartMin);
+    const { prevEnd, nextStart } = getNeighborBounds(iv);
+
+    let phase: 'undecided' | 'placing' | 'moving' = 'undecided';
+    let current: RibbonBlockDrag = { op: 'move', iv, startMin: origStartMin, endMin: origEndMin, origStartMin, origEndMin };
+
+    const onMove = (ev: MouseEvent) => {
+      const dx = Math.abs(ev.clientX - startX);
+      const dy = Math.abs(ev.clientY - startY);
+
+      if (phase === 'undecided') {
+        if (dx <= 5 && dy <= 5) return;
+        phase = dx > dy ? 'placing' : 'moving';
+        if (phase === 'placing') {
+          document.removeEventListener('mousemove', onMove);
+          document.removeEventListener('mouseup', onUp);
+          onBlockDragStart(iv);
+          return;
+        }
+        document.body.style.cursor     = 'grabbing';
+        document.body.style.userSelect = 'none';
+        setBlockDrag(current);
+      }
+
+      if (phase === 'moving') {
+        const raw      = (ev.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
+        const clamped  = Math.max(0, Math.min(24 * 60, raw));
+        const rawStart = Math.round((clamped - offsetMin) / 15) * 15;
+        const newStart = Math.max(prevEnd, Math.min(nextStart - dur, rawStart));
+        current = { ...current, startMin: newStart, endMin: newStart + dur };
+        setBlockDrag({ ...current });
+      }
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor     = '';
+      document.body.style.userSelect = '';
+      const drag = current;
+      setBlockDrag(null);
+      if (phase === 'undecided') {
+        onBlockClick(iv, ev.clientX, ev.clientY);
+        const stopClick = (ce: Event) => { ce.stopPropagation(); document.removeEventListener('click', stopClick, true); };
+        document.addEventListener('click', stopClick, true);
+        return;
+      }
+      if (phase === 'moving' && drag.startMin !== drag.origStartMin) {
+        onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin >= 24 * 60 ? 0 : drag.endMin));
+      }
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  function handleResizeMouseDown(e: React.MouseEvent, iv: BroadcastInterval, op: 'resize-start' | 'resize-end') {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const origStartMin = timeToMinutes(iv.default_start_time);
+    const origEndMin   = timeToMinutes(iv.default_end_time);
+    const { prevEnd, nextStart } = getNeighborBounds(iv);
+
+    let current: RibbonBlockDrag = { op, iv, startMin: origStartMin, endMin: origEndMin, origStartMin, origEndMin };
+    setBlockDrag(current);
+    document.body.style.cursor     = 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: MouseEvent) => {
+      const raw     = (ev.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
+      const clamped = Math.max(0, Math.min(24 * 60, raw));
+      const snapped = Math.round(clamped / 15) * 15;
+      let { startMin, endMin } = current;
+
+      if (op === 'resize-start') {
+        startMin = Math.max(prevEnd, Math.min(current.endMin - 15, snapped));
+      } else {
+        endMin = Math.max(current.startMin + 15, Math.min(nextStart, snapped));
+      }
+
+      current = { ...current, startMin, endMin };
+      setBlockDrag({ ...current });
+    };
+
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor     = '';
+      document.body.style.userSelect = '';
+      const drag = current;
+      setBlockDrag(null);
+      if (drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin) return;
+      onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin >= 24 * 60 ? 0 : drag.endMin));
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  function handleColumnMouseDown(e: React.MouseEvent<HTMLDivElement>) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const raw      = (e.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
+    const startMin = Math.floor(raw / 15) * 15;
+    onDragStart(startMin, rect);
+  }
+
+  return (
+    <div
+      ref={ref}
+      className="w-16 flex-shrink-0 relative border-r border-zinc-700 bg-zinc-900/50 cursor-cell"
+      style={{ height: TOTAL_HEIGHT }}
+      onMouseDown={handleColumnMouseDown}
+    >
+      {/* Hour grid lines + labels */}
+      {HOURS.map((h) => (
+        <div key={h} className="absolute left-0 right-0 border-t border-zinc-700/40" style={{ top: h * HOUR_HEIGHT }}>
+          {h > 0 && (
+            <span className="absolute right-2 text-sm text-zinc-400 font-mono -translate-y-[10px] select-none pointer-events-none">
+              {String(h).padStart(2, '0')}:00
+            </span>
+          )}
+        </div>
+      ))}
+
+      {/* Interval blocks — colored strip only, no text (click to edit/see name) */}
+      {intervals.map((iv) => {
+        const isDragging = blockDrag?.iv.id === iv.id;
+        const startMin   = isDragging ? blockDrag!.startMin : timeToMinutes(iv.default_start_time);
+        const endMin     = isDragging ? blockDrag!.endMin   : timeToMinutes(iv.default_end_time);
+        const top        = (startMin / (24 * 60)) * TOTAL_HEIGHT;
+        const height     = Math.max(((endMin - startMin) / (24 * 60)) * TOTAL_HEIGHT, 8);
+        const isPlacing  = placeDragIntervalId === iv.id;
+
+        return (
+          <div
+            key={iv.id}
+            title={iv.name}
+            className={`absolute left-0 right-1 rounded select-none ${isDragging ? 'opacity-60' : isPlacing ? 'opacity-30' : 'hover:brightness-125 cursor-grab'}`}
+            style={{ top, height, backgroundColor: iv.color + '55', borderLeft: `3px solid ${iv.color}` }}
+            onMouseDown={(e) => handleBodyMouseDown(e, iv)}
+          >
+            <div className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleResizeMouseDown(e, iv, 'resize-start'); }} />
+            <div className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleResizeMouseDown(e, iv, 'resize-end'); }} />
+          </div>
+        );
+      })}
+
+      {/* Create-drag ghost */}
+      {activeDrag && (
+        <div
+          className="absolute left-0 right-0.5 rounded-md pointer-events-none"
+          style={{
+            top:    (activeDrag.startMin / (24 * 60)) * TOTAL_HEIGHT,
+            height: Math.max(((activeDrag.endMin - activeDrag.startMin) / (24 * 60)) * TOTAL_HEIGHT, 4),
+            backgroundColor: '#818cf840',
+            borderLeft: '3px solid #818cf8',
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+function IntervalDayColumn({
+  slots, intervals, isValidTarget, isActiveTarget, isDraggingPlace, placeDragInterval,
+  onSlotClick, onSlotUpdate, onMouseEnter, onMouseLeave,
+}: {
+  slots: BroadcastIntervalSlot[];
+  intervals: BroadcastInterval[];
+  isValidTarget: boolean;
+  isActiveTarget: boolean;
+  isDraggingPlace: boolean;
+  placeDragInterval: BroadcastInterval | null;
+  onSlotClick: (slot: BroadcastIntervalSlot, x: number, y: number) => void;
+  onSlotUpdate: (id: number, startTime: string, endTime: string) => void;
+  onMouseEnter: (rect: DOMRect) => void;
+  onMouseLeave: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [blockDrag, setBlockDrag] = useState<SlotBlockDrag | null>(null);
+  const ghostRef = useRef<HTMLDivElement>(null);
+
+  function handleMouseMove(e: React.MouseEvent) {
+    if (!isActiveTarget || !placeDragInterval || !ghostRef.current) return;
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const dur     = Math.max(15, timeToMinutes(placeDragInterval.default_end_time) - timeToMinutes(placeDragInterval.default_start_time));
+    const raw     = (e.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
+    const start   = Math.max(0, Math.min(24 * 60 - dur, Math.round(raw / 15) * 15));
+    const end     = start + dur;
+    const top     = (start / (24 * 60)) * TOTAL_HEIGHT;
+    const height  = Math.max((dur / (24 * 60)) * TOTAL_HEIGHT, 20);
+    ghostRef.current.style.top    = `${top}px`;
+    ghostRef.current.style.height = `${height}px`;
+    const timeEl = ghostRef.current.querySelector<HTMLElement>('[data-ghost-time]');
+    if (timeEl) {
+      timeEl.textContent    = `${minutesToTime(start)}–${minutesToTime(end >= 24 * 60 ? 0 : end)}`;
+      timeEl.style.display  = height >= 40 ? '' : 'none';
+    }
+  }
+
+  function handleSlotMouseDown(e: React.MouseEvent, slot: BroadcastIntervalSlot, op: SlotBlockDrag['op']) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const origStartMin = timeToMinutes(slot.start_time);
+    const origEndMin   = timeToMinutes(slot.end_time);
+    const cursorMin    = (e.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
+    const offsetMin    = op === 'move' ? Math.max(0, cursorMin - origStartMin) : 0;
+    const startX = e.clientX, startY = e.clientY;
+    let didMove = false;
+
+    // Collision bounds: can't overlap adjacent slots in this day
+    const sorted    = [...slots].sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
+    const idx       = sorted.findIndex((s) => s.id === slot.id);
+    const prevEnd   = idx > 0 ? timeToMinutes(sorted[idx - 1].end_time) : 0;
+    const nextStart = idx < sorted.length - 1 ? timeToMinutes(sorted[idx + 1].start_time) : 24 * 60;
+
+    let current: SlotBlockDrag = { op, slot, startMin: origStartMin, endMin: origEndMin, origStartMin, origEndMin };
+    setBlockDrag(current);
+    document.body.style.cursor     = op === 'move' ? 'grabbing' : 'ns-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMove = (ev: MouseEvent) => {
+      if (!didMove && (Math.abs(ev.clientX - startX) > 3 || Math.abs(ev.clientY - startY) > 3)) didMove = true;
+      const raw     = (ev.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
+      const clamped = Math.max(0, Math.min(24 * 60, raw));
+      const snapped = Math.round(clamped / 15) * 15;
+      let { startMin, endMin } = current;
+
+      if (current.op === 'move') {
+        const dur      = origEndMin - origStartMin;
+        const rawStart = Math.round((clamped - offsetMin) / 15) * 15;
+        startMin = Math.max(prevEnd, Math.min(nextStart - dur, rawStart));
+        endMin   = startMin + dur;
+      } else if (current.op === 'resize-start') {
+        startMin = Math.max(prevEnd, Math.min(current.endMin - 15, snapped));
+      } else {
+        endMin = Math.max(current.startMin + 15, Math.min(nextStart, snapped));
+      }
+
+      current = { ...current, startMin, endMin };
+      setBlockDrag({ ...current });
+    };
+
+    const onUp = (ev: MouseEvent) => {
+      document.removeEventListener('mousemove', onMove);
+      document.removeEventListener('mouseup', onUp);
+      document.body.style.cursor     = '';
+      document.body.style.userSelect = '';
+      const drag = current;
+      setBlockDrag(null);
+      if (!didMove) {
+        onSlotClick(slot, ev.clientX, ev.clientY);
+        const stopClick = (ce: Event) => { ce.stopPropagation(); document.removeEventListener('click', stopClick, true); };
+        document.addEventListener('click', stopClick, true);
+        return;
+      }
+      if (drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin) return;
+      onSlotUpdate(slot.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin >= 24 * 60 ? 0 : drag.endMin));
+    };
+
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onUp);
+  }
+
+  return (
+    <div
+      ref={ref}
+      className={`relative ${isDraggingPlace ? 'cursor-copy' : ''}`}
+      style={{ height: TOTAL_HEIGHT }}
+      onMouseEnter={() => { const r = ref.current?.getBoundingClientRect(); if (r) onMouseEnter(r); }}
+      onMouseLeave={onMouseLeave}
+      onMouseMove={handleMouseMove}
+    >
+      {HOURS.map((h) => (
+        <div key={h}      className="absolute left-0 right-0 border-t border-zinc-700/60" style={{ top: h * HOUR_HEIGHT }} />
+      ))}
+      {HOURS.map((h) => (
+        <div key={`hh${h}`} className="absolute left-0 right-0 border-t border-zinc-700/30" style={{ top: h * HOUR_HEIGHT + HOUR_HEIGHT / 2 }} />
+      ))}
+
+      {slots.map((slot) => {
+        const iv         = intervals.find((i) => i.id === slot.interval_id);
+        const color      = iv?.color ?? '#818cf8';
+        const isDragging = blockDrag?.slot.id === slot.id;
+        const startMin   = isDragging ? blockDrag!.startMin : timeToMinutes(slot.start_time);
+        const endMin     = isDragging ? blockDrag!.endMin   : timeToMinutes(slot.end_time);
+        const top        = (startMin / (24 * 60)) * TOTAL_HEIGHT;
+        const height     = Math.max(((endMin - startMin) / (24 * 60)) * TOTAL_HEIGHT, 20);
+        const timeLabel  = `${minutesToTime(startMin)}–${minutesToTime(endMin >= 24 * 60 ? 0 : endMin)}`;
+
+        return (
+          <div
+            key={slot.id}
+            className={`absolute inset-x-0.5 rounded-md text-sm font-medium select-none ${isDragging ? 'opacity-60' : 'hover:brightness-110 cursor-grab'}`}
+            style={{ top, height, backgroundColor: color + '33', borderLeft: `3px solid ${color}`, color }}
+            onMouseDown={(e) => handleSlotMouseDown(e, slot, 'move')}
+          >
+            <div className="absolute top-0 left-0 right-0 h-2 cursor-ns-resize z-10"
+              onMouseDown={(e) => { e.stopPropagation(); handleSlotMouseDown(e, slot, 'resize-start'); }} />
+            <div className="absolute bottom-0 left-0 right-0 h-2 cursor-ns-resize z-10"
+              onMouseDown={(e) => { e.stopPropagation(); handleSlotMouseDown(e, slot, 'resize-end'); }} />
+            <div className="px-1.5 py-1 leading-tight overflow-hidden">
+              <div className="font-semibold truncate">{iv?.name ?? '?'}</div>
+              {height >= 40 && <div className="opacity-75 text-xs font-mono">{timeLabel}</div>}
+            </div>
+          </div>
+        );
+      })}
+
+      {placeDragInterval && (
+        <div
+          ref={ghostRef}
+          className="absolute inset-x-0.5 rounded-md text-sm font-medium pointer-events-none opacity-60"
+          style={{
+            display: isActiveTarget ? 'block' : 'none',
+            top: 0, height: 20,
+            backgroundColor: placeDragInterval.color + '33',
+            borderLeft: `3px solid ${placeDragInterval.color}`,
+            color: placeDragInterval.color,
+          }}
+        >
+          <div className="px-1.5 py-1 leading-tight overflow-hidden">
+            <div className="font-semibold truncate">{placeDragInterval.name}</div>
+            <div data-ghost-time className="opacity-75 text-xs font-mono hidden" />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function IntervalCreatePopover({ startMin, endMin, x, y, onClose, onSave }: {
+  startMin: number;
+  endMin: number;
+  x: number;
+  y: number;
+  onClose: () => void;
+  onSave: (name: string, color: string) => void;
+}) {
+  const [name, setName]   = useState('');
+  const [color, setColor] = useState(INTERVAL_COLORS[0]);
+  const left = Math.min(x + 12, window.innerWidth  - 288);
+  const top  = Math.min(y,      window.innerHeight - 340);
+
+  return (
+    <div
+      className="fixed z-50 bg-zinc-900 border border-zinc-700/80 rounded-xl shadow-2xl w-72 overflow-hidden"
+      style={{ left, top }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <span className="text-sm font-medium text-zinc-200">New Interval</span>
+        <button onClick={onClose} className="p-0.5 text-zinc-600 hover:text-zinc-300"><X className="w-3.5 h-3.5" /></button>
+      </div>
+      <div className="px-4 py-3 space-y-3">
+        <div className="text-xs text-zinc-400 font-mono">
+          {minutesToTime(startMin)} – {minutesToTime(endMin >= 24 * 60 ? 0 : endMin)} (default)
+        </div>
+        <div>
+          <label className="block text-xs text-zinc-400 mb-1">Name</label>
+          <input
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onSave(name.trim(), color); }}
+            className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+            placeholder="Prime Time"
+          />
+        </div>
+        <div>
+          <label className="block text-xs text-zinc-400 mb-1.5">Color</label>
+          <div className="flex flex-wrap gap-1.5">
+            {INTERVAL_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`w-5 h-5 rounded-full border-2 transition-transform ${color === c ? 'border-white scale-110' : 'border-transparent'}`}
+                style={{ backgroundColor: c }}
+                onClick={() => setColor(c)}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onClose} className="flex-1 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:border-zinc-500 transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (name.trim()) onSave(name.trim(), color); }}
+            disabled={!name.trim()}
+            className="flex-1 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg disabled:opacity-40 transition-colors"
+          >
+            Create
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function IntervalEditPopover({ interval, x, y, onClose, onSave, onDelete }: {
+  interval: BroadcastInterval;
+  x: number;
+  y: number;
+  onClose: () => void;
+  onSave: (patch: BroadcastIntervalPatch) => void;
+  onDelete: () => void;
+}) {
+  const [name,      setName]      = useState(interval.name);
+  const [color,     setColor]     = useState(interval.color);
+  const [startTime, setStartTime] = useState(interval.default_start_time);
+  const [endTime,   setEndTime]   = useState(interval.default_end_time);
+  const left = Math.min(x + 12, window.innerWidth  - 288);
+  const top  = Math.min(y,      window.innerHeight - 440);
+
+  return (
+    <div
+      className="fixed z-50 bg-zinc-900 border border-zinc-700/80 rounded-xl shadow-2xl w-72 overflow-hidden"
+      style={{ left, top }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
+        <span className="text-sm font-medium text-zinc-200">Edit Interval</span>
+        <button onClick={onClose} className="p-0.5 text-zinc-600 hover:text-zinc-300"><X className="w-3.5 h-3.5" /></button>
+      </div>
+      <div className="px-4 py-3 space-y-3">
+        <div>
+          <label className="block text-xs text-zinc-400 mb-1">Name</label>
+          <input
+            autoFocus
+            type="text"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div>
+            <label className="block text-xs text-zinc-400 mb-1">Default start</label>
+            <input
+              type="time"
+              value={startTime}
+              onChange={(e) => setStartTime(e.target.value)}
+              className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+          <div>
+            <label className="block text-xs text-zinc-400 mb-1">Default end</label>
+            <input
+              type="time"
+              value={endTime}
+              onChange={(e) => setEndTime(e.target.value)}
+              className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+            />
+          </div>
+        </div>
+        <div>
+          <label className="block text-xs text-zinc-400 mb-1.5">Color</label>
+          <div className="flex flex-wrap gap-1.5">
+            {INTERVAL_COLORS.map((c) => (
+              <button
+                key={c}
+                className={`w-5 h-5 rounded-full border-2 transition-transform ${color === c ? 'border-white scale-110' : 'border-transparent'}`}
+                style={{ backgroundColor: c }}
+                onClick={() => setColor(c)}
+              />
+            ))}
+          </div>
+        </div>
+        <div className="flex gap-2 pt-1">
+          <button onClick={onDelete} className="p-1.5 text-zinc-500 hover:text-red-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors">
+            <Trash2 className="w-3.5 h-3.5" />
+          </button>
+          <button onClick={onClose} className="flex-1 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:border-zinc-500 transition-colors">Cancel</button>
+          <button
+            onClick={() => { if (name.trim()) onSave({ name: name.trim(), color, default_start_time: startTime, default_end_time: endTime }); }}
+            disabled={!name.trim()}
+            className="flex-1 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg disabled:opacity-40 transition-colors"
+          >
+            Save
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function SlotDeletePopover({ slot, intervalName, intervalColor, x, y, onClose, onDelete }: {
+  slot: BroadcastIntervalSlot;
+  intervalName: string;
+  intervalColor: string;
+  x: number;
+  y: number;
+  onClose: () => void;
+  onDelete: () => void;
+}) {
+  const left = Math.min(x + 12, window.innerWidth  - 256);
+  const top  = Math.min(y,      window.innerHeight - 160);
+
+  return (
+    <div
+      className="fixed z-50 bg-zinc-900 border border-zinc-700/80 rounded-xl shadow-2xl w-56 overflow-hidden"
+      style={{ left, top }}
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="px-4 py-3 space-y-3">
+        <div className="flex items-center gap-2">
+          <div className="w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ backgroundColor: intervalColor }} />
+          <span className="text-sm font-medium text-zinc-200">{intervalName}</span>
+        </div>
+        <div className="text-xs text-zinc-400 font-mono">{slot.start_time} – {slot.end_time}</div>
+        <div className="flex gap-2">
+          <button onClick={onClose} className="flex-1 py-1.5 text-xs text-zinc-400 border border-zinc-700 rounded-lg hover:border-zinc-500 transition-colors">Cancel</button>
+          <button
+            onClick={onDelete}
+            className="flex-1 py-1.5 text-xs font-medium text-white bg-red-600 hover:bg-red-500 rounded-lg transition-colors"
+          >
+            Remove
           </button>
         </div>
       </div>

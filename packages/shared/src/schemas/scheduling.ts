@@ -221,6 +221,59 @@ export const ClockPatchSchema = z.object({
 });
 export type ClockPatch = z.infer<typeof ClockPatchSchema>;
 
+// ============ BROADCAST INTERVALS ============
+
+export const BroadcastIntervalSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  color: z.string(),
+  default_start_time: z.string(),
+  default_end_time: z.string(),
+  created_at: z.coerce.date(),
+  updated_at: z.coerce.date(),
+});
+export type BroadcastInterval = z.infer<typeof BroadcastIntervalSchema>;
+
+export const BroadcastIntervalCreateSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  color: z.string().default('#818cf8'),
+  default_start_time: z.string().min(1),
+  default_end_time: z.string().min(1),
+});
+export type BroadcastIntervalCreate = z.infer<typeof BroadcastIntervalCreateSchema>;
+
+export const BroadcastIntervalPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  color: z.string().optional(),
+  default_start_time: z.string().optional(),
+  default_end_time: z.string().optional(),
+});
+export type BroadcastIntervalPatch = z.infer<typeof BroadcastIntervalPatchSchema>;
+
+export const BroadcastIntervalSlotSchema = z.object({
+  id: z.number().int(),
+  interval_id: z.number().int(),
+  day_of_week: z.number().int().min(1).max(7),
+  start_time: z.string(),
+  end_time: z.string(),
+  created_at: z.coerce.date(),
+});
+export type BroadcastIntervalSlot = z.infer<typeof BroadcastIntervalSlotSchema>;
+
+export const BroadcastIntervalSlotCreateSchema = z.object({
+  interval_id: z.number().int().positive(),
+  day_of_week: z.number().int().min(1).max(7),
+  start_time: z.string().min(1),
+  end_time: z.string().min(1),
+});
+export type BroadcastIntervalSlotCreate = z.infer<typeof BroadcastIntervalSlotCreateSchema>;
+
+export const BroadcastIntervalSlotPatchSchema = z.object({
+  start_time: z.string().optional(),
+  end_time: z.string().optional(),
+});
+export type BroadcastIntervalSlotPatch = z.infer<typeof BroadcastIntervalSlotPatchSchema>;
+
 // ============ CAMPAIGNS ============
 
 export const PRIORITY_LEVELS = ['hard', 'best_effort'] as const;
@@ -245,6 +298,8 @@ export const CampaignSchema = z.object({
   advertiser_separation_spots: z.number().int().nonnegative().default(1),
   competing_exclusions: z.array(z.number().int()).default([]),
   priority: z.enum(PRIORITY_LEVELS).default('hard'),
+  interval_id: z.number().int().nullable(),
+  interval_plays_per_week: z.number().int().positive().nullable(),
   show_id: z.number().int().nullable(),
   plays_per_show: z.number().int().positive().nullable(),
   first_in_slot: z.boolean().default(false),
@@ -271,6 +326,8 @@ export const CampaignCreateSchema = z.object({
   advertiser_separation_spots: z.number().int().nonnegative().default(1),
   competing_exclusions: z.array(z.number().int()).default([]),
   priority: z.enum(PRIORITY_LEVELS).default('hard'),
+  interval_id: z.number().int().positive().nullable().optional(),
+  interval_plays_per_week: z.number().int().positive().nullable().optional(),
   show_id: z.number().int().positive().nullable().optional(),
   plays_per_show: z.number().int().positive().nullable().optional(),
   first_in_slot: z.boolean().default(false),
@@ -293,6 +350,8 @@ export const CampaignPatchSchema = z.object({
   advertiser_separation_spots: z.number().int().nonnegative().optional(),
   competing_exclusions: z.array(z.number().int()).optional(),
   priority: z.enum(PRIORITY_LEVELS).optional(),
+  interval_id: z.number().int().positive().nullable().optional(),
+  interval_plays_per_week: z.number().int().positive().nullable().optional(),
   show_id: z.number().int().positive().nullable().optional(),
   plays_per_show: z.number().int().positive().nullable().optional(),
   first_in_slot: z.boolean().optional(),
