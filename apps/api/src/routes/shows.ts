@@ -7,7 +7,7 @@ import {
   ShowPlaylistPatchSchema,
 } from '@radio/shared';
 import { db } from '../db/index.js';
-import { shows, showPlaylists, playlists, templateEntries, calendarEntries } from '../db/schema.js';
+import { shows, showPlaylists, playlists, templateEntries, calendarEntries, campaigns, customers } from '../db/schema.js';
 
 export async function showRoutes(fastify: FastifyInstance) {
   fastify.get('/shows', async (_request, reply) => {
@@ -156,4 +156,21 @@ export async function showRoutes(fastify: FastifyInstance) {
       return reply.status(204).send();
     },
   );
+
+  fastify.get<{ Params: { id: string } }>('/shows/:id/campaigns', async (request, reply) => {
+    const showId = Number(request.params.id);
+    const rows = await db
+      .select({
+        id: campaigns.id,
+        name: campaigns.name,
+        customer_id: campaigns.customer_id,
+        customer_name: customers.name,
+        plays_per_show: campaigns.plays_per_show,
+        active: campaigns.active,
+      })
+      .from(campaigns)
+      .innerJoin(customers, eq(campaigns.customer_id, customers.id))
+      .where(eq(campaigns.show_id, showId));
+    return reply.send(rows);
+  });
 }

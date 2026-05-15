@@ -31,6 +31,7 @@ import {
   ContactPatch,
   ContactPatchSchema,
   User,
+  Show,
 } from '@radio/shared';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
@@ -61,6 +62,7 @@ import {
   removeCampaignMedia,
   updateCampaignMedia,
   fetchUsers,
+  fetchShows,
 } from '../../api';
 
 type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
@@ -1250,6 +1252,8 @@ function CreateCampaignForm({
   onCancel: () => void;
   isLoading: boolean;
 }) {
+  const { data: shows = [] } = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
+
   const { control, register, handleSubmit, formState } = useForm<CampaignCreate>({
     resolver: zodResolver(CampaignCreateSchema),
     defaultValues: {
@@ -1260,11 +1264,14 @@ function CreateCampaignForm({
       priority: 'hard',
       first_in_slot: false,
       first_in_slot_mode: 'always',
+      show_id: null,
+      plays_per_show: null,
     },
   });
 
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
   const firstInSlot = useWatch({ control, name: 'first_in_slot' });
+  const selectedShowId = useWatch({ control, name: 'show_id' });
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
@@ -1385,6 +1392,39 @@ function CreateCampaignForm({
                 <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
               </label>
               <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+            </div>
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>
+                Associated Show
+                <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots." />
+              </label>
+              <select
+                {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
+                disabled={isLoading}
+                className={INPUT}
+              >
+                <option value="">Any show</option>
+                {shows.map((s) => (
+                  <option key={s.id} value={s.id}>{s.name}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className={LABEL + (!selectedShowId ? ' opacity-40' : '')}>
+                Plays per Show
+                <HelpTooltip text="Target number of spot airings per show occurrence. Works alongside the monthly target." />
+              </label>
+              <input
+                type="number"
+                min={1}
+                placeholder="—"
+                {...register('plays_per_show', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+                disabled={isLoading || !selectedShowId}
+                className={INPUT + (!selectedShowId ? ' opacity-40' : '')}
+              />
             </div>
           </div>
 
@@ -2143,6 +2183,8 @@ function CampaignEditForm({
     queryFn: () => fetchCampaignMedia(campaign.id),
   });
 
+  const { data: shows = [] } = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
+
   const { control, register, handleSubmit, formState } = useForm<CampaignPatch>({
     resolver: zodResolver(CampaignPatchSchema),
     defaultValues: {
@@ -2154,6 +2196,8 @@ function CampaignEditForm({
       sweeps_per_month: campaign.sweeps_per_month ?? undefined,
       max_sweeps_per_day: campaign.max_sweeps_per_day ?? undefined,
       priority: campaign.priority,
+      show_id: campaign.show_id ?? undefined,
+      plays_per_show: campaign.plays_per_show ?? undefined,
       first_in_slot: campaign.first_in_slot,
       first_in_slot_mode: campaign.first_in_slot_mode ?? 'always',
       advertiser_separation_spots: campaign.advertiser_separation_spots,
@@ -2166,6 +2210,7 @@ function CampaignEditForm({
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
   const sweepsPerMonth = useWatch({ control, name: 'sweeps_per_month' });
   const firstInSlot = useWatch({ control, name: 'first_in_slot' });
+  const selectedShowId = useWatch({ control, name: 'show_id' });
   const [mediaError, setMediaError] = useState<string | null>(null);
 
   // Clear media error whenever clips change (user added/removed a clip)
@@ -2336,6 +2381,39 @@ function CampaignEditForm({
               <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
             </label>
             <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Associated Show
+              <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots." />
+            </label>
+            <select
+              {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
+              disabled={isLoading}
+              className={INPUT}
+            >
+              <option value="">Any show</option>
+              {shows.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={LABEL + (!selectedShowId ? ' opacity-40' : '')}>
+              Plays per Show
+              <HelpTooltip text="Target number of spot airings per show occurrence. Works alongside the monthly target." />
+            </label>
+            <input
+              type="number"
+              min={1}
+              placeholder="—"
+              {...register('plays_per_show', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              disabled={isLoading || !selectedShowId}
+              className={INPUT + (!selectedShowId ? ' opacity-40' : '')}
+            />
           </div>
         </div>
 

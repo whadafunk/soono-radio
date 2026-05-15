@@ -902,6 +902,19 @@ export function removeShowPlaylist(showId: number, spid: number): Promise<void> 
   return del(`/shows/${showId}/playlists/${spid}`);
 }
 
+export type ShowCampaign = {
+  id: number;
+  name: string;
+  customer_id: number;
+  customer_name: string;
+  plays_per_show: number | null;
+  active: boolean;
+};
+
+export function fetchShowCampaigns(showId: number): Promise<ShowCampaign[]> {
+  return apiFetch(`/shows/${showId}/campaigns`);
+}
+
 // ─── Clocks ───────────────────────────────────────────────────────────────────
 
 export function fetchClocks(): Promise<Clock[]> {

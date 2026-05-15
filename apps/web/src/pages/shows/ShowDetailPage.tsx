@@ -16,9 +16,9 @@ import {
   fetchShow, updateShow, fetchClocks, fetchTemplateEntries,
   fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
   fetchPlaylists, fetchLibrary, fetchLibraryItem, fetchIngestJob,
-  uploadLibraryFiles, fetchRotations,
+  uploadLibraryFiles, fetchRotations, fetchShowCampaigns,
 } from '../../api';
-import type { PlaylistSummary } from '../../api';
+import type { PlaylistSummary, ShowCampaign } from '../../api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -76,6 +76,12 @@ export function ShowDetailPage() {
   const { data: allPlaylists = [] } = useQuery<PlaylistSummary[]>({
     queryKey: ['playlists'],
     queryFn: fetchPlaylists,
+  });
+
+  const { data: showCampaigns = [] } = useQuery<ShowCampaign[]>({
+    queryKey: ['show-campaigns', showId],
+    queryFn: () => fetchShowCampaigns(showId),
+    enabled: !isNaN(showId),
   });
 
   const updateMutation = useMutation({
@@ -417,15 +423,28 @@ export function ShowDetailPage() {
             )}
           </Panel>
 
-          {/* Campaigns — coming soon */}
+          {/* Campaigns */}
           <Panel
             title="Campaigns"
             icon={<Megaphone className="w-3.5 h-3.5" />}
-            locked
           >
-            <p className="text-xs text-zinc-500 leading-relaxed">
-              Advertising campaigns associated with this show will appear here.
-            </p>
+            {showCampaigns.length === 0 ? (
+              <p className="text-xs text-zinc-500 py-1">No campaigns linked to this show.</p>
+            ) : (
+              <ul className="space-y-2">
+                {showCampaigns.map((c) => (
+                  <li key={c.id} className="text-xs">
+                    <div className="flex items-center justify-between gap-1">
+                      <span className={`font-medium truncate ${c.active ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>{c.name}</span>
+                      {c.plays_per_show != null && (
+                        <span className="flex-shrink-0 text-indigo-400 font-mono">{c.plays_per_show}×</span>
+                      )}
+                    </div>
+                    <span className="text-zinc-500">{c.customer_name}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
           </Panel>
 
           {/* Statistics — coming soon */}

@@ -690,6 +690,8 @@ export const campaigns = sqliteTable(
       .notNull()
       .default('[]'),
     priority: text('priority', { enum: PRIORITY_LEVELS }).notNull().default('best_effort'),
+    show_id: integer('show_id').references(() => shows.id, { onDelete: 'set null' }),
+    plays_per_show: integer('plays_per_show'),
     first_in_slot: integer('first_in_slot', { mode: 'boolean' }).notNull().default(false),
     first_in_slot_mode: text('first_in_slot_mode', { enum: FIRST_IN_SLOT_MODES }),
     notes: text('notes'),
@@ -704,6 +706,7 @@ export const campaigns = sqliteTable(
   (t) => ({
     customerIdx: index('campaigns_customer_idx').on(t.customer_id),
     activeIdx: index('campaigns_active_idx').on(t.active),
+    showIdx: index('campaigns_show_idx').on(t.show_id),
   }),
 );
 
