@@ -36,7 +36,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .leftJoin(clockSegments, eq(clockSegments.clock_id, clocks.id))
       .groupBy(clocks.id)
       .orderBy(asc(clocks.name));
-    return reply.send(rows.map(({ used_count, ...c }) => ({ ...c, used: used_count > 0 })));
+    return reply.send(rows.map(({ used_count, ...c }) => ({ ...c, used: used_count > 0, slot_count: used_count })));
   });
 
   fastify.post<{ Body: unknown }>('/clocks', async (request, reply) => {
@@ -96,7 +96,13 @@ export async function clockRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/clocks/:id', async (request, reply) => {
     const id = Number(request.params.id);
+    // Manually delete segments (would cascade but FK is about to be disabled).
+    // Schedule entries (calendar/template) intentionally keep their stale clock_id
+    // so the UI can display them as orphaned rather than silently clearing them.
+    await db.delete(clockSegments).where(eq(clockSegments.clock_id, id));
+    await db.run(sql`PRAGMA foreign_keys = OFF`);
     await db.delete(clocks).where(eq(clocks.id, id));
+    await db.run(sql`PRAGMA foreign_keys = ON`);
     return reply.status(204).send();
   });
 

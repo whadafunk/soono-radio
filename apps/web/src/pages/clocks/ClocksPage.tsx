@@ -553,9 +553,9 @@ export function ClocksPage() {
                   </button>
                   {confirmingDelete ? (
                     <div className="px-4 pb-3 flex flex-col gap-1.5" onClick={(e) => e.stopPropagation()}>
-                      {clock.used && (
+                      {!!clock.slot_count && (
                         <span className="text-[11px] text-amber-400 leading-tight">
-                          Clock is in the schedule. Slots will be cleared.
+                          Scheduled in {clock.slot_count} slot{clock.slot_count !== 1 ? 's' : ''}. Slots will be orphaned.
                         </span>
                       )}
                       <div className="flex items-center gap-2">
@@ -606,7 +606,7 @@ export function ClocksPage() {
                   <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.used ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}>
                     {draftClock.used ? 'Used in schedule' : 'Not used'}
                   </span>
-                  <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} isUsed={draftClock.used}
+                  <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
                     onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
                     onDeleteCancel={() => setConfirmDelete(false)} row
@@ -727,7 +727,7 @@ export function ClocksPage() {
 
                   {/* Actions */}
                   <div className="flex-shrink-0 px-3 py-4 flex flex-col items-center justify-center gap-2">
-                    <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} isUsed={draftClock.used}
+                    <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                       onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
                       onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
                       onDeleteCancel={() => setConfirmDelete(false)}
@@ -2139,8 +2139,8 @@ function SegmentSweeperEditor({
 
 // ─── Small helpers ────────────────────────────────────────────────────────────
 
-function ClockActions({ dirty, isPending, confirmDelete, isUsed, onSave, onDiscard, onDeleteRequest, onDeleteConfirm, onDeleteCancel, row }: {
-  dirty: boolean; isPending: boolean; confirmDelete: boolean; isUsed?: boolean; row?: boolean;
+function ClockActions({ dirty, isPending, confirmDelete, slotCount, onSave, onDiscard, onDeleteRequest, onDeleteConfirm, onDeleteCancel, row }: {
+  dirty: boolean; isPending: boolean; confirmDelete: boolean; slotCount?: number; row?: boolean;
   onSave: () => void; onDiscard: () => void;
   onDeleteRequest: () => void; onDeleteConfirm: () => void; onDeleteCancel: () => void;
 }) {
@@ -2154,9 +2154,9 @@ function ClockActions({ dirty, isPending, confirmDelete, isUsed, onSave, onDisca
   );
   if (confirmDelete) return (
     <div className={`flex ${row ? 'flex-row' : 'flex-col'} items-end gap-1.5`}>
-      {isUsed && (
+      {!!slotCount && (
         <span className="text-[11px] text-amber-400 leading-tight text-right">
-          Clock is in the schedule. Slots will be cleared.
+          Scheduled in {slotCount} slot{slotCount !== 1 ? 's' : ''}. Slots will be orphaned.
         </span>
       )}
       <div className="flex items-center gap-1.5">

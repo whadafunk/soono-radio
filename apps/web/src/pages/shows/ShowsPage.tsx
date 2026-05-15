@@ -173,7 +173,7 @@ export function ShowsPage() {
                         <div className="flex flex-col items-end gap-1.5">
                           {showEntries.length > 0 && (
                             <span className="text-[11px] text-amber-400 text-right leading-tight">
-                              Scheduled in {showEntries.length} slot{showEntries.length !== 1 ? 's' : ''}. Slots will be cleared.
+                              Scheduled in {showEntries.length} slot{showEntries.length !== 1 ? 's' : ''}. Slots will be orphaned.
                             </span>
                           )}
                           <div className="flex items-center gap-1.5 justify-end">

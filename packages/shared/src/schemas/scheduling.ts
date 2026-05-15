@@ -191,9 +191,9 @@ export const ClockSchema = z.object({
   join_policy: z.enum(JOIN_POLICIES).nullable(),
   overrun_policy: z.enum(OVERRUN_POLICIES).nullable(),
   duration_seconds: z.number().int().nonnegative(),
-  // Derived: true if any calendar/template entry references this clock.
-  // Populated by the API on read; not stored.
+  // Derived: populated by the API on read; not stored.
   used: z.boolean().default(false),
+  slot_count: z.number().int().nonnegative().default(0),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
