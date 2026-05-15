@@ -180,8 +180,6 @@ export const ClockSchema = z.object({
   id: z.number().int(),
   name: z.string(),
   description: z.string().nullable(),
-  // Design-time hint only — see docs/clocks-rotations-redesign.md §2
-  show_id: z.number().int().nullable(),
   // Playlist for station_id sweepers; shared across all segments on this clock
   station_id_playlist_id: z.number().int().nullable(),
   // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
@@ -194,6 +192,8 @@ export const ClockSchema = z.object({
   // Derived: populated by the API on read; not stored.
   used: z.boolean().default(false),
   slot_count: z.number().int().nonnegative().default(0),
+  // Shows that have this clock set as their default_clock_id
+  assigned_shows: z.array(z.object({ id: z.number().int(), name: z.string() })).default([]),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
@@ -202,7 +202,6 @@ export type Clock = z.infer<typeof ClockSchema>;
 export const ClockCreateSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   description: z.string().nullable().optional(),
-  show_id: z.number().int().positive().nullable().optional(),
   station_id_playlist_id: z.number().int().positive().nullable().optional(),
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
   finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),
@@ -214,7 +213,6 @@ export type ClockCreate = z.infer<typeof ClockCreateSchema>;
 export const ClockPatchSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
-  show_id: z.number().int().positive().nullable().optional(),
   station_id_playlist_id: z.number().int().positive().nullable().optional(),
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
   finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),

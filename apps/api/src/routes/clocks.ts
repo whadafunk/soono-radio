@@ -1,9 +1,9 @@
 import { FastifyInstance } from 'fastify';
-import { eq, asc, sql } from 'drizzle-orm';
+import { eq, asc, sql, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@radio/shared';
 import { db } from '../db/index.js';
-import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries } from '../db/schema.js';
+import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows } from '../db/schema.js';
 
 // `used` = clock is referenced by any calendar / template / template_clock entry.
 // Computed as a correlated subquery so it survives the GROUP BY on clock_segments.
@@ -21,7 +21,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
         id: clocks.id,
         name: clocks.name,
         description: clocks.description,
-        show_id: clocks.show_id,
         station_id_playlist_id: clocks.station_id_playlist_id,
         jingle_playlist_id: clocks.jingle_playlist_id,
         finish_policy: clocks.finish_policy,
@@ -36,7 +35,26 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .leftJoin(clockSegments, eq(clockSegments.clock_id, clocks.id))
       .groupBy(clocks.id)
       .orderBy(asc(clocks.name));
-    return reply.send(rows.map(({ used_count, ...c }) => ({ ...c, used: used_count > 0, slot_count: used_count })));
+
+    const clockIds = rows.map((r) => r.id);
+    const assignedShowRows = clockIds.length > 0
+      ? await db.select({ id: shows.id, name: shows.name, clock_id: shows.default_clock_id })
+          .from(shows).where(inArray(shows.default_clock_id, clockIds))
+      : [];
+    const showsByClockId = new Map<number, { id: number; name: string }[]>();
+    for (const s of assignedShowRows) {
+      if (s.clock_id == null) continue;
+      const list = showsByClockId.get(s.clock_id) ?? [];
+      list.push({ id: s.id, name: s.name });
+      showsByClockId.set(s.clock_id, list);
+    }
+
+    return reply.send(rows.map(({ used_count, ...c }) => ({
+      ...c,
+      used: used_count > 0,
+      slot_count: used_count,
+      assigned_shows: showsByClockId.get(c.id) ?? [],
+    })));
   });
 
   fastify.post<{ Body: unknown }>('/clocks', async (request, reply) => {
@@ -45,7 +63,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
     const [clock] = await db.insert(clocks).values({
       name: parsed.data.name,
       description: parsed.data.description ?? null,
-      show_id: parsed.data.show_id ?? null,
       station_id_playlist_id: parsed.data.station_id_playlist_id ?? null,
       jingle_playlist_id: parsed.data.jingle_playlist_id ?? null,
       ...(parsed.data.finish_policy && { finish_policy: parsed.data.finish_policy }),
@@ -62,7 +79,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
         id: clocks.id,
         name: clocks.name,
         description: clocks.description,
-        show_id: clocks.show_id,
         station_id_playlist_id: clocks.station_id_playlist_id,
         jingle_playlist_id: clocks.jingle_playlist_id,
         finish_policy: clocks.finish_policy,
@@ -78,8 +94,11 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .where(eq(clocks.id, id))
       .groupBy(clocks.id);
     if (!clock) return reply.status(404).send({ error: 'Clock not found' });
+    const assignedShowRows = await db
+      .select({ id: shows.id, name: shows.name })
+      .from(shows).where(eq(shows.default_clock_id, id));
     const { used_count, ...rest } = clock;
-    return reply.send({ ...rest, used: used_count > 0 });
+    return reply.send({ ...rest, used: used_count > 0, slot_count: used_count, assigned_shows: assignedShowRows });
   });
 
   fastify.patch<{ Params: { id: string }; Body: unknown }>('/clocks/:id', async (request, reply) => {
@@ -96,6 +115,17 @@ export async function clockRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/clocks/:id', async (request, reply) => {
     const id = Number(request.params.id);
+
+    const assignedShows = await db
+      .select({ id: shows.id, name: shows.name })
+      .from(shows).where(eq(shows.default_clock_id, id));
+    if (assignedShows.length > 0) {
+      return reply.status(409).send({
+        error: 'Clock is assigned to shows. Remove assignment from those shows first.',
+        assigned_shows: assignedShows,
+      });
+    }
+
     const [clock] = await db.select({ name: clocks.name }).from(clocks).where(eq(clocks.id, id));
     if (clock) {
       await db.update(templateEntries).set({ orphaned_clock_name: clock.name }).where(eq(templateEntries.clock_id, id));
@@ -122,10 +152,13 @@ export async function clockRoutes(fastify: FastifyInstance) {
     const parsed = z.array(ClockSegmentCreateSchema).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
 
-    // Unassigned clocks (no show context at runtime) must back every music
+    // Unassigned clocks (no shows reference this clock) must back every music
     // segment with at least one specific `playlist` source — otherwise nothing
     // will play. See docs/clocks-rotations-redesign.md §2.
-    if (clock.show_id === null) {
+    const [{ assignedCount }] = await db
+      .select({ assignedCount: sql<number>`COUNT(*)` })
+      .from(shows).where(eq(shows.default_clock_id, id));
+    if (assignedCount === 0) {
       const offending = parsed.data
         .map((s, i) => ({ s, i }))
         .filter(({ s }) =>

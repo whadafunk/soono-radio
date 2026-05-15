@@ -286,10 +286,6 @@ export const clocks = sqliteTable('clocks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
   description: text('description'),
-  // Design-time hint: clock was built for this show. Runtime still uses the
-  // calendar slot's show_id for source resolution. NULL = unassigned clock.
-  // No FK — cleared in app code when a show is deleted.
-  show_id: integer('show_id'),
   // Legacy — superseded by per-segment sweeper_config. Kept inert in DB.
   sweep_config: text('sweep_config', { mode: 'json' }),
   // Playlist used as source for station_id sweepers across this clock
