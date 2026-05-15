@@ -519,8 +519,8 @@ export const templateEntries = sqliteTable(
     day_of_week: integer('day_of_week').notNull(), // 1=Mon, 7=Sun
     time_start: text('time_start').notNull(),      // "06:00"
     time_end: text('time_end').notNull(),          // "10:00"
-    show_id: integer('show_id').references(() => shows.id, { onDelete: 'set null' }),
-    clock_id: integer('clock_id').references(() => clocks.id, { onDelete: 'set null' }),
+    show_id: integer('show_id'),
+    clock_id: integer('clock_id'),
   },
   (t) => ({
     dowIdx: index('template_entries_dow_idx').on(t.day_of_week),
@@ -557,8 +557,8 @@ export const calendarEntries = sqliteTable(
     date: text('date').notNull(),       // "2026-05-08"
     time_start: text('time_start').notNull(),
     time_end: text('time_end').notNull(),
-    show_id: integer('show_id').references(() => shows.id, { onDelete: 'set null' }),
-    clock_id: integer('clock_id').references(() => clocks.id, { onDelete: 'set null' }),
+    show_id: integer('show_id'),
+    clock_id: integer('clock_id'),
     is_override: integer('is_override', { mode: 'boolean' }).notNull().default(false),
   },
   (t) => ({

@@ -96,13 +96,11 @@ export async function clockRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/clocks/:id', async (request, reply) => {
     const id = Number(request.params.id);
-    // Manually delete segments (would cascade but FK is about to be disabled).
-    // Schedule entries (calendar/template) intentionally keep their stale clock_id
-    // so the UI can display them as orphaned rather than silently clearing them.
+    // clockSegments has a cascading FK; delete it first.
+    // Calendar/template entries have no FK on clock_id, so their stale clock_id
+    // is preserved for orphaned-slot detection in the UI.
     await db.delete(clockSegments).where(eq(clockSegments.clock_id, id));
-    await db.run(sql`PRAGMA foreign_keys = OFF`);
     await db.delete(clocks).where(eq(clocks.id, id));
-    await db.run(sql`PRAGMA foreign_keys = ON`);
     return reply.status(204).send();
   });
 

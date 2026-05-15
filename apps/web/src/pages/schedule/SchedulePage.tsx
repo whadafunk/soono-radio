@@ -646,7 +646,7 @@ function EntryBlock({ entry, show, onClick }: {
               : <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
             }
             <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : 'text-zinc-300'}`}>
-              {show?.name ?? (isOrphaned ? 'Deleted show' : 'No show')}
+              {show?.name ?? (isOrphaned ? 'Orphaned' : 'No show')}
             </span>
           </div>
           {height >= 60 && show?.host && (
@@ -690,7 +690,7 @@ function ClockOnlyBlock({ entry, clock, onClick }: {
               : <Clock className="w-5 h-5 text-white flex-shrink-0" />
             }
             <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
-              {clock?.name ?? (isOrphaned ? 'Deleted clock' : 'No clock')}
+              {clock?.name ?? (isOrphaned ? 'Orphaned' : 'No clock')}
             </span>
           </div>
           {height >= 44 && (
@@ -733,7 +733,7 @@ function CalendarEntryBlock({ entry, show, onClick }: {
               : <Mic className="w-5 h-5 flex-shrink-0" style={{ color: hex }} />
             }
             <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : 'text-zinc-300'}`}>
-              {show?.name ?? (isOrphaned ? 'Deleted show' : 'No show')}
+              {show?.name ?? (isOrphaned ? 'Orphaned' : 'No show')}
             </span>
           </div>
           {height >= 60 && show?.host && (
@@ -780,7 +780,7 @@ function CalendarClockOnlyBlock({ entry, clock, onClick }: {
               : <Clock className="w-5 h-5 text-white flex-shrink-0" />
             }
             <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
-              {clock?.name ?? (isOrphaned ? 'Deleted clock' : 'No clock')}
+              {clock?.name ?? (isOrphaned ? 'Orphaned' : 'No clock')}
             </span>
           </div>
           {height >= 44 && (

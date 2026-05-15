@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, asc, sql as sqlExpr } from 'drizzle-orm';
+import { eq, asc, sql } from 'drizzle-orm';
 import {
   ShowCreateSchema,
   ShowPatchSchema,
@@ -42,7 +42,7 @@ export async function showRoutes(fastify: FastifyInstance) {
     const parsed = ShowPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
     const [updated] = await db.update(shows)
-      .set({ ...parsed.data, updated_at: sqlExpr`(unixepoch())` })
+      .set({ ...parsed.data, updated_at: sql`(unixepoch())` })
       .where(eq(shows.id, id))
       .returning();
     if (!updated) return reply.status(404).send({ error: 'Show not found' });
@@ -51,13 +51,11 @@ export async function showRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/shows/:id', async (request, reply) => {
     const id = Number(request.params.id);
-    // Manually delete show playlists (would cascade but FK is about to be disabled).
-    // Schedule entries (calendar/template) intentionally keep their stale show_id
-    // so the UI can display them as orphaned rather than silently clearing them.
+    // showPlaylists has a cascading FK; delete it first.
+    // Calendar/template entries have no FK on show_id, so their stale show_id
+    // is preserved for orphaned-slot detection in the UI.
     await db.delete(showPlaylists).where(eq(showPlaylists.show_id, id));
-    await db.run(sqlExpr`PRAGMA foreign_keys = OFF`);
     await db.delete(shows).where(eq(shows.id, id));
-    await db.run(sqlExpr`PRAGMA foreign_keys = ON`);
     return reply.status(204).send();
   });
 
