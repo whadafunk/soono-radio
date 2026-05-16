@@ -24,6 +24,7 @@ export async function showRoutes(fastify: FastifyInstance) {
       producer: parsed.data.producer ?? null,
       default_clock_id: parsed.data.default_clock_id ?? null,
       duration_minutes: parsed.data.duration_minutes ?? 60,
+      extension_policy: parsed.data.extension_policy ?? null,
       color: parsed.data.color ?? 'indigo',
       notes: parsed.data.notes ?? null,
     }).returning();

@@ -33,10 +33,8 @@ import {
   SWEEPER_TYPES,
   SilenceDetectionAction,
   SILENCE_DETECTION_ACTIONS,
-  RecoveryTactic,
-  RECOVERY_TACTICS,
-  TrailingTimeStrategy,
-  TRAILING_TIME_STRATEGIES,
+  DRIFT_EVENT_TYPES,
+  DriftEventType,
   SegmentSweeperConfig,
   SweepSourceEntry,
   SWEEP_SOURCES,
@@ -44,10 +42,8 @@ import {
   SimpleRotationType,
   FINISH_POLICIES,
   JOIN_POLICIES,
-  OVERRUN_POLICIES,
   FinishPolicy,
   JoinPolicy,
-  OverrunPolicy,
   Rotation,
 } from '@radio/shared';
 import {
@@ -62,6 +58,7 @@ import {
   fetchSupervisorConfig,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
+import { HelpTooltip } from '../../components/HelpTooltip';
 
 // ─── Handover / sweep labels ──────────────────────────────────────────────────
 
@@ -73,12 +70,6 @@ const FINISH_POLICY_LABELS: Record<FinishPolicy, { label: string; desc: string }
 const JOIN_POLICY_LABELS: Record<JoinPolicy, { label: string; desc: string }> = {
   join_top:  { label: 'Join at top',  desc: 'Always start the clock at segment 1, regardless of when the slot begins.' },
   join_mid:  { label: 'Join mid',     desc: 'Skip ahead to the segment that would be playing at the current wall-clock minute. Preserves break-time alignment.' },
-};
-
-const OVERRUN_POLICY_LABELS: Record<OverrunPolicy, { label: string; desc: string }> = {
-  loop_top:      { label: 'Loop from top',  desc: 'Restart the clock at segment 1 if the show outlives its clock.' },
-  loop_mid:      { label: 'Loop at mid',    desc: 'Resume at the segment matching the wall-clock minute. Maintains alignment.' },
-  fall_through:  { label: 'Fall through',   desc: 'No clock structure beyond the first pass — keep playing the show\'s content sources.' },
 };
 
 const SWEEP_SOURCE_LABELS: Record<typeof SWEEP_SOURCES[number], string> = {
@@ -123,30 +114,34 @@ const VALID_SOURCE_TYPES: Record<ClockSegmentType, SegmentSourceEntry['type'][]>
   bulletin:      ['live'],
 };
 
-const RECOVERY_TACTIC_LABELS: Record<RecoveryTactic, string> = {
-  trim_outro:  'Trim outro',
-  skip_song:   'Skip song',
-  drop_queued: 'Drop queued',
+const DRIFT_EVENT_LABELS: Record<DriftEventType, string> = {
+  songs:       'Songs',
+  jingles:     'Jingles',
+  station_ids: 'Station IDs',
+  spots:       'Spots',
+  promos:      'Promos',
 };
 
-const RECOVERY_TACTIC_DESC: Record<RecoveryTactic, string> = {
-  trim_outro:  'Fade the current track out a few seconds early. Least disruptive — applied gradually across multiple tracks to claw back small amounts of drift.',
-  skip_song:   'Abort the current track and jump to the next pick. Used when trimming alone is not recovering fast enough.',
-  drop_queued: 'Flush the entire queue and re-pick fresh. Last resort for large drift — most disruptive to the listener.',
+// Which event types are applicable for catching-up (skip) per segment type
+const CATCHUP_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
+  music:         ['jingles', 'station_ids', 'songs'],
+  stop_set:      ['jingles', 'promos', 'spots'],
+  news:          [],
+  live:          [],
+  live_audience: [],
+  voice_track:   [],
+  bulletin:      [],
 };
 
-const TRAILING_TIME_LABELS: Record<TrailingTimeStrategy, string> = {
-  skip_events:        'Skip late events',
-  fill:               'Fill gap',
-  early_handover:     'Hand over early',
-  hard_cut_with_jingle: 'Hard cut with jingle',
-};
-
-const TRAILING_TIME_DESC: Record<TrailingTimeStrategy, string> = {
-  skip_events:        "Stop queuing content that won't finish before the incoming hard cut. Prevents events being abruptly cut mid-track.",
-  fill:               'Fill the remaining gap with short clips from the filler playlist (jingles, promos) to keep the air time occupied cleanly.',
-  early_handover:     "If the gap can't be filled, give up the remaining time and let the next segment start ahead of schedule. Only works if the next segment permits early starts.",
-  hard_cut_with_jingle: 'Cut the current content immediately, play one short clip from the end clip playlist as a bridge, then hand over to the next segment.',
+// Which event types are applicable for coasting (fill) per segment type
+const COASTING_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
+  music:         ['jingles', 'station_ids', 'songs'],
+  stop_set:      ['jingles', 'promos', 'spots'],
+  news:          [],
+  live:          [],
+  live_audience: [],
+  voice_track:   ['jingles', 'station_ids', 'promos'],
+  bulletin:      ['jingles', 'station_ids', 'promos'],
 };
 
 const DURATION_DEFAULT: Record<ClockSegmentType, number> = {
@@ -194,18 +189,21 @@ const DEFAULT_LIVE_SWEEPER_CONFIG: SegmentSweeperConfig = {
 const TYPE_DEFAULTS: Record<ClockSegmentType, {
   sources: SegmentSourceEntry[];
   start_policy: StartPolicy;
-  trailing_time: TrailingTimeStrategy[];
+  can_skip: boolean;
+  can_fill: boolean;
+  can_reschedule: boolean;
+  catching_up_order: DriftEventType[];
+  coasting_order: DriftEventType[];
   accept_live: boolean;
   sweeper_config: SegmentSweeperConfig | null;
-  recovery_tactics: RecoveryTactic[];
 }> = {
-  music:         { sources: [{ type: 'show_playlist', weight: 1 }],                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: ['skip_events', 'fill', 'early_handover'], accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG, recovery_tactics: ['trim_outro', 'skip_song', 'drop_queued'] },
-  live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: [],                                         accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG,  recovery_tactics: [] },
-  live_audience: { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, trailing_time: [],                                         accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG,  recovery_tactics: [] },
-  stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    trailing_time: ['skip_events', 'fill'],                     accept_live: false, sweeper_config: null,                         recovery_tactics: [] },
-  news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    trailing_time: ['skip_events', 'fill'],                     accept_live: true,  sweeper_config: null,                         recovery_tactics: [] },
-  voice_track:   { sources: [],                                                      start_policy: { type: 'hard' },                                    trailing_time: [],                                         accept_live: false, sweeper_config: null,                         recovery_tactics: [] },
-  bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    trailing_time: [],                                         accept_live: true,  sweeper_config: null,                         recovery_tactics: [] },
+  music:         { sources: [{ type: 'show_playlist', weight: 1 }],                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
+  live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
+  live_audience: { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
+  stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
+  news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: null                         },
+  voice_track:   { sources: [],                                                      start_policy: { type: 'hard' },                                    can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: false, sweeper_config: null                         },
+  bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: true,  sweeper_config: null                         },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -254,8 +252,11 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
     interstitial_jingle_playlist_id: null,
     jingle_every_n_tracks: null,
     start_policy: d.start_policy,
-    trailing_time: d.trailing_time,
-    recovery_tactics: d.recovery_tactics,
+    can_skip: d.can_skip,
+    can_fill: d.can_fill,
+    can_reschedule: d.can_reschedule,
+    catching_up_order: d.catching_up_order,
+    coasting_order: d.coasting_order,
     accept_live: d.accept_live,
     accept_sweepers: [],
     sweeper_config: d.sweeper_config,
@@ -331,7 +332,6 @@ export function ClocksPage() {
           jingle_playlist_id: draftClock.jingle_playlist_id,
           finish_policy: draftClock.finish_policy,
           join_policy: draftClock.join_policy,
-          overrun_policy: draftClock.overrun_policy,
         }));
       if (segsDirty && draftClock)
         promises.push(replaceClockSegments(draftClock.id, draftSegs));
@@ -353,7 +353,9 @@ export function ClocksPage() {
       queryClient.invalidateQueries({ queryKey: ['clocks'] });
       setCreatingNew(false);
       setNewName('');
-      selectClock(created, []);
+      // POST /clocks returns the raw DB row; augment with derived fields that the
+      // GET list handler adds so selectClock doesn't crash on missing properties.
+      selectClock({ ...created, duration_seconds: 0, used: false, slot_count: 0, assigned_shows: [] }, []);
       showToast('success', 'Clock created');
     },
     onError: (e) => showToast('error', (e as Error).message),
@@ -460,11 +462,14 @@ export function ClocksPage() {
         sources: d.sources,
         duration_seconds: s.duration_seconds === DURATION_DEFAULT[s.type] ? DURATION_DEFAULT[newType] : s.duration_seconds,
         start_policy: d.start_policy,
-        trailing_time: d.trailing_time,
+        can_skip: d.can_skip,
+        can_fill: d.can_fill,
+        can_reschedule: d.can_reschedule,
+        catching_up_order: d.catching_up_order,
+        coasting_order: d.coasting_order,
         accept_live: d.accept_live,
         accept_sweepers: [],
         sweeper_config: d.sweeper_config,
-        recovery_tactics: d.recovery_tactics,
       };
     }));
     setSegsDirty(true);
@@ -661,15 +666,31 @@ export function ClocksPage() {
                       <p className="text-xs font-medium text-zinc-400">Handover</p>
                       {(
                         [
-                          { key: 'finish_policy',  label: 'Finish policy',  options: FINISH_POLICIES,  def: supervisorConfig?.finish_policy  ?? 'finish_segment', labelsMap: FINISH_POLICY_LABELS  },
-                          { key: 'join_policy',    label: 'Join policy',    options: JOIN_POLICIES,    def: supervisorConfig?.join_policy    ?? 'join_top',        labelsMap: JOIN_POLICY_LABELS    },
-                          { key: 'overrun_policy', label: 'Overrun policy', options: OVERRUN_POLICIES, def: supervisorConfig?.overrun_policy ?? 'loop_top',        labelsMap: OVERRUN_POLICY_LABELS },
+                          {
+                            key: 'finish_policy',
+                            label: 'Finish policy',
+                            hint: 'What to do when a hard-start segment arrives while another is still playing. Hard cut stops immediately; Finish segment lets it complete naturally (may overrun by minutes).',
+                            options: FINISH_POLICIES,
+                            def: supervisorConfig?.finish_policy ?? 'finish_segment',
+                            labelsMap: FINISH_POLICY_LABELS,
+                          },
+                          {
+                            key: 'join_policy',
+                            label: 'Join policy',
+                            hint: 'How to enter this clock when the slot starts mid-way through its design length. Join at top always starts at segment 1; Join mid skips ahead to the segment that would be playing now, preserving wall-clock break alignment.',
+                            options: JOIN_POLICIES,
+                            def: supervisorConfig?.join_policy ?? 'join_top',
+                            labelsMap: JOIN_POLICY_LABELS,
+                          },
                         ] as const
-                      ).map(({ key, label, options, def, labelsMap }) => {
+                      ).map(({ key, label, hint, options, def, labelsMap }) => {
                         const lm = labelsMap as Record<string, { label: string; desc: string }>;
                         return (
                           <div key={key}>
-                            <p className="text-xs text-zinc-400 mb-1">{label}</p>
+                            <p className="text-xs text-zinc-400 mb-1 flex items-center gap-1">
+                              {label}
+                              <HelpTooltip text={hint} />
+                            </p>
                             <select
                               value={(draftClock[key as keyof ClockType] as string | null) ?? ''}
                               onChange={(e) => updateDraftClock((c) => ({ ...c, [key]: e.target.value === '' ? null : e.target.value }))}
@@ -1045,9 +1066,11 @@ function SortableSegmentItem({
     position: 'relative' as const,
   };
 
-  const ttAbbrev = segment.trailing_time
-    .map((s) => ({ skip_events: 'skip', fill: 'fill', early_handover: '↩', hard_cut_with_jingle: '♪↩' }[s]))
-    .join('·');
+  const ttAbbrev = [
+    segment.can_skip && 'catch',
+    segment.can_fill && 'coast',
+    segment.can_reschedule && 'resched',
+  ].filter(Boolean).join('·');
 
   return (
     <div ref={setNodeRef} style={style}>
@@ -1200,11 +1223,14 @@ function SegmentDrawer({
                     type: t,
                     sources: d.sources,
                     start_policy: d.start_policy,
-                    trailing_time: d.trailing_time,
+                    can_skip: d.can_skip,
+                    can_fill: d.can_fill,
+                    can_reschedule: d.can_reschedule,
+                    catching_up_order: d.catching_up_order,
+                    coasting_order: d.coasting_order,
                     accept_live: d.accept_live,
                     accept_sweepers: [],
                     sweeper_config: d.sweeper_config,
-                    recovery_tactics: d.recovery_tactics,
                   });
                 }}
                 className={`w-full px-3 py-1.5 rounded border text-sm bg-zinc-900 focus:outline-none focus:border-indigo-500 ${meta.border} ${meta.text} ${locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
@@ -1354,55 +1380,68 @@ function SegmentDrawer({
               </Field>
             )}
 
-            <Field label="Recovery tactics" className="col-span-2">
-              <p className="mb-2.5 text-xs text-zinc-500">Applied in order when this segment is <span className="text-zinc-400">running over</span> its scheduled end toward a hard-start successor. Tactics escalate from least to most disruptive.</p>
-              <div className="space-y-2.5">
-                {RECOVERY_TACTICS.map((t) => (
-                  <label key={t} className="flex items-start gap-2.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={draft.recovery_tactics.includes(t)}
-                      onChange={(e) => {
-                        const next = e.target.checked
-                          ? RECOVERY_TACTICS.filter((x) => draft.recovery_tactics.includes(x) || x === t)
-                          : draft.recovery_tactics.filter((x) => x !== t);
-                        update({ recovery_tactics: next });
-                      }}
-                      className="mt-0.5 rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-                    />
+            {/* End policy */}
+            <div className="col-span-2 space-y-3">
+              <p className="text-xs font-medium text-zinc-400">End policy</p>
+              <div className="space-y-2">
+                {CATCHUP_TYPES[draft.type].length > 0 && (
+                  <label className="flex items-center gap-2.5 cursor-pointer">
+                    <input type="checkbox" checked={draft.can_skip} onChange={(e) => update({ can_skip: e.target.checked })}
+                      className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
                     <div>
-                      <span className="text-xs font-medium text-zinc-200">{RECOVERY_TACTIC_LABELS[t]}</span>
-                      <p className="text-xs text-zinc-500">{RECOVERY_TACTIC_DESC[t]}</p>
+                      <span className="text-xs font-medium text-zinc-200">Catching Up</span>
+                      <p className="text-xs text-zinc-500">Skip lower-priority events to recover time when running late.</p>
                     </div>
                   </label>
-                ))}
+                )}
+                {COASTING_TYPES[draft.type].length > 0 && (
+                  <label className="flex items-center gap-2.5 cursor-pointer">
+                    <input type="checkbox" checked={draft.can_fill} onChange={(e) => update({ can_fill: e.target.checked })}
+                      className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
+                    <div>
+                      <span className="text-xs font-medium text-zinc-200">Coasting</span>
+                      <p className="text-xs text-zinc-500">Fill dead air with short content when the segment ends early.</p>
+                    </div>
+                  </label>
+                )}
+                {(draft.type === 'voice_track' || draft.type === 'bulletin') && (
+                  <label className="flex items-center gap-2.5 cursor-pointer">
+                    <input type="checkbox" checked={draft.can_reschedule} onChange={(e) => update({ can_reschedule: e.target.checked })}
+                      className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
+                    <div>
+                      <span className="text-xs font-medium text-zinc-200">Reschedule if late</span>
+                      <p className="text-xs text-zinc-500">Defer the whole segment to the next available slot rather than playing it late.</p>
+                    </div>
+                  </label>
+                )}
               </div>
-            </Field>
+            </div>
 
-            <Field label="Trailing time" className="col-span-2">
-              <p className="mb-2.5 text-xs text-zinc-500">Applied when this segment has <span className="text-zinc-400">leftover time</span> before being cut short by an incoming hard-start successor. Strategies are tried in order.</p>
-              <div className="space-y-2.5">
-                {TRAILING_TIME_STRATEGIES.map((s) => (
-                  <label key={s} className="flex items-start gap-2.5 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={draft.trailing_time.includes(s)}
-                      onChange={(e) => {
-                        const next = e.target.checked
-                          ? TRAILING_TIME_STRATEGIES.filter((x) => draft.trailing_time.includes(x) || x === s)
-                          : draft.trailing_time.filter((x) => x !== s);
-                        update({ trailing_time: next });
-                      }}
-                      className="mt-0.5 rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-                    />
-                    <div>
-                      <span className="text-xs font-medium text-zinc-200">{TRAILING_TIME_LABELS[s]}</span>
-                      <p className="text-xs text-zinc-500">{TRAILING_TIME_DESC[s]}</p>
-                    </div>
-                  </label>
-                ))}
+            {/* Catching Up order */}
+            {draft.can_skip && CATCHUP_TYPES[draft.type].length > 0 && (
+              <div className="col-span-2">
+                <p className="text-xs font-medium text-zinc-400 mb-2">Catching Up — skip order</p>
+                <p className="text-xs text-zinc-500 mb-2.5">Event types to skip when running late, in priority order. Drag to reorder.</p>
+                <DriftOrderList
+                  allTypes={CATCHUP_TYPES[draft.type]}
+                  order={draft.catching_up_order}
+                  onChange={(next) => update({ catching_up_order: next })}
+                />
               </div>
-            </Field>
+            )}
+
+            {/* Coasting order */}
+            {draft.can_fill && COASTING_TYPES[draft.type].length > 0 && (
+              <div className="col-span-2">
+                <p className="text-xs font-medium text-zinc-400 mb-2">Coasting — fill order</p>
+                <p className="text-xs text-zinc-500 mb-2.5">Event types to fill with when the segment ends early, in preference order. Drag to reorder.</p>
+                <DriftOrderList
+                  allTypes={COASTING_TYPES[draft.type]}
+                  order={draft.coasting_order}
+                  onChange={(next) => update({ coasting_order: next })}
+                />
+              </div>
+            )}
           </div>
         )}
 
@@ -2300,5 +2339,98 @@ function PlaylistDropdown({ value, onChange, playlists, categories, invalid, all
         <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}{p.is_default ? ' (default)' : ''}</option>
       ))}
     </select>
+  );
+}
+
+// ─── DriftOrderList ───────────────────────────────────────────────────────────
+// Drag-to-reorder list for catching-up / coasting event type preferences.
+// Checked items are active (in order); unchecked items are available but inactive.
+
+function DriftOrderList({
+  allTypes,
+  order,
+  onChange,
+}: {
+  allTypes: DriftEventType[];
+  order: DriftEventType[];
+  onChange: (next: DriftEventType[]) => void;
+}) {
+  const activeItems = order.filter((t) => allTypes.includes(t));
+  const inactiveItems = allTypes.filter((t) => !activeItems.includes(t));
+
+  const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) return;
+    const oldIdx = activeItems.indexOf(active.id as DriftEventType);
+    const newIdx = activeItems.indexOf(over.id as DriftEventType);
+    onChange([...arrayMove(activeItems, oldIdx, newIdx), ...inactiveItems.filter((t) => order.includes(t))]);
+  };
+
+  const toggle = (type: DriftEventType, checked: boolean) => {
+    if (checked) {
+      onChange([...activeItems, type]);
+    } else {
+      onChange(activeItems.filter((t) => t !== type));
+    }
+  };
+
+  return (
+    <div className="space-y-1">
+      <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+        <SortableContext items={activeItems} strategy={verticalListSortingStrategy}>
+          {activeItems.map((type, idx) => (
+            <DriftOrderRow key={type} type={type} active index={idx + 1} onToggle={(c) => toggle(type, c)} />
+          ))}
+        </SortableContext>
+      </DndContext>
+      {inactiveItems.map((type) => (
+        <DriftOrderRow key={type} type={type} active={false} onToggle={(c) => toggle(type, c)} />
+      ))}
+    </div>
+  );
+}
+
+function DriftOrderRow({
+  type, active, index, onToggle,
+}: {
+  type: DriftEventType;
+  active: boolean;
+  index?: number;
+  onToggle: (checked: boolean) => void;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
+    id: type,
+    disabled: !active,
+  });
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={{ transform: CSS.Transform.toString(transform), transition, opacity: isDragging ? 0.4 : 1 }}
+      className={`flex items-center gap-2 px-2 py-1.5 rounded ${active ? 'bg-zinc-800/60' : 'bg-transparent'}`}
+    >
+      {active ? (
+        <button type="button" {...attributes} {...listeners}
+          className="text-zinc-600 hover:text-zinc-400 cursor-grab active:cursor-grabbing">
+          <GripVertical className="w-3.5 h-3.5" />
+        </button>
+      ) : (
+        <div className="w-3.5 h-3.5" />
+      )}
+      <input
+        type="checkbox"
+        checked={active}
+        onChange={(e) => onToggle(e.target.checked)}
+        className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+      />
+      {active && index !== undefined && (
+        <span className="text-xs text-zinc-600 w-3 text-right shrink-0">{index}.</span>
+      )}
+      <span className={`text-xs ${active ? 'text-zinc-200' : 'text-zinc-500'}`}>
+        {DRIFT_EVENT_LABELS[type]}
+      </span>
+    </div>
   );
 }

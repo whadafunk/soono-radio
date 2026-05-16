@@ -25,7 +25,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
         jingle_playlist_id: clocks.jingle_playlist_id,
         finish_policy: clocks.finish_policy,
         join_policy: clocks.join_policy,
-        overrun_policy: clocks.overrun_policy,
         duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
         used_count: usedExpr,
         created_at: clocks.created_at,
@@ -67,7 +66,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
       jingle_playlist_id: parsed.data.jingle_playlist_id ?? null,
       ...(parsed.data.finish_policy && { finish_policy: parsed.data.finish_policy }),
       ...(parsed.data.join_policy && { join_policy: parsed.data.join_policy }),
-      ...(parsed.data.overrun_policy && { overrun_policy: parsed.data.overrun_policy }),
     }).returning();
     return reply.status(201).send(clock);
   });
@@ -83,7 +81,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
         jingle_playlist_id: clocks.jingle_playlist_id,
         finish_policy: clocks.finish_policy,
         join_policy: clocks.join_policy,
-        overrun_policy: clocks.overrun_policy,
         duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
         used_count: usedExpr,
         created_at: clocks.created_at,
@@ -219,8 +216,11 @@ export async function clockRoutes(fastify: FastifyInstance) {
           interstitial_jingle_playlist_id: s.interstitial_jingle_playlist_id ?? null,
           jingle_every_n_tracks: s.jingle_every_n_tracks ?? null,
           start_policy: s.start_policy ?? { type: 'soft', plus_seconds: 30, minus_seconds: 0 },
-          trailing_time: s.trailing_time ?? [],
-          recovery_tactics: s.recovery_tactics ?? [],
+          can_skip: s.can_skip ?? false,
+          can_fill: s.can_fill ?? false,
+          can_reschedule: s.can_reschedule ?? false,
+          catching_up_order: s.catching_up_order ?? [],
+          coasting_order: s.coasting_order ?? [],
           accept_live: s.accept_live ?? true,
           accept_sweepers: s.accept_sweepers ?? [],
           sweeper_config: s.sweeper_config ?? null,

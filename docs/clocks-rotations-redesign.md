@@ -84,15 +84,25 @@ Song-position firing (`song_start` / `song_end` / `any`) lives on the sweeper ro
 
 Three independent settings on the clock control the boundary cases between a clock and the slot before/after it.
 
+**Clock-level policies** (stored on the clock; null = inherit station default):
+
 | Setting | Scope | Options | Default |
 |---------|-------|---------|---------|
 | `finish_policy` | What to do when a hard-cut deadline arrives | `hard_cut` \| `finish_segment` | `finish_segment` |
 | `join_policy` | How to start a clock that's entered mid-way | `join_top` \| `join_mid` | `join_top` |
-| `overrun_policy` | What to play when the show outlives the clock | `loop_top` \| `loop_mid` \| `fall_through` | `loop_top` |
 
 - `finish_segment` lets the active segment finish naturally rather than amputating it. Replaces the old `finish_clock` option which could overrun by up to an hour.
 - `join_top` starts the clock at segment 0; `join_mid` skips ahead to the segment that would be playing at the current wall-clock minute (preserves wall-clock alignment of scheduled breaks).
-- `loop_top` restarts segment 0; `loop_mid` resumes at the segment matching the wall-clock minute; `fall_through` keeps the show's content sources playing without clock structure.
+
+**Show-level policy** (stored on the show):
+
+| Setting | Scope | Options | Default |
+|---------|-------|---------|---------|
+| `extension_policy` | What to play when there is no clock assigned to cover part of the show's interval | `repeat_last_clock` \| `fall_through` | `repeat_last_clock` |
+
+The supervisor tiles clocks across the full show interval, so this only fires if a DJ extends the show beyond the last assigned clock hour. `repeat_last_clock` tiles the last clock again; `fall_through` keeps playing content sources without clock structure.
+
+The `overrun_policy` column remains in the DB (libsql cannot drop columns) but is no longer read or written by the application.
 
 The previous `mid_hour_handoff` setting (if present in `supervisor_config`) is superseded by these three.
 
@@ -120,7 +130,6 @@ type Clock = {
   sweep_config: SweepConfig | null;
   finish_policy: 'hard_cut' | 'finish_segment';
   join_policy: 'join_top' | 'join_mid';
-  overrun_policy: 'loop_top' | 'loop_mid' | 'fall_through';
   used: boolean;          // derived; populated on read
   duration_seconds: number;
 };

@@ -9,6 +9,7 @@ import {
 } from 'lucide-react';
 import {
   ShowPatch, ShowPatchSchema, ShowColor, SHOW_COLORS,
+  EXTENSION_POLICIES, ExtensionPolicy,
   ShowPlaylist, Rotation,
 } from '@radio/shared';
 import { Media } from '@radio/shared';
@@ -19,6 +20,7 @@ import {
   uploadLibraryFiles, fetchRotations, fetchShowCampaigns,
 } from '../../api';
 import type { PlaylistSummary, ShowCampaign } from '../../api';
+import { HelpTooltip } from '../../components/HelpTooltip';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -109,6 +111,7 @@ export function ShowDetailPage() {
         intro_media_id:     show.intro_media_id,
         outro_media_id:     show.outro_media_id,
         duration_minutes:   show.duration_minutes,
+        extension_policy:   show.extension_policy,
         color:              show.color,
         notes:              show.notes ?? '',
       });
@@ -286,6 +289,35 @@ export function ShowDetailPage() {
                   <option value="">None</option>
                   {clocks.map((c) => (
                     <option key={c.id} value={c.id}>{c.name}</option>
+                  ))}
+                </select>
+              )}
+            />
+          </Field>
+
+          {/* Extension policy */}
+          <Field
+            label={
+              <span className="flex items-center gap-1">
+                Extension policy
+                <HelpTooltip text="What to play when there is no clock assigned to cover part of the show's scheduled time — e.g. a DJ extends the show past the last clock hour. Repeat last clock tiles the last assigned clock again; Fall through keeps playing content sources without clock structure." />
+              </span>
+            }
+          >
+            <Controller
+              control={control}
+              name="extension_policy"
+              render={({ field }) => (
+                <select
+                  value={field.value ?? ''}
+                  onChange={(e) => field.onChange(e.target.value === '' ? null : e.target.value as ExtensionPolicy)}
+                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+                >
+                  <option value="">Station default — Repeat last clock</option>
+                  {EXTENSION_POLICIES.map((p) => (
+                    <option key={p} value={p} className="bg-zinc-900">
+                      {p === 'repeat_last_clock' ? 'Repeat last clock' : 'Fall through'}
+                    </option>
                   ))}
                 </select>
               )}
@@ -782,10 +814,10 @@ function MediaPickerField({
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 
-function Field({ label, error, children }: { label: string; error?: string; children: React.ReactNode }) {
+function Field({ label, error, children }: { label: React.ReactNode; error?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</label>
+      <label className="flex items-center text-xs font-medium text-zinc-400 mb-1.5">{label}</label>
       {children}
       {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
     </div>

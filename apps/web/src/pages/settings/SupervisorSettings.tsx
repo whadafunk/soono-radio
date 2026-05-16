@@ -5,8 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader, Check, AlertCircle } from 'lucide-react';
 import {
   SupervisorConfig, SupervisorConfigSchema,
-  FINISH_POLICIES, JOIN_POLICIES, OVERRUN_POLICIES,
-  FinishPolicy, JoinPolicy, OverrunPolicy,
+  FINISH_POLICIES, JOIN_POLICIES,
+  FinishPolicy, JoinPolicy,
 } from '@radio/shared';
 import {
   fetchSupervisorConfig,
@@ -193,14 +193,6 @@ export function SupervisorSettings() {
               fieldName="join_policy"
               options={JOIN_POLICIES}
               labels={{ join_top: 'Join at top', join_mid: 'Join mid' } as Record<JoinPolicy, string>}
-              register={register}
-            />
-            <HandoverPolicyRow
-              label="Overrun policy"
-              hint="What to do when the show outlives its clock."
-              fieldName="overrun_policy"
-              options={OVERRUN_POLICIES}
-              labels={{ loop_top: 'Loop from top', loop_mid: 'Loop at mid', fall_through: 'Fall through' } as Record<OverrunPolicy, string>}
               register={register}
             />
           </div>

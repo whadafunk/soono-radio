@@ -279,9 +279,6 @@ export type FinishPolicy = (typeof FINISH_POLICIES)[number];
 export const JOIN_POLICIES = ['join_top', 'join_mid'] as const;
 export type JoinPolicy = (typeof JOIN_POLICIES)[number];
 
-export const OVERRUN_POLICIES = ['loop_top', 'loop_mid', 'fall_through'] as const;
-export type OverrunPolicy = (typeof OVERRUN_POLICIES)[number];
-
 export const clocks = sqliteTable('clocks', {
   id: integer('id').primaryKey({ autoIncrement: true }),
   name: text('name').notNull(),
@@ -293,9 +290,10 @@ export const clocks = sqliteTable('clocks', {
   // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
   jingle_playlist_id: integer('jingle_playlist_id'),
   // Handover policies — null means inherit from supervisor config defaults
+  // NOTE: overrun_policy column exists in DB but is no longer used (superseded by
+  // show.extension_policy). Cannot drop via libsql — left as inert schema drift.
   finish_policy: text('finish_policy', { enum: FINISH_POLICIES }),
   join_policy: text('join_policy', { enum: JOIN_POLICIES }),
-  overrun_policy: text('overrun_policy', { enum: OVERRUN_POLICIES }),
   created_at: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -331,9 +329,6 @@ export const SEGMENT_SOURCE_TYPES = [
   'recording',       // date-indexed show recording
 ] as const;
 export type SegmentSourceType = (typeof SEGMENT_SOURCE_TYPES)[number];
-
-export const RECOVERY_TACTICS = ['trim_outro', 'skip_song', 'drop_queued'] as const;
-export type RecoveryTactic = (typeof RECOVERY_TACTICS)[number];
 
 export const SWEEPER_TYPES = ['commercial', 'promo', 'station_id', 'jingle'] as const;
 export type SweeperType = (typeof SWEEPER_TYPES)[number];
@@ -397,10 +392,18 @@ export const clockSegments = sqliteTable(
     start_policy: text('start_policy', { mode: 'json' })
       .notNull()
       .default('{"type":"soft","plus_seconds":30,"minus_seconds":0}'),
-    // Ordered gap-management strategies: skip_events, fill, early_handover
+    // NOTE: trailing_time and recovery_tactics columns remain in DB but are no longer used.
+    // Superseded by can_skip/can_fill/can_reschedule/catching_up_order/coasting_order below.
     trailing_time: text('trailing_time', { mode: 'json' }).notNull().default('[]'),
-    // Applied (in order) when this segment runs over before a hard-start successor
     recovery_tactics: text('recovery_tactics', { mode: 'json' }).notNull().default('[]'),
+    // End policy flags
+    can_skip: integer('can_skip', { mode: 'boolean' }).notNull().default(false),
+    can_fill: integer('can_fill', { mode: 'boolean' }).notNull().default(false),
+    // Defer the whole segment when too late (voice_track / bulletin only)
+    can_reschedule: integer('can_reschedule', { mode: 'boolean' }).notNull().default(false),
+    // Ordered event types to skip when catching up; ordered types to fill when coasting
+    catching_up_order: text('catching_up_order', { mode: 'json' }).notNull().default('[]'),
+    coasting_order: text('coasting_order', { mode: 'json' }).notNull().default('[]'),
 
     // ── Sweepers & Live ──────────────────────────────────────────────────────
     // Whether the harbor (DJ mic) is open during this segment
@@ -424,6 +427,11 @@ export type ClockSegment = typeof clockSegments.$inferSelect;
 export type ClockSegmentInsert = typeof clockSegments.$inferInsert;
 
 // ─── Shows ────────────────────────────────────────────────────────────────────
+
+// What to play when there is no clock assigned to cover part of the show's interval.
+// repeat_last_clock: tile the last clock again; fall_through: play content without clock structure.
+export const EXTENSION_POLICIES = ['repeat_last_clock', 'fall_through'] as const;
+export type ExtensionPolicy = (typeof EXTENSION_POLICIES)[number];
 
 export const SHOW_COLORS = [
   'indigo', 'violet', 'cyan', 'emerald', 'amber', 'rose', 'orange', 'teal',
@@ -459,6 +467,8 @@ export const shows = sqliteTable(
       { onDelete: 'set null' },
     ),
     duration_minutes: integer('duration_minutes').notNull().default(60),
+    // null = station default (repeat_last_clock). See EXTENSION_POLICIES.
+    extension_policy: text('extension_policy', { enum: EXTENSION_POLICIES }),
     color: text('color', { enum: SHOW_COLORS }).notNull().default('indigo'),
     notes: text('notes'),
     created_at: integer('created_at', { mode: 'timestamp' })

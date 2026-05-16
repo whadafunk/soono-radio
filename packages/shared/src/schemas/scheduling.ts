@@ -12,8 +12,12 @@ export const StartPolicySchema = z.discriminatedUnion('type', [
 ]);
 export type StartPolicy = z.infer<typeof StartPolicySchema>;
 
-export const TRAILING_TIME_STRATEGIES = ['skip_events', 'fill', 'early_handover', 'hard_cut_with_jingle'] as const;
-export type TrailingTimeStrategy = (typeof TRAILING_TIME_STRATEGIES)[number];
+// ─── Drift tactics ───────────────────────────────────────────────────────────
+
+// Event types that can be skipped (Catching Up) or added (Coasting) to manage drift.
+// Which types are applicable depends on the segment type and is enforced in the UI.
+export const DRIFT_EVENT_TYPES = ['songs', 'jingles', 'station_ids', 'spots', 'promos'] as const;
+export type DriftEventType = (typeof DRIFT_EVENT_TYPES)[number];
 
 // ============ SWEEPER CONFIG ============
 
@@ -73,11 +77,6 @@ export const SegmentSourceEntrySchema = z.discriminatedUnion('type', [
 ]);
 export type SegmentSourceEntry = z.infer<typeof SegmentSourceEntrySchema>;
 
-// ============ RECOVERY TACTICS ============
-
-export const RECOVERY_TACTICS = ['trim_outro', 'skip_song', 'drop_queued'] as const;
-export type RecoveryTactic = (typeof RECOVERY_TACTICS)[number];
-
 // ============ SWEEPERS & LIVE ============
 
 export const SWEEPER_TYPES = ['commercial', 'promo', 'station_id', 'jingle'] as const;
@@ -123,8 +122,15 @@ export const ClockSegmentSchema = z.object({
   jingle_every_n_tracks: z.number().int().positive().nullable(),
 
   start_policy: StartPolicySchema,
-  trailing_time: z.array(z.enum(TRAILING_TIME_STRATEGIES)).default([]),
-  recovery_tactics: z.array(z.enum(RECOVERY_TACTICS)).default([]),
+  // End policy flags
+  can_skip: z.boolean().default(false),
+  can_fill: z.boolean().default(false),
+  // Defer the whole segment when running too late (voice_track / bulletin only)
+  can_reschedule: z.boolean().default(false),
+  // Ordered event types to skip when catching up (active when can_skip = true)
+  catching_up_order: z.array(z.enum(DRIFT_EVENT_TYPES)).default([]),
+  // Ordered event types to fill with when coasting (active when can_fill = true)
+  coasting_order: z.array(z.enum(DRIFT_EVENT_TYPES)).default([]),
 
   accept_live: z.boolean(),
   // Legacy field — superseded by sweeper_config. Still returned by API for old data.
@@ -152,8 +158,11 @@ export const ClockSegmentCreateSchema = z.object({
   jingle_every_n_tracks: z.number().int().positive().nullable().optional(),
 
   start_policy: StartPolicySchema.default({ type: 'soft', plus_seconds: 30, minus_seconds: 0 }),
-  trailing_time: z.array(z.enum(TRAILING_TIME_STRATEGIES)).default([]),
-  recovery_tactics: z.array(z.enum(RECOVERY_TACTICS)).default([]),
+  can_skip: z.boolean().default(false),
+  can_fill: z.boolean().default(false),
+  can_reschedule: z.boolean().default(false),
+  catching_up_order: z.array(z.enum(DRIFT_EVENT_TYPES)).default([]),
+  coasting_order: z.array(z.enum(DRIFT_EVENT_TYPES)).default([]),
 
   accept_live: z.boolean().default(true),
   accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
@@ -166,15 +175,14 @@ export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
 export const ClockSegmentPatchSchema = ClockSegmentCreateSchema.partial().omit({ sort_order: true });
 export type ClockSegmentPatch = z.infer<typeof ClockSegmentPatchSchema>;
 
-// Handover policies — see docs/clocks-rotations-redesign.md §5
+// Clock handover policies — see docs/clocks-rotations-redesign.md §5
 export const FINISH_POLICIES = ['hard_cut', 'finish_segment'] as const;
 export type FinishPolicy = (typeof FINISH_POLICIES)[number];
 
+// join_top: always start clock at segment 0; join_mid: skip ahead to the segment
+// that matches the current wall-clock minute (preserves break-time alignment).
 export const JOIN_POLICIES = ['join_top', 'join_mid'] as const;
 export type JoinPolicy = (typeof JOIN_POLICIES)[number];
-
-export const OVERRUN_POLICIES = ['loop_top', 'loop_mid', 'fall_through'] as const;
-export type OverrunPolicy = (typeof OVERRUN_POLICIES)[number];
 
 export const ClockSchema = z.object({
   id: z.number().int(),
@@ -187,7 +195,6 @@ export const ClockSchema = z.object({
   // null = inherit from supervisor config defaults
   finish_policy: z.enum(FINISH_POLICIES).nullable(),
   join_policy: z.enum(JOIN_POLICIES).nullable(),
-  overrun_policy: z.enum(OVERRUN_POLICIES).nullable(),
   duration_seconds: z.number().int().nonnegative(),
   // Derived: populated by the API on read; not stored.
   used: z.boolean().default(false),
@@ -206,7 +213,6 @@ export const ClockCreateSchema = z.object({
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
   finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),
   join_policy: z.enum(JOIN_POLICIES).nullable().optional(),
-  overrun_policy: z.enum(OVERRUN_POLICIES).nullable().optional(),
 });
 export type ClockCreate = z.infer<typeof ClockCreateSchema>;
 
@@ -217,7 +223,6 @@ export const ClockPatchSchema = z.object({
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
   finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),
   join_policy: z.enum(JOIN_POLICIES).nullable().optional(),
-  overrun_policy: z.enum(OVERRUN_POLICIES).nullable().optional(),
 });
 export type ClockPatch = z.infer<typeof ClockPatchSchema>;
 
@@ -547,6 +552,13 @@ export const SHOW_COLORS = [
 ] as const;
 export type ShowColor = (typeof SHOW_COLORS)[number];
 
+// What to play when there is no clock assigned to cover a time slot within the show's interval
+// (e.g. a DJ extends the show past the last assigned clock hour).
+// repeat_last_clock: tile the last clock again for the extra time.
+// fall_through: keep playing content sources without clock structure.
+export const EXTENSION_POLICIES = ['repeat_last_clock', 'fall_through'] as const;
+export type ExtensionPolicy = (typeof EXTENSION_POLICIES)[number];
+
 export const ShowSchema = z.object({
   id: z.number().int(),
   name: z.string(),
@@ -558,6 +570,8 @@ export const ShowSchema = z.object({
   intro_media_id: z.number().int().nullable(),
   outro_media_id: z.number().int().nullable(),
   duration_minutes: z.number().int().min(30).max(720),
+  // null = station default (repeat_last_clock)
+  extension_policy: z.enum(EXTENSION_POLICIES).nullable(),
   color: z.enum(SHOW_COLORS),
   notes: z.string().nullable(),
   created_at: z.coerce.date(),
@@ -571,6 +585,7 @@ export const ShowCreateSchema = z.object({
   producer: z.string().nullable().optional(),
   default_clock_id: z.number().int().nullable().optional(),
   duration_minutes: z.number().int().min(30).max(720).default(60),
+  extension_policy: z.enum(EXTENSION_POLICIES).nullable().optional(),
   color: z.enum(SHOW_COLORS).default('indigo'),
   notes: z.string().nullable().optional(),
 });
@@ -586,6 +601,7 @@ export const ShowPatchSchema = z.object({
   intro_media_id: z.number().int().positive().nullable().optional(),
   outro_media_id: z.number().int().positive().nullable().optional(),
   duration_minutes: z.number().int().min(30).max(720).optional(),
+  extension_policy: z.enum(EXTENSION_POLICIES).nullable().optional(),
   color: z.enum(SHOW_COLORS).optional(),
   notes: z.string().nullable().optional(),
 });
