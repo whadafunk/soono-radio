@@ -87,6 +87,9 @@ export class Scheduler {
         source: 'auto',
         pickReason: pick.reason,
       });
+      if (!/^[0-9a-f]{64}$/.test(pick.media.sha256)) {
+        throw new Error(`media ${pick.media.id} has corrupt SHA-256 in database`);
+      }
       const containerUri = `${MEDIA_CONTAINER_PATH}/${pick.media.sha256}.mp3`;
       const annotated = `annotate:play_history_id="${playId}":${containerUri}`;
       const pushLines = await this.telnet.command(`auto.push ${annotated}`);

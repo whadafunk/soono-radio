@@ -10,11 +10,11 @@ export const ListenSocketSchema = z.object({
 export type ListenSocket = z.infer<typeof ListenSocketSchema>;
 
 export const MountPointSchema = z.object({
-  name: z.string().min(1),
+  name: z.string().regex(/^\/\S*$/, 'Mount name must start with /'),
   max_listeners: z.number().int().min(-1).default(-1),
   password: z.string().optional(),
-  fallback_mount: z.string().optional(),
-  shoutcast_mount: z.string().optional(),
+  fallback_mount: z.string().regex(/^\/\S*$/).optional(),
+  shoutcast_mount: z.string().regex(/^\/\S*$/).optional(),
   stream_name: z.string().optional(),
   stream_description: z.string().optional(),
   stream_url: z.string().optional(),
@@ -28,7 +28,7 @@ export type MountPoint = z.infer<typeof MountPointSchema>;
 
 export const IcecastConfigSchema = z.object({
   server: z.object({
-    hostname: z.string().min(1),
+    hostname: z.string().regex(/^[a-zA-Z0-9.\-]+$/, 'Must be a valid hostname or IP address'),
     location: z.string().default(''),
     admin: z.string().email(),
   }),

@@ -68,124 +68,152 @@
     {
       "idx": 9,
       "version": "6",
+      "when": 1778450000000,
+      "tag": "0009_clock_segments_redesign",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "6",
+      "when": 1778490000000,
+      "tag": "0010_clock_segments_v3",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1778540000000,
+      "tag": "0011_interstitial_jingle",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1778590000000,
+      "tag": "0012_playlists_dynamic",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
       "when": 1778630400000,
       "tag": "0013_audio_analysis",
       "breakpoints": true
     },
     {
-      "idx": 10,
+      "idx": 14,
       "version": "6",
       "when": 1778716800000,
       "tag": "0014_background_jobs",
       "breakpoints": true
     },
     {
-      "idx": 11,
+      "idx": 15,
       "version": "6",
       "when": 1778803200000,
       "tag": "0015_shows_cleanup",
       "breakpoints": true
     },
     {
-      "idx": 12,
+      "idx": 16,
       "version": "6",
       "when": 1778889600000,
       "tag": "0016_segment_rotation",
       "breakpoints": true
     },
     {
-      "idx": 13,
+      "idx": 17,
       "version": "6",
       "when": 1778976000000,
       "tag": "0017_clocks_rotations_redesign",
       "breakpoints": true
     },
     {
-      "idx": 14,
+      "idx": 18,
       "version": "6",
       "when": 1779062400000,
       "tag": "0018_segment_sweeper_config",
       "breakpoints": true
     },
     {
-      "idx": 15,
+      "idx": 19,
       "version": "6",
       "when": 1779148800000,
       "tag": "0019_clock_policies_nullable",
       "breakpoints": true
     },
     {
-      "idx": 16,
+      "idx": 20,
       "version": "6",
       "when": 1779235200000,
       "tag": "0020_is_default",
       "breakpoints": true
     },
     {
-      "idx": 17,
+      "idx": 21,
       "version": "6",
       "when": 1779321600000,
       "tag": "0021_drop_schedule_entry_fks",
       "breakpoints": true
     },
     {
-      "idx": 18,
+      "idx": 22,
       "version": "6",
       "when": 1779408000000,
       "tag": "0022_orphaned_name_columns",
       "breakpoints": true
     },
     {
-      "idx": 19,
+      "idx": 23,
       "version": "6",
       "when": 1779494400000,
       "tag": "0023_drop_clock_show_id",
       "breakpoints": true
     },
     {
-      "idx": 20,
+      "idx": 24,
       "version": "6",
       "when": 1779581000000,
       "tag": "0024_campaign_show_association",
       "breakpoints": true
     },
     {
-      "idx": 21,
+      "idx": 25,
       "version": "6",
-      "when": 1778878330161,
-      "tag": "0021_tan_yellow_claw",
+      "when": 1779581000001,
+      "tag": "0028_broadcast_intervals",
       "breakpoints": true
     },
     {
-      "idx": 22,
+      "idx": 26,
       "version": "6",
       "when": 1779581000002,
       "tag": "0025_interval_slots",
       "breakpoints": true
     },
     {
-      "idx": 23,
+      "idx": 27,
       "version": "6",
       "when": 1779581000003,
       "tag": "0023_minor_hobgoblin",
       "breakpoints": true
     },
     {
-      "idx": 24,
+      "idx": 28,
       "version": "6",
       "when": 1779581000004,
       "tag": "0024_loving_thunderbird",
       "breakpoints": true
     },
     {
-      "idx": 25,
+      "idx": 29,
       "version": "6",
       "when": 1779581000005,
       "tag": "0026_show_extension_policy",
       "breakpoints": true
     },
     {
-      "idx": 26,
+      "idx": 30,
       "version": "6",
       "when": 1779581000006,
       "tag": "0027_segment_drift_tactics",

@@ -69,7 +69,11 @@ export function IntegrationsSettings() {
     e.preventDefault();
     if (!draft) return;
     const parsed = IntegrationsConfigSchema.safeParse(draft);
-    if (parsed.success) mutation.mutate(parsed.data);
+    if (parsed.success) {
+      mutation.mutate(parsed.data);
+    } else {
+      showToast('error', parsed.error.errors[0]?.message ?? 'Invalid settings');
+    }
   };
 
   if (isLoading) {

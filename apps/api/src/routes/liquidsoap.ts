@@ -55,10 +55,10 @@ export async function liquidsoapRoutes(fastify: FastifyInstance) {
 
   fastify.post('/liquidsoap/restart', async (_request, reply) => {
     try {
-      const { exec } = await import('child_process');
+      const { execFile } = await import('child_process');
       const { promisify } = await import('util');
-      const execPromise = promisify(exec);
-      await execPromise('docker restart radio-liquidsoap');
+      const execFilePromise = promisify(execFile);
+      await execFilePromise('docker', ['restart', 'radio-liquidsoap']);
       return reply.status(200).send({ success: true, message: 'Liquidsoap restarting...' });
     } catch (error) {
       return reply

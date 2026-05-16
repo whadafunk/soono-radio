@@ -153,12 +153,12 @@ export async function killIcecastSource(mount: string): Promise<void> {
 
 async function getDockerContainerUptime(): Promise<number> {
   try {
-    const { exec } = await import('child_process');
+    const { execFile } = await import('child_process');
     const { promisify } = await import('util');
-    const execPromise = promisify(exec);
+    const execFilePromise = promisify(execFile);
 
-    const { stdout } = await execPromise(
-      'docker inspect -f "{{.State.StartedAt}}" radio-icecast'
+    const { stdout } = await execFilePromise(
+      'docker', ['inspect', '-f', '{{.State.StartedAt}}', 'radio-icecast']
     );
 
     const startTime = new Date(stdout.trim()).getTime();

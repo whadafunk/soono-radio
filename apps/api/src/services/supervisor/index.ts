@@ -171,6 +171,9 @@ export async function enqueueManual(mediaId: number): Promise<void> {
     source: 'manual',
     pickReason: 'enqueueManual via API',
   });
+  if (!/^[0-9a-f]{64}$/.test(m.sha256)) {
+    throw new Error(`media ${m.id} has corrupt SHA-256 in database`);
+  }
   const uri = `${MEDIA_CONTAINER_PATH}/${m.sha256}.mp3`;
   await state.telnet.command(`auto.push annotate:play_history_id="${playId}":${uri}`);
   logger.info(
