@@ -10,14 +10,14 @@ import {
 import {
   ShowPatch, ShowPatchSchema, ShowColor, SHOW_COLORS,
   EXTENSION_POLICIES, ExtensionPolicy,
-  ShowPlaylist, Rotation,
+  ShowPlaylist, Rotation, SupervisorConfig,
 } from '@radio/shared';
 import { Media } from '@radio/shared';
 import {
   fetchShow, updateShow, fetchClocks, fetchTemplateEntries,
   fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
   fetchPlaylists, fetchLibrary, fetchLibraryItem, fetchIngestJob,
-  uploadLibraryFiles, fetchRotations, fetchShowCampaigns,
+  uploadLibraryFiles, fetchRotations, fetchShowCampaigns, fetchSupervisorConfig,
 } from '../../api';
 import type { PlaylistSummary, ShowCampaign } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
@@ -84,6 +84,11 @@ export function ShowDetailPage() {
     queryKey: ['show-campaigns', showId],
     queryFn: () => fetchShowCampaigns(showId),
     enabled: !isNaN(showId),
+  });
+
+  const { data: supervisorConfig } = useQuery<SupervisorConfig>({
+    queryKey: ['supervisor-config'],
+    queryFn: fetchSupervisorConfig,
   });
 
   const updateMutation = useMutation({
@@ -313,7 +318,9 @@ export function ShowDetailPage() {
                   onChange={(e) => field.onChange(e.target.value === '' ? null : e.target.value as ExtensionPolicy)}
                   className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
                 >
-                  <option value="">Station default — Repeat last clock</option>
+                  <option value="">
+                    Station default — {supervisorConfig?.extension_policy === 'fall_through' ? 'Fall through' : 'Repeat last clock'}
+                  </option>
                   {EXTENSION_POLICIES.map((p) => (
                     <option key={p} value={p} className="bg-zinc-900">
                       {p === 'repeat_last_clock' ? 'Repeat last clock' : 'Fall through'}

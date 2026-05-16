@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { FINISH_POLICIES, JOIN_POLICIES } from './scheduling.js';
+import { FINISH_POLICIES, JOIN_POLICIES, EXTENSION_POLICIES } from './scheduling.js';
 
 export const PLAY_SOURCES = ['auto', 'live', 'manual'] as const;
 export type PlaySource = (typeof PLAY_SOURCES)[number];
@@ -51,6 +51,8 @@ export const SupervisorConfigSchema = z.object({
   // Station-wide handover defaults — clocks inherit these unless they set an explicit override
   finish_policy: z.enum(FINISH_POLICIES).default('finish_segment'),
   join_policy: z.enum(JOIN_POLICIES).default('join_top'),
+  // Default for shows that don't set extension_policy explicitly
+  extension_policy: z.enum(EXTENSION_POLICIES).default('repeat_last_clock'),
 });
 export type SupervisorConfig = z.infer<typeof SupervisorConfigSchema>;
 

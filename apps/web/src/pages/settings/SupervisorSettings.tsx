@@ -5,8 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader, Check, AlertCircle } from 'lucide-react';
 import {
   SupervisorConfig, SupervisorConfigSchema,
-  FINISH_POLICIES, JOIN_POLICIES,
-  FinishPolicy, JoinPolicy,
+  FINISH_POLICIES, JOIN_POLICIES, EXTENSION_POLICIES,
+  FinishPolicy, JoinPolicy, ExtensionPolicy,
 } from '@radio/shared';
 import {
   fetchSupervisorConfig,
@@ -176,7 +176,7 @@ export function SupervisorSettings() {
 
         <CollapsibleSection title="Handover defaults">
           <p className="text-xs text-zinc-500 mb-4">
-            Station-wide defaults for clock handover behaviour. Individual clocks can override these.
+            Station-wide defaults for clock handover behaviour. Individual clocks and shows can override these.
           </p>
           <div className="space-y-4">
             <HandoverPolicyRow
@@ -193,6 +193,14 @@ export function SupervisorSettings() {
               fieldName="join_policy"
               options={JOIN_POLICIES}
               labels={{ join_top: 'Join at top', join_mid: 'Join mid' } as Record<JoinPolicy, string>}
+              register={register}
+            />
+            <HandoverPolicyRow
+              label="Extension policy"
+              hint="What to play when a show has no clock assigned to cover part of its interval — e.g. a DJ extends past the last clock hour. Shows can override this individually."
+              fieldName="extension_policy"
+              options={EXTENSION_POLICIES}
+              labels={{ repeat_last_clock: 'Repeat last clock', fall_through: 'Fall through' } as Record<ExtensionPolicy, string>}
               register={register}
             />
           </div>
