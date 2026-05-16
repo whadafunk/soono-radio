@@ -143,11 +143,19 @@ export const playHistory = sqliteTable(
     aborted: integer('aborted', { mode: 'boolean' }).notNull().default(false),
     live_listener_count: integer('live_listener_count'),
     pick_reason: text('pick_reason'),
+    // Campaign/promo tracking — set by the stop-set picker (Phase 3).
+    // Null for music, jingle, and all non-stop-set plays.
+    campaign_id: integer('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
+    promo_id: integer('promo_id').references(() => promos.id, { onDelete: 'set null' }),
+    clock_segment_id: integer('clock_segment_id').references(() => clockSegments.id, { onDelete: 'set null' }),
+    // 1-based position within the stop-set (1 = first spot). Null for non-stop-set plays.
+    stop_set_position: integer('stop_set_position'),
   },
   (t) => ({
     startedAtIdx: index('play_history_started_at_idx').on(t.started_at),
     mediaIdx: index('play_history_media_id_idx').on(t.media_id),
     sourceIdx: index('play_history_source_idx').on(t.source),
+    campaignIdx: index('play_history_campaign_idx').on(t.campaign_id),
   }),
 );
 

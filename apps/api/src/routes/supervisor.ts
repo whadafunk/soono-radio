@@ -9,6 +9,7 @@ import {
   getSupervisorConfig,
   writeSupervisorConfig,
 } from '../services/supervisor/config.js';
+import { computeWeeklyCapacity } from '../services/supervisor/capacity.js';
 
 export async function supervisorRoutes(fastify: FastifyInstance) {
   fastify.get('/supervisor/status', async (_request, reply) => {
@@ -53,6 +54,11 @@ export async function supervisorRoutes(fastify: FastifyInstance) {
     }
     await writeSupervisorConfig(parsed.data);
     return reply.send({ success: true });
+  });
+
+  fastify.get('/supervisor/capacity', async (_request, reply) => {
+    const capacity = await computeWeeklyCapacity();
+    return reply.send(capacity);
   });
 
   fastify.post('/supervisor/restart', async (_request, reply) => {
