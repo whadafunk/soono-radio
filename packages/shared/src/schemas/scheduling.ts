@@ -118,8 +118,10 @@ export const ClockSegmentSchema = z.object({
   start_clip_playlist_id: z.number().int().nullable(),
   end_clip_playlist_id: z.number().int().nullable(),
   bed_playlist_id: z.number().int().nullable(),
-  interstitial_jingle_playlist_id: z.number().int().nullable(),
+  interstitial_jingles_enabled: z.boolean().default(false),
   jingle_every_n_tracks: z.number().int().positive().nullable(),
+  interstitial_station_id_enabled: z.boolean().default(false),
+  station_id_every_n_tracks: z.number().int().positive().nullable(),
 
   start_policy: StartPolicySchema,
   // End policy flags
@@ -154,8 +156,10 @@ export const ClockSegmentCreateSchema = z.object({
   start_clip_playlist_id: z.number().int().positive().nullable().optional(),
   end_clip_playlist_id: z.number().int().positive().nullable().optional(),
   bed_playlist_id: z.number().int().positive().nullable().optional(),
-  interstitial_jingle_playlist_id: z.number().int().positive().nullable().optional(),
+  interstitial_jingles_enabled: z.boolean().default(false),
   jingle_every_n_tracks: z.number().int().positive().nullable().optional(),
+  interstitial_station_id_enabled: z.boolean().default(false),
+  station_id_every_n_tracks: z.number().int().positive().nullable().optional(),
 
   start_policy: StartPolicySchema.default({ type: 'soft', plus_seconds: 30, minus_seconds: 0 }),
   can_skip: z.boolean().default(false),

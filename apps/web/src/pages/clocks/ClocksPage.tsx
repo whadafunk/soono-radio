@@ -249,8 +249,10 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
     start_clip_playlist_id: null,
     end_clip_playlist_id: null,
     bed_playlist_id: null,
-    interstitial_jingle_playlist_id: null,
+    interstitial_jingles_enabled: false,
     jingle_every_n_tracks: null,
+    interstitial_station_id_enabled: false,
+    station_id_every_n_tracks: null,
     start_policy: d.start_policy,
     can_skip: d.can_skip,
     can_fill: d.can_fill,
@@ -1464,31 +1466,73 @@ function SegmentDrawer({
             </Field>
 
             {draft.type === 'music' && (
-              <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1">
-                <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Between-track jingles</p>
-                <div className="grid grid-cols-2 gap-4">
-                  <Field label="Jingle playlist" hint="Short station IDs or show jingles inserted between tracks">
-                    <PlaylistDropdown
-                      value={draft.interstitial_jingle_playlist_id}
-                      onChange={(v) => update({ interstitial_jingle_playlist_id: v })}
-                      playlists={playlists}
-                      categories={['jingle']}
-                    />
-                  </Field>
-                  <Field label="Every N songs" hint="Insert one jingle after every N tracks (leave blank to disable)">
-                    <input
-                      type="number"
-                      min={1}
-                      max={20}
-                      placeholder="—"
-                      value={draft.jingle_every_n_tracks ?? ''}
-                      onChange={(e) => {
-                        const v = parseInt(e.target.value, 10);
-                        update({ jingle_every_n_tracks: !isNaN(v) && v >= 1 ? v : null });
-                      }}
-                      className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
-                    />
-                  </Field>
+              <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1 space-y-4">
+                {/* Between-track jingles */}
+                <div>
+                  <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Between-track jingles</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Enable" hint="Source: clock's jingle playlist — shared with sweepers">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={draft.interstitial_jingles_enabled}
+                          onChange={(e) => update({ interstitial_jingles_enabled: e.target.checked })}
+                          className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm text-zinc-300">Insert jingles between tracks</span>
+                      </label>
+                    </Field>
+                    {draft.interstitial_jingles_enabled && (
+                      <Field label="Every N songs" hint="Insert one jingle after every N tracks">
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          placeholder="—"
+                          value={draft.jingle_every_n_tracks ?? ''}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            update({ jingle_every_n_tracks: !isNaN(v) && v >= 1 ? v : null });
+                          }}
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+                        />
+                      </Field>
+                    )}
+                  </div>
+                </div>
+
+                {/* Between-track station IDs */}
+                <div>
+                  <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Between-track station IDs</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Field label="Enable" hint="Source: clock's station ID playlist — shared with sweepers">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={draft.interstitial_station_id_enabled}
+                          onChange={(e) => update({ interstitial_station_id_enabled: e.target.checked })}
+                          className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                        />
+                        <span className="text-sm text-zinc-300">Insert station IDs between tracks</span>
+                      </label>
+                    </Field>
+                    {draft.interstitial_station_id_enabled && (
+                      <Field label="Every N songs" hint="Insert one station ID after every N tracks">
+                        <input
+                          type="number"
+                          min={1}
+                          max={20}
+                          placeholder="—"
+                          value={draft.station_id_every_n_tracks ?? ''}
+                          onChange={(e) => {
+                            const v = parseInt(e.target.value, 10);
+                            update({ station_id_every_n_tracks: !isNaN(v) && v >= 1 ? v : null });
+                          }}
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+                        />
+                      </Field>
+                    )}
+                  </div>
                 </div>
               </div>
             )}

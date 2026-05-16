@@ -387,13 +387,13 @@ export const clockSegments = sqliteTable(
       () => playlists.id,
       { onDelete: 'set null' },
     ),
-    // Interstitial jingles — played between tracks within a music segment
-    interstitial_jingle_playlist_id: integer('interstitial_jingle_playlist_id').references(
-      () => playlists.id,
-      { onDelete: 'set null' },
-    ),
+    // Between-track jingles — uses clock.jingle_playlist_id (same source as sweepers)
+    interstitial_jingles_enabled: integer('interstitial_jingles_enabled', { mode: 'boolean' }).notNull().default(false),
     // Insert a jingle every N tracks (null = disabled); music segments only
     jingle_every_n_tracks: integer('jingle_every_n_tracks'),
+    // Between-track station IDs — uses clock.station_id_playlist_id (same source as sweepers)
+    interstitial_station_id_enabled: integer('interstitial_station_id_enabled', { mode: 'boolean' }).notNull().default(false),
+    station_id_every_n_tracks: integer('station_id_every_n_tracks'),
 
     // ── Timing ───────────────────────────────────────────────────────────────
     // { type: 'hard' } | { type: 'soft', plus_seconds, minus_seconds }
