@@ -1,0 +1,1 @@
+ALTER TABLE `promos` ADD `no_air_during_show` integer DEFAULT false NOT NULL;

@@ -374,6 +374,70 @@ export const CampaignPacingSchema = z.object({
 });
 export type CampaignPacing = z.infer<typeof CampaignPacingSchema>;
 
+// ============ PROMOS ============
+
+export const PromoSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  show_id: z.number().int().nullable(),
+  starts_on: z.string(),
+  ends_on: z.string(),
+  min_plays_per_day: z.number().int().positive(),
+  max_plays_per_day: z.number().int().positive(),
+  no_air_during_show: z.boolean().default(false),
+  active: z.boolean(),
+  notes: z.string().nullable(),
+  created_at: z.coerce.date(),
+  updated_at: z.coerce.date(),
+});
+export type Promo = z.infer<typeof PromoSchema>;
+
+export const PromoCreateSchema = z.object({
+  name: z.string().min(1, 'Name is required'),
+  show_id: z.number().int().positive().nullable().optional(),
+  starts_on: z.string().min(1, 'Start date required'),
+  ends_on: z.string().min(1, 'End date required'),
+  min_plays_per_day: z.number().int().positive().default(1),
+  max_plays_per_day: z.number().int().positive().default(3),
+  no_air_during_show: z.boolean().default(false),
+  notes: z.string().nullable().optional(),
+});
+export type PromoCreate = z.infer<typeof PromoCreateSchema>;
+
+export const PromoPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  show_id: z.number().int().positive().nullable().optional(),
+  starts_on: z.string().optional(),
+  ends_on: z.string().optional(),
+  min_plays_per_day: z.number().int().positive().optional(),
+  max_plays_per_day: z.number().int().positive().optional(),
+  no_air_during_show: z.boolean().optional(),
+  active: z.boolean().optional(),
+  notes: z.string().nullable().optional(),
+});
+export type PromoPatch = z.infer<typeof PromoPatchSchema>;
+
+export const PromoWithShowSchema = PromoSchema.extend({
+  show_name: z.string().nullable(),
+});
+export type PromoWithShow = z.infer<typeof PromoWithShowSchema>;
+
+export const PromoMediaSchema = z.object({
+  id: z.number().int(),
+  promo_id: z.number().int(),
+  media_id: z.number().int(),
+  created_at: z.coerce.date(),
+});
+export type PromoMedia = z.infer<typeof PromoMediaSchema>;
+
+export const PromoMediaWithMediaSchema = PromoMediaSchema.extend({
+  title: z.string().nullable(),
+  artist: z.string().nullable(),
+  duration_seconds: z.number().nullable(),
+  original_filename: z.string().nullable(),
+});
+export type PromoMediaWithMedia = z.infer<typeof PromoMediaWithMediaSchema>;
+
 // ============ CAMPAIGN MEDIA ============
 
 export const CampaignMediaSchema = z.object({

@@ -22,6 +22,7 @@ import { ShowDetailPage } from './pages/shows/ShowDetailPage';
 import { RotationsPage } from './pages/rotations/RotationsPage';
 import { PlaylistsPage } from './pages/playlists/PlaylistsPage';
 import { ActivityPage } from './pages/activity/ActivityPage';
+import { PromoPage } from './pages/promo/PromoPage';
 
 const queryClient = new QueryClient();
 
@@ -54,6 +55,7 @@ export function App() {
             <Route path="/clocks/:id" element={<ClocksPage />} />
             <Route path="/shows" element={<ShowsPage />} />
             <Route path="/shows/:id" element={<ShowDetailPage />} />
+            <Route path="/promo" element={<PromoPage />} />
             <Route path="/playlists" element={<PlaylistsPage />} />
             <Route path="/rotations" element={<RotationsPage />} />
           </Route>

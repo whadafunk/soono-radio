@@ -27,6 +27,10 @@ import {
   FacetsResponseSchema,
   BackgroundJob,
   ActivityStats,
+  PromoWithShow,
+  PromoCreate,
+  PromoPatch,
+  PromoMediaWithMedia,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -835,6 +839,38 @@ export function updateInterval(id: number, patch_: BroadcastIntervalPatch): Prom
 
 export function deleteInterval(id: number): Promise<void> {
   return del(`/intervals/${id}`);
+}
+
+// ─── Promos ───────────────────────────────────────────────────────────────────
+
+export function fetchPromos(): Promise<PromoWithShow[]> {
+  return apiFetch('/promos');
+}
+
+export function createPromo(data: PromoCreate): Promise<PromoWithShow> {
+  return post('/promos', data);
+}
+
+export function updatePromo(id: number, patch_: PromoPatch): Promise<PromoWithShow> {
+  return patch(`/promos/${id}`, patch_);
+}
+
+export function deletePromo(id: number): Promise<void> {
+  return del(`/promos/${id}`);
+}
+
+// ─── Promo Media ──────────────────────────────────────────────────────────────
+
+export function fetchPromoMedia(promoId: number): Promise<PromoMediaWithMedia[]> {
+  return apiFetch(`/promos/${promoId}/media`);
+}
+
+export function addPromoMedia(promoId: number, mediaId: number): Promise<PromoMediaWithMedia> {
+  return post(`/promos/${promoId}/media`, { media_id: mediaId });
+}
+
+export function removePromoMedia(id: number): Promise<void> {
+  return del(`/promo-media/${id}`);
 }
 
 export function fetchIntervalSlots(): Promise<BroadcastIntervalSlot[]> {

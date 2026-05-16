@@ -162,6 +162,20 @@
       "when": 1779581000002,
       "tag": "0025_interval_slots",
       "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "6",
+      "when": 1779581000003,
+      "tag": "0023_minor_hobgoblin",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "6",
+      "when": 1779581000004,
+      "tag": "0024_loving_thunderbird",
+      "breakpoints": true
     }
   ]
 }

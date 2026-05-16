@@ -780,6 +780,59 @@ export const campaignMedia = sqliteTable(
 export type CampaignMedia = typeof campaignMedia.$inferSelect;
 export type CampaignMediaInsert = typeof campaignMedia.$inferInsert;
 
+// ─── Promos ───────────────────────────────────────────────────────────────────
+
+export const promos = sqliteTable(
+  'promos',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    show_id: integer('show_id').references(() => shows.id, { onDelete: 'set null' }),
+    starts_on: text('starts_on').notNull(),   // ISO date "2026-01-01"
+    ends_on: text('ends_on').notNull(),
+    min_plays_per_day: integer('min_plays_per_day').notNull().default(1),
+    max_plays_per_day: integer('max_plays_per_day').notNull().default(3),
+    no_air_during_show: integer('no_air_during_show', { mode: 'boolean' }).notNull().default(false),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    notes: text('notes'),
+    created_at: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updated_at: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    showIdx: index('promos_show_idx').on(t.show_id),
+    activeIdx: index('promos_active_idx').on(t.active),
+  }),
+);
+
+export type Promo = typeof promos.$inferSelect;
+export type PromoInsert = typeof promos.$inferInsert;
+
+export const promoMedia = sqliteTable(
+  'promo_media',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    promo_id: integer('promo_id')
+      .notNull()
+      .references(() => promos.id, { onDelete: 'cascade' }),
+    media_id: integer('media_id')
+      .notNull()
+      .references(() => media.id, { onDelete: 'cascade' }),
+    created_at: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    promoIdx: index('promo_media_promo_idx').on(t.promo_id),
+  }),
+);
+
+export type PromoMedia = typeof promoMedia.$inferSelect;
+export type PromoMediaInsert = typeof promoMedia.$inferInsert;
+
 // ─── Background jobs ─────────────────────────────────────────────────────────
 
 export const JOB_TYPES = ['lookup_id', 'analyse', 're-transcode'] as const;
