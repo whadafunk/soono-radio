@@ -57,6 +57,7 @@ export async function showRoutes(fastify: FastifyInstance) {
       await db.update(templateEntries).set({ orphaned_show_name: show.name }).where(eq(templateEntries.show_id, id));
       await db.update(calendarEntries).set({ orphaned_show_name: show.name }).where(eq(calendarEntries.show_id, id));
     }
+    await db.update(campaigns).set({ show_id: null }).where(eq(campaigns.show_id, id));
     await db.delete(showPlaylists).where(eq(showPlaylists.show_id, id));
     await db.delete(shows).where(eq(shows.id, id));
     return reply.status(204).send();

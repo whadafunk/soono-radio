@@ -252,7 +252,7 @@ export function SchedulePage() {
       } else if (current.op === 'resize-start') {
         startMin = Math.max(0, Math.min(current.endMin - 15, snapMin(clamped)));
       } else {
-        endMin = Math.max(current.startMin + 15, Math.min(24 * 60, snapMin(clamped)));
+        endMin = Math.max(current.startMin + 15, Math.min(24 * 60 - 1, snapMin(clamped)));
       }
 
       // Cross-day: only for move op
@@ -692,7 +692,7 @@ function DayColumn({
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
         const isDragging     = entry.id === draggingId && !activeDrag?.isCopy;
         const blockDragStart = (op: DragOp, mouseY: number, isCopy: boolean) => handleBlockDragStart(entry, op, mouseY, isCopy);
-        const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
+        const ovn  = isOvernightEntry(entry.time_start, entry.time_end) && timeToMinutes(entry.time_end) > 0;
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
           return [
@@ -813,7 +813,7 @@ function CalendarDayColumn({
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
         const isDragging     = entry.id === templateDraggingId && !activeDrag?.isCopy;
         const blockDragStart = (op: DragOp, mouseY: number, isCopy: boolean) => handleBlockDragStart(entry, 'template-in-calendar', op, mouseY, isCopy);
-        const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
+        const ovn  = isOvernightEntry(entry.time_start, entry.time_end) && timeToMinutes(entry.time_end) > 0;
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
           return [
@@ -833,7 +833,7 @@ function CalendarDayColumn({
         const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
         const isDragging     = entry.id === calDraggingId && !activeDrag?.isCopy;
         const blockDragStart = (op: DragOp, mouseY: number, isCopy: boolean) => handleBlockDragStart(entry, 'calendar', op, mouseY, isCopy);
-        const ovn  = isOvernightEntry(entry.time_start, entry.time_end);
+        const ovn  = isOvernightEntry(entry.time_start, entry.time_end) && timeToMinutes(entry.time_end) > 0;
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
           return [
