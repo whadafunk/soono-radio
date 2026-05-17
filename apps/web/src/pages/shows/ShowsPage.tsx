@@ -151,7 +151,9 @@ export function ShowsPage() {
     const Icon = active && sortDir === 'desc' ? ChevronDown : ChevronUp;
     return (
       <th
-        className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-700 cursor-pointer select-none hover:text-zinc-200 transition-colors"
+        className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider border-r border-zinc-700 cursor-pointer select-none transition-colors ${
+          active ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+        }`}
         onClick={() => handleSort(col)}
       >
         <span className="flex items-center gap-1">
