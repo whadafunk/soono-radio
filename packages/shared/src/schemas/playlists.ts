@@ -190,6 +190,15 @@ export const RotationSchema = z.object({
   song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()),
   is_default: z.boolean().optional().default(false),
+  // Hot-play: when both are set on a music-kind rotation, the picker slips
+  // one pick from hot_play_playlist_id into the rotation every
+  // hot_play_every_n_tracks main picks. Both null = disabled.
+  hot_play_playlist_id: z.number().int().positive().nullable().optional(),
+  hot_play_every_n_tracks: z.number().int().positive().nullable().optional(),
+  // Heavy rotation: when true on a music-kind rotation, the picker
+  // prioritizes tracks from active music_campaigns by per-day pacing before
+  // drawing from the rotation's normal pool.
+  heavy_rotation_enabled: z.boolean().optional().default(false),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
@@ -202,6 +211,9 @@ export const RotationCreateSchema = z.object({
   song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()).default({}),
   is_default: z.boolean().optional(),
+  hot_play_playlist_id: z.number().int().positive().nullable().optional(),
+  hot_play_every_n_tracks: z.number().int().positive().nullable().optional(),
+  heavy_rotation_enabled: z.boolean().optional(),
 });
 export type RotationCreate = z.infer<typeof RotationCreateSchema>;
 
@@ -212,6 +224,9 @@ export const RotationPatchSchema = z.object({
   song_position: z.enum(SONG_POSITIONS).nullable().optional(),
   params: z.record(z.unknown()).optional(),
   is_default: z.boolean().optional(),
+  hot_play_playlist_id: z.number().int().positive().nullable().optional(),
+  hot_play_every_n_tracks: z.number().int().positive().nullable().optional(),
+  heavy_rotation_enabled: z.boolean().optional(),
 });
 export type RotationPatch = z.infer<typeof RotationPatchSchema>;
 

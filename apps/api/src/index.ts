@@ -18,6 +18,7 @@ import { integrationsRoutes } from './routes/integrations.js';
 import { activityRoutes } from './routes/activity.js';
 import { intervalRoutes } from './routes/intervals.js';
 import { promoRoutes } from './routes/promos.js';
+import { musicCampaignRoutes } from './routes/musicCampaigns.js';
 import { runMigrations } from './db/index.js';
 import { ingestQueue, recoverInterruptedJobs } from './services/ingest/queue.js';
 import { ensureDirs } from './services/ingest/paths.js';
@@ -57,6 +58,7 @@ fastify.register(integrationsRoutes);
 fastify.register(activityRoutes);
 fastify.register(intervalRoutes);
 fastify.register(promoRoutes);
+fastify.register(musicCampaignRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Radio API Server' };

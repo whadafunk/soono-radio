@@ -91,6 +91,18 @@ Start with implementing LiquidSoap settings control panel, then expand to player
 - The frontend should provide intuitive control over LiquidSoap settings
 - Design the API layer to support future extensibility
 
+### The UI is the spec for scheduling logic
+
+All the scheduling/clock/rotation/campaign logic has been modeled in the UI already. The UI covers nearly every use case the operator could think about — clocks, segments, sources, sweepers, rotations, calendar overrides, campaign constraints, all of it.
+
+When implementing the supervisor/picker/scheduler algorithm — which is genuinely complicated — **the direction can be deduced from the UI**. The UI's option lists, validation rules, defaults, and field combinations encode the intended behavior. Read the relevant pages and components before writing or revising backend logic.
+
+**Additive UI changes are expected and fine.** As features get built out, adding new fields, controls, or pages to surface capability is part of the work. Don't ask before adding.
+
+**Destructive UI changes require explicit confirmation.** Dropping a field, removing a control, replacing an option list with a different one, or renaming something in a way that changes its meaning — STOP and consult the user first. Each field in the UI represents an accumulated thought about how the station should work; once gone, the feature is hard to remember and reconstruct. This rule applies even when the field looks unused or "obviously redundant" — the field is there because at some point the operator decided it should be. If you genuinely believe a control is wrong or redundant, raise it as a question; never delete it in passing.
+
+If you're unsure whether a change is additive or destructive, treat it as destructive and ask.
+
 ---
 
 ## Development Workflow & SDLC

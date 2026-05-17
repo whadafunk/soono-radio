@@ -1,5 +1,4 @@
-import type { Media } from '../../db/schema.js';
-import { pickNext } from './picker.js';
+import { pickNext, type PickedMedia } from './picker.js';
 import { recordPushed } from './playHistory.js';
 import type { TelnetClient } from './telnet.js';
 import { getSupervisorConfig } from './config.js';
@@ -15,12 +14,13 @@ export interface SchedulerState {
 }
 
 export interface SchedulerEvents {
-  pushed: (info: { media: Media; requestId: number | null; pickReason: string }) => void;
+  pushed: (info: { media: PickedMedia; requestId: number | null; pickReason: string }) => void;
 }
 
 export class Scheduler {
   private timer: NodeJS.Timeout | null = null;
   private busy = false;
+  private paused = false;
   private state: SchedulerState = {
     queue_depth: 0,
     on_air_source: 'none',
@@ -30,7 +30,7 @@ export class Scheduler {
   constructor(
     private telnet: TelnetClient,
     private logger: { info: (msg: string) => void; warn: (msg: string) => void },
-    private onPushed?: (info: { media: Media; requestId: number | null; pickReason: string }) => void,
+    private onPushed?: (info: { media: PickedMedia; requestId: number | null; pickReason: string }) => void,
   ) {}
 
   getState(): SchedulerState {
@@ -53,6 +53,16 @@ export class Scheduler {
     }
   }
 
+  /** Pause picking. Queue/live polling continues so status stays fresh. */
+  setPaused(paused: boolean): void {
+    this.paused = paused;
+  }
+
+  /** Force an immediate tick — used by /supervisor/resync. */
+  async tickNow(): Promise<void> {
+    await this.tick();
+  }
+
   private async tick(): Promise<void> {
     if (this.busy) return;
     if (!this.telnet.isConnected()) {
@@ -61,14 +71,18 @@ export class Scheduler {
     }
     this.busy = true;
     try {
-      // 1. Read queue depth and live status.
+      // 1. Read queue depth and live status (we keep doing this even when
+      //    paused so the UI still reflects what LS is doing).
       const queueLines = await this.telnet.command('auto.queue').catch(() => [] as string[]);
       this.state.queue_depth = parseQueueDepth(queueLines);
 
       const liveLines = await this.telnet.command('live.status').catch(() => [] as string[]);
       this.state.on_air_source = isLiveConnected(liveLines) ? 'live' : 'auto';
 
-      // 2. If queue is short, pick and push.
+      // 2. Paused → skip picking. Operator must Resume to push fresh tracks.
+      if (this.paused) return;
+
+      // 3. If queue is short, pick and push.
       if (this.state.queue_depth >= getSupervisorConfig().queue_depth_threshold) return;
 
       const pick = await pickNext();
@@ -86,6 +100,11 @@ export class Scheduler {
         mediaId: pick.media.id,
         source: 'auto',
         pickReason: pick.reason,
+        clockSegmentId: pick.clock_segment_id,
+        musicCampaignId: pick.music_campaign_id,
+        campaignId: pick.campaign_id,
+        promoId: pick.promo_id,
+        stopSetPosition: pick.stop_set_position,
       });
       if (!/^[0-9a-f]{64}$/.test(pick.media.sha256)) {
         throw new Error(`media ${pick.media.id} has corrupt SHA-256 in database`);

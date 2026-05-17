@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo, Fragment, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useNavigate } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle } from 'lucide-react';
+import { useNavigate, Link } from 'react-router-dom';
+import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye } from 'lucide-react';
 import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
@@ -356,6 +356,17 @@ export function SchedulePage() {
             </button>
           ))}
         </div>
+
+        {/* Preview link — opens the dry-run simulator */}
+        <Link
+          to="/schedule/preview"
+          onClick={(e) => e.stopPropagation()}
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded-lg transition-colors"
+          title="Walk the predictor forward and see what would air"
+        >
+          <Eye className="w-3.5 h-3.5" />
+          Preview
+        </Link>
 
         {/* Week navigation — calendar mode only */}
         {mode === 'calendar' && (

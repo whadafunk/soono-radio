@@ -383,6 +383,64 @@ export const CampaignPacingSchema = z.object({
 });
 export type CampaignPacing = z.infer<typeof CampaignPacingSchema>;
 
+// ============ MUSIC CAMPAIGNS ============
+// Parallel to spot Campaign — promotes specific songs (a playlist of contracted
+// music) at a per-day target rate within a date interval. Delivered during
+// music segments whose rotation has heavy_rotation_enabled = true. Simpler
+// than spot campaigns: no time windows, advertiser separation, first-in-slot,
+// exclusions, or interval scoping. Just per-day plays and a date range.
+
+export const MusicCampaignSchema = z.object({
+  id: z.number().int(),
+  customer_id: z.number().int(),
+  name: z.string(),
+  playlist_id: z.number().int(),
+  starts_on: z.string(),
+  ends_on: z.string(),
+  plays_per_day: z.number().int().positive(),
+  notes: z.string().nullable(),
+  active: z.boolean(),
+  created_at: z.coerce.date(),
+  updated_at: z.coerce.date(),
+});
+export type MusicCampaign = z.infer<typeof MusicCampaignSchema>;
+
+export const MusicCampaignCreateSchema = z.object({
+  customer_id: z.number().int().positive(),
+  name: z.string().min(1, 'Campaign name is required'),
+  playlist_id: z.number().int().positive(),
+  starts_on: z.string().min(1, 'Start date required'),
+  ends_on: z.string().min(1, 'End date required'),
+  plays_per_day: z.number().int().positive('Must be at least 1'),
+  notes: z.string().nullable().optional(),
+});
+export type MusicCampaignCreate = z.infer<typeof MusicCampaignCreateSchema>;
+
+export const MusicCampaignPatchSchema = z.object({
+  name: z.string().min(1).optional(),
+  playlist_id: z.number().int().positive().optional(),
+  starts_on: z.string().optional(),
+  ends_on: z.string().optional(),
+  plays_per_day: z.number().int().positive().optional(),
+  notes: z.string().nullable().optional(),
+  active: z.boolean().optional(),
+});
+export type MusicCampaignPatch = z.infer<typeof MusicCampaignPatchSchema>;
+
+export const MusicCampaignWithCustomerSchema = MusicCampaignSchema.extend({
+  customer_name: z.string(),
+  playlist_name: z.string(),
+});
+export type MusicCampaignWithCustomer = z.infer<typeof MusicCampaignWithCustomerSchema>;
+
+export const MusicCampaignPacingSchema = z.object({
+  plays_today: z.number().int().nonnegative(),
+  target: z.number().int().positive(),
+  pct: z.number().min(0).max(200), // can exceed 100 when over-pacing
+  on_track: z.boolean(),
+});
+export type MusicCampaignPacing = z.infer<typeof MusicCampaignPacingSchema>;
+
 // ============ PROMOS ============
 
 export const PromoSchema = z.object({

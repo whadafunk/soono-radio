@@ -2,7 +2,8 @@ import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Check, X, Trash2, Music, Megaphone } from 'lucide-react';
 import { Rotation, RotationType, RotationKind, SongPosition, ROTATION_TYPES, ROTATION_KINDS, SONG_POSITIONS } from '@radio/shared';
-import { fetchRotations, createRotation, updateRotation, deleteRotation } from '../../api';
+import { fetchRotations, createRotation, updateRotation, deleteRotation, fetchPlaylists } from '../../api';
+import { HelpTooltip } from '../../components/HelpTooltip';
 
 const KIND_META: Record<RotationKind, { label: string; icon: typeof Music; desc: string }> = {
   music:   { label: 'Music',   icon: Music,      desc: 'Draws from playlists. Used by show playlists and music-segment sources.' },
@@ -45,7 +46,17 @@ const DEFAULT_PARAMS: Record<RotationType, Record<string, unknown>> = {
   weighted:              {},
 };
 
-type RotationDraft = { id: number; name: string; kind: RotationKind; type: RotationType; song_position: SongPosition | null; params: Record<string, unknown> };
+type RotationDraft = {
+  id: number;
+  name: string;
+  kind: RotationKind;
+  type: RotationType;
+  song_position: SongPosition | null;
+  params: Record<string, unknown>;
+  hot_play_playlist_id: number | null;
+  hot_play_every_n_tracks: number | null;
+  heavy_rotation_enabled: boolean;
+};
 
 export function RotationsPage() {
   const queryClient = useQueryClient();
@@ -65,6 +76,9 @@ export function RotationsPage() {
   };
 
   const { data: rotations = [] } = useQuery({ queryKey: ['rotations'], queryFn: fetchRotations });
+  // For the hot-play playlist picker (music kind only). Filtered to music-type playlists below.
+  const { data: allPlaylists = [] } = useQuery({ queryKey: ['playlists'], queryFn: fetchPlaylists });
+  const musicPlaylists = allPlaylists.filter((p) => p.type === 'music');
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -74,6 +88,14 @@ export function RotationsPage() {
         type: draft.type,
         song_position: draft.kind === 'sweeper' ? draft.song_position : null,
         params: draft.params,
+        // hot_play only applies to music-kind rotations; clear it on sweeper draft saves.
+        hot_play_playlist_id:
+          draft.kind === 'music' ? draft.hot_play_playlist_id : null,
+        hot_play_every_n_tracks:
+          draft.kind === 'music' ? draft.hot_play_every_n_tracks : null,
+        // heavy_rotation similarly only applies to music rotations.
+        heavy_rotation_enabled:
+          draft.kind === 'music' ? draft.heavy_rotation_enabled : false,
       });
     },
     onSuccess: () => {
@@ -131,6 +153,9 @@ export function RotationsPage() {
       type: r.type,
       song_position: r.song_position ?? null,
       params: JSON.parse(JSON.stringify(r.params)),
+      hot_play_playlist_id: r.hot_play_playlist_id ?? null,
+      hot_play_every_n_tracks: r.hot_play_every_n_tracks ?? null,
+      heavy_rotation_enabled: r.heavy_rotation_enabled ?? false,
     });
     setDirty(false);
     setConfirmDelete(false);
@@ -151,6 +176,9 @@ export function RotationsPage() {
         type: original.type,
         song_position: original.song_position ?? null,
         params: JSON.parse(JSON.stringify(original.params)),
+        hot_play_playlist_id: original.hot_play_playlist_id ?? null,
+        hot_play_every_n_tracks: original.hot_play_every_n_tracks ?? null,
+        heavy_rotation_enabled: original.heavy_rotation_enabled ?? false,
       });
       setDirty(false);
     }
@@ -442,6 +470,86 @@ export function RotationsPage() {
               )}
 
               <ParamsForm type={draft.type} params={draft.params} onChange={updateParam} />
+
+              {draft.kind === 'music' && (
+                <div className="pt-4 border-t border-zinc-800/60">
+                  <div className="flex items-center gap-2 mb-3">
+                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                      Hot play
+                    </label>
+                    <HelpTooltip text="Slips one track from the hot-play playlist into this rotation every N picks from the main pool. Leave the playlist as 'None' to disable." />
+                  </div>
+                  <div className="flex flex-wrap items-center gap-3">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-500">playlist</span>
+                      <select
+                        value={draft.hot_play_playlist_id ?? ''}
+                        onChange={(e) => {
+                          const v = e.target.value === '' ? null : Number(e.target.value);
+                          updateDraft((d) => ({
+                            ...d,
+                            hot_play_playlist_id: v,
+                            // Clearing the playlist also clears the cadence so the
+                            // two fields stay consistent (both null = disabled).
+                            hot_play_every_n_tracks:
+                              v === null ? null : (d.hot_play_every_n_tracks ?? 3),
+                          }));
+                        }}
+                        className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500"
+                      >
+                        <option value="">None</option>
+                        {musicPlaylists.map((p) => (
+                          <option key={p.id} value={p.id}>{p.name}</option>
+                        ))}
+                      </select>
+                    </div>
+                    {draft.hot_play_playlist_id != null && (
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs text-zinc-500">every</span>
+                        <input
+                          type="number"
+                          min={1}
+                          value={draft.hot_play_every_n_tracks ?? 3}
+                          onChange={(e) => {
+                            const n = parseInt(e.target.value, 10);
+                            updateDraft((d) => ({
+                              ...d,
+                              hot_play_every_n_tracks: Number.isFinite(n) && n >= 1 ? n : null,
+                            }));
+                          }}
+                          className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 text-center focus:outline-none focus:border-indigo-500"
+                        />
+                        <span className="text-xs text-zinc-500">tracks</span>
+                      </div>
+                    )}
+                  </div>
+                  <p className="mt-2 text-xs text-zinc-500">
+                    e.g. rotation plays 80s music with one current hit slipped in every 3 tracks: {`80s, 80s, 80s, HOT, 80s, 80s, 80s, HOT…`}
+                  </p>
+                </div>
+              )}
+
+              {draft.kind === 'music' && (
+                <div className="pt-4 border-t border-zinc-800/60">
+                  <div className="flex items-center gap-2 mb-3">
+                    <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                      Heavy rotation
+                    </label>
+                    <HelpTooltip text="When enabled, this rotation prioritizes tracks from active music campaigns (managed under Customers → Music Campaigns) by per-day pacing before drawing from its normal pool. Contracted songs that are behind their daily target play first." />
+                  </div>
+                  <label className="flex items-center gap-2 text-sm text-zinc-200 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={draft.heavy_rotation_enabled}
+                      onChange={(e) =>
+                        updateDraft((d) => ({ ...d, heavy_rotation_enabled: e.target.checked }))
+                      }
+                      className="accent-indigo-500"
+                    />
+                    <span>Prioritize active music campaigns by pacing</span>
+                  </label>
+                </div>
+              )}
             </div>
           </div>
         ) : (

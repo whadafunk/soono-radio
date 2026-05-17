@@ -15,7 +15,9 @@ import { LibraryUpload } from './pages/library/LibraryUpload';
 import { ComingSoon } from './pages/ComingSoon';
 import { CustomersLayout } from './pages/customers/CustomersLayout';
 import { CustomersList } from './pages/customers/CustomersList';
+import { MusicCampaignsPage } from './pages/customers/MusicCampaignsPage';
 import { SchedulePage } from './pages/schedule/SchedulePage';
+import { SchedulePreviewPage } from './pages/schedule/SchedulePreviewPage';
 import { ClocksPage } from './pages/clocks/ClocksPage';
 import { ShowsPage } from './pages/shows/ShowsPage';
 import { ShowDetailPage } from './pages/shows/ShowDetailPage';
@@ -47,10 +49,12 @@ export function App() {
             </Route>
             <Route path="/customers" element={<CustomersLayout />}>
               <Route index element={<CustomersList />} />
+              <Route path="music-campaigns" element={<MusicCampaignsPage />} />
             </Route>
             <Route path="/certificates" element={<CertificatesSettings />} />
             <Route path="/users" element={<UsersSettings />} />
             <Route path="/schedule" element={<SchedulePage />} />
+            <Route path="/schedule/preview" element={<SchedulePreviewPage />} />
             <Route path="/clocks" element={<ClocksPage />} />
             <Route path="/clocks/:id" element={<ClocksPage />} />
             <Route path="/shows" element={<ShowsPage />} />

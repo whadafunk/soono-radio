@@ -547,7 +547,29 @@ function MusicPlaylistsSection({
     onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
   });
 
+  const tierMutation = useMutation({
+    mutationFn: ({ spid, rotation_tier }: { spid: number; rotation_tier: string | null }) =>
+      updateShowPlaylist(showId, spid, { rotation_tier }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
+  });
+
+  const fallbackTierMutation = useMutation({
+    mutationFn: ({ spid, fallback_tier }: { spid: number; fallback_tier: string | null }) =>
+      updateShowPlaylist(showId, spid, { fallback_tier }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
+  });
+
   const unassigned = availablePlaylists.filter((p) => !usedPlaylistIds.has(p.id));
+
+  // Unique tier names already in use on this show — drives the fallback_tier datalist
+  // so operators pick an existing tier rather than mistyping one that doesn't exist.
+  const tiersInUse = Array.from(
+    new Set(
+      showMusicPlaylists
+        .map((sp) => sp.rotation_tier)
+        .filter((t): t is string => !!t && t.trim() !== ''),
+    ),
+  ).sort();
 
   return (
     <section className="border-t border-zinc-800 pt-5">
@@ -605,8 +627,47 @@ function MusicPlaylistsSection({
                   </select>
                 </div>
               )}
+              <div className="flex items-center gap-1.5 mt-1 ml-0.5 flex-wrap">
+                <span className="text-xs text-zinc-600">tier</span>
+                <input
+                  type="text"
+                  defaultValue={sp.rotation_tier ?? ''}
+                  placeholder="e.g. hot"
+                  list="show-tiers-in-use"
+                  onBlur={(e) => {
+                    const next = e.target.value.trim();
+                    const cur = sp.rotation_tier ?? '';
+                    if (next === cur) return;
+                    tierMutation.mutate({ spid: sp.id, rotation_tier: next === '' ? null : next });
+                  }}
+                  className="w-20 bg-zinc-800 border border-zinc-700/60 rounded px-1.5 py-0.5 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                />
+                <span className="text-xs text-zinc-600">fallback</span>
+                <input
+                  type="text"
+                  defaultValue={sp.fallback_tier ?? ''}
+                  placeholder="(none)"
+                  list="show-tiers-in-use"
+                  onBlur={(e) => {
+                    const next = e.target.value.trim();
+                    const cur = sp.fallback_tier ?? '';
+                    if (next === cur) return;
+                    fallbackTierMutation.mutate({
+                      spid: sp.id,
+                      fallback_tier: next === '' ? null : next,
+                    });
+                  }}
+                  className="w-20 bg-zinc-800 border border-zinc-700/60 rounded px-1.5 py-0.5 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                />
+                <HelpTooltip text="When this playlist's pool is exhausted (all tracks in separation or empty), the picker tries the tier you name here. Leave blank for no fallback. Tier names are free-form labels — keep them consistent across the show." />
+              </div>
             </li>
           ))}
+          <datalist id="show-tiers-in-use">
+            {tiersInUse.map((t) => (
+              <option key={t} value={t} />
+            ))}
+          </datalist>
         </ul>
       )}
 

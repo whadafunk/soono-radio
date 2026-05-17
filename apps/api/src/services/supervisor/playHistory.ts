@@ -17,6 +17,7 @@ export async function recordPushed(args: {
   promoId?: number | null;
   clockSegmentId?: number | null;
   stopSetPosition?: number | null;
+  musicCampaignId?: number | null;
 }): Promise<number> {
   const result = await db
     .insert(playHistory)
@@ -28,6 +29,7 @@ export async function recordPushed(args: {
       promo_id: args.promoId ?? null,
       clock_segment_id: args.clockSegmentId ?? null,
       stop_set_position: args.stopSetPosition ?? null,
+      music_campaign_id: args.musicCampaignId ?? null,
     })
     .returning({ id: playHistory.id });
   return result[0].id;

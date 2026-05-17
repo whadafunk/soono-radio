@@ -24,6 +24,9 @@ export async function rotationRoutes(fastify: FastifyInstance) {
       song_position: parsed.data.song_position ?? null,
       params: parsed.data.params ?? {},
       is_default: parsed.data.is_default ?? false,
+      hot_play_playlist_id: parsed.data.hot_play_playlist_id ?? null,
+      hot_play_every_n_tracks: parsed.data.hot_play_every_n_tracks ?? null,
+      heavy_rotation_enabled: parsed.data.heavy_rotation_enabled ?? false,
     }).returning();
     return reply.status(201).send(rotation);
   });

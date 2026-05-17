@@ -20,6 +20,7 @@ import {
   NowPlayingSchema,
   RecentPlay,
   RecentPlaySchema,
+  SimulatedPlay,
   User,
   UserCreate,
   UserPatch,
@@ -498,11 +499,39 @@ export async function restartSupervisor(): Promise<void> {
   }
 }
 
+async function postControl(path: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/supervisor/${path}`, { method: 'POST' });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed: ${res.statusText}`);
+  }
+}
+
+export const supervisorPause = () => postControl('pause');
+export const supervisorResume = () => postControl('resume');
+export const supervisorResync = () => postControl('resync');
+export const supervisorHold = () => postControl('hold');
+export const supervisorReleaseHold = () => postControl('release-hold');
+
 export async function fetchRecentPlays(limit = 20): Promise<RecentPlay[]> {
   const res = await fetch(`${API_BASE}/supervisor/recent-plays?limit=${limit}`);
   if (!res.ok) throw new Error(`Failed to fetch recent plays: ${res.statusText}`);
   const data = await res.json();
   return data.plays.map((p: unknown) => RecentPlaySchema.parse(p));
+}
+
+export async function fetchSimulate(from: Date, to: Date): Promise<SimulatedPlay[]> {
+  const params = new URLSearchParams({
+    from: from.toISOString(),
+    to: to.toISOString(),
+  });
+  const res = await fetch(`${API_BASE}/supervisor/simulate?${params}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Failed to simulate: ${res.statusText}`);
+  }
+  const data = await res.json();
+  return data.plays.map((p: any) => ({ ...p, at: new Date(p.at) }));
 }
 
 export interface AcoustIDCandidate {
@@ -657,6 +686,11 @@ import {
   CampaignCreate,
   CampaignPatch,
   CampaignWithCustomer,
+  MusicCampaign,
+  MusicCampaignCreate,
+  MusicCampaignPatch,
+  MusicCampaignWithCustomer,
+  MusicCampaignPacing,
   Contact,
   CustomerContact,
   ContactCreate,
@@ -796,6 +830,36 @@ export async function deleteCampaigns(ids: number[]): Promise<void> {
 
 export function fetchCampaignPacing(id: number): Promise<{ plays_this_month: number; target: number; pct: number; on_track: boolean }> {
   return apiFetch(`/campaigns/${id}/pacing`);
+}
+
+// ─── Music Campaigns ──────────────────────────────────────────────────────────
+
+export function fetchMusicCampaigns(opts?: { customer_id?: number; active?: boolean }): Promise<MusicCampaignWithCustomer[]> {
+  const params = new URLSearchParams();
+  if (opts?.customer_id != null) params.set('customer_id', String(opts.customer_id));
+  if (opts?.active != null) params.set('active', String(opts.active));
+  const qs = params.toString();
+  return apiFetch(`/music-campaigns${qs ? `?${qs}` : ''}`);
+}
+
+export function fetchMusicCampaign(id: number): Promise<MusicCampaign> {
+  return apiFetch(`/music-campaigns/${id}`);
+}
+
+export function createMusicCampaign(data: MusicCampaignCreate): Promise<MusicCampaign> {
+  return post('/music-campaigns', data);
+}
+
+export function updateMusicCampaign(id: number, patch_: MusicCampaignPatch): Promise<MusicCampaign> {
+  return patch(`/music-campaigns/${id}`, patch_);
+}
+
+export function deleteMusicCampaign(id: number): Promise<void> {
+  return del(`/music-campaigns/${id}`);
+}
+
+export function fetchMusicCampaignPacing(id: number): Promise<MusicCampaignPacing> {
+  return apiFetch(`/music-campaigns/${id}/pacing`);
 }
 
 // ─── Campaign Media ───────────────────────────────────────────────────────────

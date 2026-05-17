@@ -150,12 +150,17 @@ export const playHistory = sqliteTable(
     clock_segment_id: integer('clock_segment_id').references(() => clockSegments.id, { onDelete: 'set null' }),
     // 1-based position within the stop-set (1 = first spot). Null for non-stop-set plays.
     stop_set_position: integer('stop_set_position'),
+    // Music-campaign tracking — set by the predictor when a play came from a
+    // heavy_rotation-enabled rotation. Null for plays not attributable to a
+    // music campaign.
+    music_campaign_id: integer('music_campaign_id').references(() => musicCampaigns.id, { onDelete: 'set null' }),
   },
   (t) => ({
     startedAtIdx: index('play_history_started_at_idx').on(t.started_at),
     mediaIdx: index('play_history_media_id_idx').on(t.media_id),
     sourceIdx: index('play_history_source_idx').on(t.source),
     campaignIdx: index('play_history_campaign_idx').on(t.campaign_id),
+    musicCampaignIdx: index('play_history_music_campaign_idx').on(t.music_campaign_id),
   }),
 );
 
@@ -268,6 +273,20 @@ export const rotations = sqliteTable('rotations', {
   params: text('params', { mode: 'json' }).notNull().default('{}'),
   // One default per kind (music/sweeper)
   is_default: integer('is_default', { mode: 'boolean' }).notNull().default(false),
+  // Hot-play injection: when both fields are set, the picker slips one pick
+  // from hot_play_playlist_id into the rotation every hot_play_every_n_tracks
+  // main picks. Music-kind only. Both null = feature disabled.
+  hot_play_playlist_id: integer('hot_play_playlist_id').references(
+    () => playlists.id,
+    { onDelete: 'set null' },
+  ),
+  hot_play_every_n_tracks: integer('hot_play_every_n_tracks'),
+  // Heavy rotation: when true on a music-kind rotation, the picker consults
+  // active music_campaigns and prioritizes the most-behind-pacing campaign's
+  // tracks before drawing from this rotation's normal pool.
+  heavy_rotation_enabled: integer('heavy_rotation_enabled', { mode: 'boolean' })
+    .notNull()
+    .default(false),
   created_at: integer('created_at', { mode: 'timestamp' })
     .notNull()
     .default(sql`(unixepoch())`),
@@ -797,6 +816,48 @@ export const campaignMedia = sqliteTable(
 
 export type CampaignMedia = typeof campaignMedia.$inferSelect;
 export type CampaignMediaInsert = typeof campaignMedia.$inferInsert;
+
+// ─── Music campaigns ──────────────────────────────────────────────────────────
+//
+// Parallel to spot `campaigns` — promotes specific songs (a playlist of
+// contracted music) at a per-day target rate within a date interval. Delivered
+// during music segments whose rotation has heavy_rotation_enabled = true.
+//
+// Simpler than spot campaigns: no time windows, advertiser separation, first
+// in slot, exclusions, or interval scoping. Only the per-day play count and
+// the date interval matter.
+
+export const musicCampaigns = sqliteTable(
+  'music_campaigns',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    customer_id: integer('customer_id')
+      .notNull()
+      .references(() => customers.id, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    playlist_id: integer('playlist_id')
+      .notNull()
+      .references(() => playlists.id, { onDelete: 'restrict' }),
+    starts_on: text('starts_on').notNull(), // ISO date "2026-01-01"
+    ends_on: text('ends_on').notNull(),
+    plays_per_day: integer('plays_per_day').notNull(),
+    notes: text('notes'),
+    active: integer('active', { mode: 'boolean' }).notNull().default(true),
+    created_at: integer('created_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+    updated_at: integer('updated_at', { mode: 'timestamp' })
+      .notNull()
+      .default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    customerIdx: index('music_campaigns_customer_idx').on(t.customer_id),
+    activeIdx: index('music_campaigns_active_idx').on(t.active),
+  }),
+);
+
+export type MusicCampaign = typeof musicCampaigns.$inferSelect;
+export type MusicCampaignInsert = typeof musicCampaigns.$inferInsert;
 
 // ─── Promos ───────────────────────────────────────────────────────────────────
 

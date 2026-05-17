@@ -1,5 +1,39 @@
 import { z } from 'zod';
-import { FINISH_POLICIES, JOIN_POLICIES, EXTENSION_POLICIES } from './scheduling.js';
+import { CLOCK_SEGMENT_TYPES, FINISH_POLICIES, JOIN_POLICIES, EXTENSION_POLICIES } from './scheduling.js';
+
+export const RESOLVED_SCHEDULE_SOURCES = ['calendar', 'template_clock', 'template', 'fallback'] as const;
+export type ResolvedScheduleSource = (typeof RESOLVED_SCHEDULE_SOURCES)[number];
+
+/**
+ * What the supervisor thinks should be on air at the time of the status read.
+ * Derived from the schedule (calendar > template_clock > template > silence),
+ * not from what LiquidSoap is actually doing — Phase A observability only.
+ */
+export const ScheduledStateSchema = z.object({
+  source: z.enum(RESOLVED_SCHEDULE_SOURCES),
+  clock_id: z.number().int(),
+  clock_name: z.string(),
+  segment_id: z.number().int(),
+  segment_name: z.string(),
+  segment_type: z.enum(CLOCK_SEGMENT_TYPES),
+  segment_index: z.number().int().nonnegative(),
+  show_id: z.number().int().nullable(),
+  show_name: z.string().nullable(),
+  clock_instance_started_at: z.coerce.date(),
+  segment_started_at: z.coerce.date(),
+  segment_elapsed_seconds: z.number().int().nonnegative(),
+  segment_remaining_seconds: z.number().int().nonnegative(),
+  /**
+   * Music playtime minus segment elapsed, in seconds. Positive = music is
+   * running long (segment elapsed faster than music played); negative = music
+   * has overrun. Computed from completed plays only — updates discretely at
+   * track boundaries.
+   */
+  drift_seconds: z.number().int().default(0),
+  /** True when a hard-cut boundary is within ~2 minutes. UI warning trigger. */
+  hard_cut_warning: z.boolean().default(false),
+});
+export type ScheduledState = z.infer<typeof ScheduledStateSchema>;
 
 export const PLAY_SOURCES = ['auto', 'live', 'manual'] as const;
 export type PlaySource = (typeof PLAY_SOURCES)[number];
@@ -23,6 +57,18 @@ export const SupervisorStatusSchema = z.object({
   queue_depth: z.number().int().nonnegative(),
   on_air_source: z.enum(['live', 'auto', 'none']),
   current_play_id: z.number().int().nullable(),
+  /** What the schedule says should be on air right now (null = silence). */
+  scheduled: ScheduledStateSchema.nullable(),
+  /** True when the scheduler's picker is paused (queue/live polling continues). */
+  paused: z.boolean().default(false),
+  /** When non-null, the resolved schedule is pinned to this segment until released. */
+  held: z
+    .object({
+      segment_id: z.number().int(),
+      held_at: z.coerce.date(),
+    })
+    .nullable()
+    .default(null),
 });
 export type SupervisorStatus = z.infer<typeof SupervisorStatusSchema>;
 
@@ -71,3 +117,31 @@ export const RecentPlaySchema = z.object({
   duration_seconds: z.number().nullable(),
 });
 export type RecentPlay = z.infer<typeof RecentPlaySchema>;
+
+/**
+ * Output row from /supervisor/simulate. media is null for live / live_audience /
+ * stop_set placeholder rows that the simulator doesn't expand into individual
+ * picks. clock + segment context lets the UI group by segment.
+ */
+export const SimulatedPlaySchema = z.object({
+  at: z.coerce.date(),
+  media: z
+    .object({
+      id: z.number().int(),
+      title: z.string().nullable(),
+      artist: z.string().nullable(),
+      original_filename: z.string(),
+      duration_seconds: z.number(),
+      category: z.string(),
+    })
+    .nullable(),
+  reason: z.string(),
+  clock_name: z.string(),
+  segment_name: z.string(),
+  segment_type: z.string(),
+  campaign_id: z.number().int().nullable(),
+  music_campaign_id: z.number().int().nullable(),
+  promo_id: z.number().int().nullable(),
+  stop_set_position: z.number().int().nullable(),
+});
+export type SimulatedPlay = z.infer<typeof SimulatedPlaySchema>;

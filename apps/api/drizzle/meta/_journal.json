@@ -232,6 +232,20 @@
       "when": 1779581000008,
       "tag": "0032_faithful_virginia_dare",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "6",
+      "when": 1779581000009,
+      "tag": "0033_noisy_dragon_lord",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "6",
+      "when": 1779581000010,
+      "tag": "0034_youthful_mephisto",
+      "breakpoints": true
     }
   ]
 }

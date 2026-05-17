@@ -1,5 +1,5 @@
-import { useQuery, useMutation } from '@tanstack/react-query';
-import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2 } from 'lucide-react';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, Pause, Play, RotateCw, Lock, Unlock } from 'lucide-react';
 import {
   fetchIcecastStats,
   fetchIcecastConfig,
@@ -8,7 +8,14 @@ import {
   fetchSupervisorStatus,
   fetchNowPlaying,
   fetchRecentPlays,
+  fetchSimulate,
+  supervisorPause,
+  supervisorResume,
+  supervisorResync,
+  supervisorHold,
+  supervisorReleaseHold,
 } from '../api';
+import type { SupervisorStatus } from '@radio/shared';
 import { useEffect, useRef, useState } from 'react';
 
 export function Dashboard() {
@@ -139,6 +146,9 @@ export function Dashboard() {
         reachable={supStatus?.reachable ?? false}
         onAirSource={supStatus?.on_air_source ?? 'none'}
       />
+
+      {/* Now Running — schedule resolver + supervisor controls */}
+      {supStatus && <NowRunningCard status={supStatus} />}
 
       {/* Live Stream Stats */}
       <section>
@@ -285,6 +295,8 @@ export function Dashboard() {
         </div>
       )}
 
+      <NextUpSection />
+
       <RecentPlaysSection plays={recentPlays} />
 
       {/* Info Box */}
@@ -410,6 +422,264 @@ function NowPlayingCard({
       </div>
     </section>
   );
+}
+
+function NowRunningCard({ status }: { status: SupervisorStatus }) {
+  const qc = useQueryClient();
+  const [pendingError, setPendingError] = useState<string | null>(null);
+
+  const onMutate = (label: string) => ({
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['supervisor-status'] }),
+    onError: (e: Error) => setPendingError(`${label}: ${e.message}`),
+  });
+
+  const pauseM = useMutation({ mutationFn: supervisorPause, ...onMutate('Pause') });
+  const resumeM = useMutation({ mutationFn: supervisorResume, ...onMutate('Resume') });
+  const resyncM = useMutation({ mutationFn: supervisorResync, ...onMutate('Resync') });
+  const holdM = useMutation({ mutationFn: supervisorHold, ...onMutate('Hold') });
+  const releaseM = useMutation({ mutationFn: supervisorReleaseHold, ...onMutate('Release hold') });
+  const pending =
+    pauseM.isPending ||
+    resumeM.isPending ||
+    resyncM.isPending ||
+    holdM.isPending ||
+    releaseM.isPending;
+
+  const scheduled = status.scheduled;
+  const paused = status.paused;
+  const held = status.held != null;
+
+  const progressPct = scheduled
+    ? (scheduled.segment_elapsed_seconds /
+        Math.max(1, scheduled.segment_elapsed_seconds + scheduled.segment_remaining_seconds)) *
+      100
+    : 0;
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+      <div className="flex items-start justify-between gap-4 flex-wrap">
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2 text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2 flex-wrap">
+            Now running
+            {paused && (
+              <span className="text-amber-300 bg-amber-900/30 border border-amber-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
+                PAUSED
+              </span>
+            )}
+            {held && (
+              <span className="text-violet-300 bg-violet-900/30 border border-violet-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
+                HELD
+              </span>
+            )}
+            {scheduled?.hard_cut_warning && (
+              <span
+                className="text-rose-300 bg-rose-900/30 border border-rose-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]"
+                title="Next segment has a hard start — the current segment can't be shortened, so an audible cut is coming."
+              >
+                HARD CUT IN ~{formatHms(scheduled.segment_remaining_seconds)}
+              </span>
+            )}
+            {scheduled && scheduled.drift_seconds !== 0 && (
+              <span
+                className={`px-1.5 py-0.5 rounded font-mono text-[10px] border ${
+                  scheduled.drift_seconds > 5
+                    ? 'text-amber-300 bg-amber-900/30 border-amber-800/50'
+                    : scheduled.drift_seconds < -5
+                      ? 'text-cyan-300 bg-cyan-900/30 border-cyan-800/50'
+                      : 'text-zinc-400 bg-zinc-800/50 border-zinc-700/50'
+                }`}
+                title={
+                  scheduled.drift_seconds > 0
+                    ? 'Music has played fewer seconds than the segment has elapsed — running behind.'
+                    : 'Music has played more seconds than the segment has elapsed — segment will overrun.'
+                }
+              >
+                {scheduled.drift_seconds > 0
+                  ? `+${scheduled.drift_seconds}s BEHIND`
+                  : `${scheduled.drift_seconds}s AHEAD`}
+              </span>
+            )}
+          </div>
+          {scheduled ? (
+            <>
+              <h2 className="text-lg font-semibold text-white flex items-center gap-2 flex-wrap">
+                <span>{scheduled.clock_name}</span>
+                <span className="text-zinc-500">·</span>
+                <span className="text-indigo-300">{scheduled.segment_name}</span>
+                <span className="text-xs text-zinc-500 font-mono lowercase">
+                  {scheduled.segment_type}
+                </span>
+              </h2>
+              {scheduled.show_name && (
+                <p className="text-xs text-zinc-500 mt-1">
+                  Show: <span className="text-zinc-400">{scheduled.show_name}</span>
+                </p>
+              )}
+              <div className="mt-3 flex items-center gap-3">
+                <span className="text-xs font-mono text-zinc-400 w-12 text-right">
+                  {formatHms(scheduled.segment_elapsed_seconds)}
+                </span>
+                <div className="flex-1 h-2 bg-zinc-800 rounded overflow-hidden">
+                  <div
+                    className="h-full bg-indigo-500 transition-all"
+                    style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }}
+                  />
+                </div>
+                <span className="text-xs font-mono text-zinc-500 w-12">
+                  {held ? '—' : formatHms(scheduled.segment_remaining_seconds)}
+                </span>
+              </div>
+            </>
+          ) : (
+            <p className="text-zinc-500 italic text-sm">No segment resolves to this moment.</p>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          {paused ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => resumeM.mutate()}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-sm transition disabled:opacity-40"
+            >
+              <Play className="w-4 h-4" />
+              Resume
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={pending || !status.running}
+              onClick={() => pauseM.mutate()}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-sm transition disabled:opacity-40"
+            >
+              <Pause className="w-4 h-4" />
+              Pause
+            </button>
+          )}
+          <button
+            type="button"
+            disabled={pending || !status.running}
+            onClick={() => {
+              if (confirm('Resync triggers an immediate scheduler tick — push a new pick now. Continue?')) {
+                resyncM.mutate();
+              }
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
+            title="Trigger an immediate pick. Does not flush LS's existing queue."
+          >
+            <RotateCw className="w-4 h-4" />
+            Resync
+          </button>
+          {held ? (
+            <button
+              type="button"
+              disabled={pending}
+              onClick={() => releaseM.mutate()}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white rounded text-sm transition disabled:opacity-40"
+            >
+              <Unlock className="w-4 h-4" />
+              Release hold
+            </button>
+          ) : (
+            <button
+              type="button"
+              disabled={pending || !scheduled || !status.running}
+              onClick={() => holdM.mutate()}
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
+              title="Pin the current segment — schedule resolver stops advancing"
+            >
+              <Lock className="w-4 h-4" />
+              Hold
+            </button>
+          )}
+        </div>
+      </div>
+      {pendingError && (
+        <p className="text-xs text-rose-400 mt-3">{pendingError}</p>
+      )}
+    </section>
+  );
+}
+
+function formatHms(seconds: number): string {
+  const s = Math.max(0, Math.floor(seconds));
+  const m = Math.floor(s / 60);
+  const r = s % 60;
+  return `${m}:${String(r).padStart(2, '0')}`;
+}
+
+function NextUpSection() {
+  const { data: plays = [], isLoading } = useQuery({
+    queryKey: ['supervisor-next-up'],
+    queryFn: () => {
+      const now = new Date();
+      // 30-minute window is plenty for "next ~5 tracks". We slice to 5 client-side.
+      const end = new Date(now.getTime() + 30 * 60 * 1000);
+      return fetchSimulate(now, end);
+    },
+    refetchInterval: 60_000,
+    staleTime: 30_000,
+  });
+  const visible = plays.slice(0, 5);
+  if (isLoading && visible.length === 0) {
+    return (
+      <section>
+        <h2 className="text-lg font-semibold text-white mb-3">Next Up</h2>
+        <p className="text-sm text-zinc-500 italic">Simulating…</p>
+      </section>
+    );
+  }
+  if (visible.length === 0) return null;
+  return (
+    <section>
+      <h2 className="text-lg font-semibold text-white mb-3">
+        Next Up <span className="text-xs font-normal text-zinc-500">simulated · won't perfectly match live picks</span>
+      </h2>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <table className="w-full text-sm">
+          <thead className="bg-zinc-950/50 border-b border-zinc-800">
+            <tr>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Time</th>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Track</th>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Segment</th>
+              <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Duration</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visible.map((p, i) => {
+              const display = p.media
+                ? p.media.title ?? p.media.original_filename
+                : p.segment_type === 'stop_set'
+                  ? '(commercial break)'
+                  : `(${p.segment_type})`;
+              return (
+                <tr key={i} className="border-t border-zinc-800/60">
+                  <td className="px-3 py-2 text-zinc-400 font-mono text-xs whitespace-nowrap">
+                    {formatHourMin(p.at)}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-200 truncate max-w-md">
+                    {display}
+                    {p.media?.artist && <span className="text-zinc-500"> — {p.media.artist}</span>}
+                  </td>
+                  <td className="px-3 py-2 text-xs text-zinc-500 truncate max-w-xs">
+                    {p.clock_name} · {p.segment_name}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
+                    {p.media ? formatMmSs(p.media.duration_seconds) : '—'}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function formatHourMin(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 function RecentPlaysSection({ plays }: { plays: RecentPlay[] }) {
