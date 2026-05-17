@@ -19,6 +19,7 @@ pnpm type-check             # Verify TypeScript
 |----------|---------------|
 | [architecture.md](./architecture.md) | System overview, data flow, component map |
 | [scheduling.md](./scheduling.md) | **The complex part** — clocks, segments, supervisor, delay policy, drift recovery |
+| [supervisor-rebuild.md](./supervisor-rebuild.md) | Retrospective + design rationale for the 2026-05-17 supervisor rebuild. Includes the Phase D shadow-tables deferral with conditions for revisiting. |
 | [data-model.md](./data-model.md) | All database entities, fields, relationships |
 | [api-reference.md](./api-reference.md) | Every API endpoint with params and responses |
 | [frontend.md](./frontend.md) | Pages, routing, state management |
