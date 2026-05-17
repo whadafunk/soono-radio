@@ -36,6 +36,8 @@ import {
 } from '@radio/shared';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
+import { MusicCampaignsPage } from './MusicCampaignsPage';
+import { INPUT, LABEL } from '../../ui';
 import {
   fetchCustomers,
   createCustomer,
@@ -69,9 +71,6 @@ import {
 
 type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
 
-const INPUT =
-  'w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50';
-const LABEL = 'block text-xs font-medium text-zinc-300 mb-1';
 
 function sortRows<T extends object>(rows: T[], sort: SortConfig): T[] {
   if (!sort) return rows;
@@ -120,7 +119,7 @@ export function CustomersList() {
   const [lastClickedCustomerId, setLastClickedCustomerId] = useState<number | null>(null);
   const [lastClickedCampaignId, setLastClickedCampaignId] = useState<number | null>(null);
   const [lastClickedContactId, setLastClickedContactId] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<'campaigns' | 'contacts'>('campaigns');
+  const [activeTab, setActiveTab] = useState<'campaigns' | 'contacts' | 'music-campaigns'>('campaigns');
   const [editTarget, setEditTarget] = useState<{
     type: 'customer' | 'campaign' | 'contact';
     id: number;
@@ -647,6 +646,16 @@ export function CustomersList() {
           >
             Contacts ({displayedContacts.length})
           </button>
+          <button
+            onClick={() => setActiveTab('music-campaigns')}
+            className={`px-6 py-3 text-sm font-medium transition-colors ${
+              activeTab === 'music-campaigns'
+                ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
+                : 'text-zinc-300 hover:text-white'
+            }`}
+          >
+            Music Campaigns
+          </button>
           <div className="flex-1" />
           {focusedCustomerId && focusedCustomerName && (
             <div className="mr-3 flex items-center gap-1.5 px-2.5 py-1 bg-indigo-900/30 border border-indigo-700/50 rounded-lg text-xs text-indigo-300">
@@ -780,7 +789,7 @@ export function CustomersList() {
                 )}
               </div>
             </div>
-          ) : (
+          ) : activeTab === 'contacts' ? (
             <div className="flex-1 min-h-0 flex flex-col">
               <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-2 bg-zinc-800/30">
                 <div className="flex-1" />
@@ -923,6 +932,10 @@ export function CustomersList() {
                   <div className="p-4 text-center text-zinc-300 text-xs">No contacts</div>
                 )}
               </div>
+            </div>
+          ) : (
+            <div className="flex-1 overflow-auto p-4">
+              <MusicCampaignsPage />
             </div>
           )}
         </div>

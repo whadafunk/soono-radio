@@ -20,13 +20,10 @@ import {
   UserPatchSchema,
 } from '@radio/shared';
 import { fetchUsers, createUser, updateUser, deleteUsers } from '../../api';
+import { INPUT, LABEL } from '../../ui';
 
 type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
 type Toast = { type: 'success' | 'error'; message: string } | null;
-
-const INPUT =
-  'w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 disabled:opacity-50';
-const LABEL = 'block text-xs font-medium text-zinc-300 mb-1';
 
 function sortRows<T extends object>(rows: T[], sort: SortConfig): T[] {
   if (!sort) return rows;

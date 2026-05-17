@@ -174,3 +174,147 @@ Thin wrapper around `fetch` in `apps/web/src/lib/api.ts`:
 - **Modal components** are controlled (open/onClose props from parent)
 - **Table components** receive data as props; sorting is local state
 - No prop drilling beyond 2 levels — use React Query cache or Zustand for shared state
+
+---
+
+## UI Design Standards
+
+### Shared constants — `apps/web/src/ui.ts`
+
+Single source of truth for recurring Tailwind patterns. Import from here; never inline the same class string twice.
+
+| Export | When to use |
+|--------|-------------|
+| `BTN_PRIMARY` | Primary action in modals and standalone forms |
+| `BTN_PRIMARY_SM` | Primary action in page headers and toolbars |
+| `BTN_SECONDARY` / `BTN_SECONDARY_SM` | Cancel, Discard, neutral actions |
+| `BTN_DESTRUCTIVE` / `BTN_DESTRUCTIVE_SM` | Delete and other irreversible actions |
+| `BTN_GHOST` | Icon-only or minimal buttons (rarely used — prefer inline classes for one-off cases) |
+| `INPUT` | All text/number/textarea inputs |
+| `SELECT` | All `<select>` dropdowns |
+| `LABEL` | Form field labels (use with `Field` component or directly) |
+| `CARD` | Container panels with border |
+| `MODAL_OVERLAY` / `MODAL_BOX` | Modal backdrop and content box |
+
+Only add a constant when the pattern appears in 3+ places. Layout concerns (width, margin) stay at the call site.
+
+---
+
+### Header action buttons
+
+Page headers that have save/delete/bulk actions follow a fixed pattern:
+
+- All action buttons are **always visible** — never conditionally rendered. Buttons that require a selection are `disabled` when the condition is not met, with a native `title` tooltip explaining why.
+- Use `*_SM` size variants (`BTN_PRIMARY_SM`, `BTN_SECONDARY_SM`, `BTN_DESTRUCTIVE_SM`) in headers and toolbars. Full-size variants are for modals only.
+- Separate logically distinct groups with a thin vertical divider: `<div className="w-px h-5 bg-zinc-700 mx-1" />`. Typical grouping: destructive actions | neutral + primary actions.
+- Destructive confirmation uses `window.confirm()` inline — no separate confirmation UI unless the action is truly irreversible and high-stakes.
+
+```tsx
+<div className="flex items-center gap-2">
+  <button disabled={selectedIds.size === 0} title="Select items to delete" className={BTN_DESTRUCTIVE_SM}>
+    <Trash2 className="w-3.5 h-3.5" /> Delete
+  </button>
+  <div className="w-px h-5 bg-zinc-700 mx-1" />
+  <button className={BTN_PRIMARY_SM}>
+    <Plus className="w-3.5 h-3.5" /> New Item
+  </button>
+</div>
+```
+
+---
+
+### Bulk actions vs. single-item actions
+
+**Bulk actions** appear in the list page header (always visible, disabled when no items selected). Only include operations that genuinely apply to multiple items at once — e.g. Delete.
+
+**Single-item actions** (Edit, Open, View Detail) are not bulk actions. Clicking a row navigates to the detail page. Do not add an Edit button to the list header.
+
+---
+
+### Detail page layout
+
+```
+[← back]  [Color dot]  [Page Title]  ·  [Context label]  [Status badge]    [Delete] | [Discard] [Save]
+┌─────────────────────────────────────────────────┐   ┌──────────────────┐
+│  [Tab: Configuration]  [Tab: Media Content]     │   │  Panel: This Week│
+│─────────────────────────────────────────────────│   ├──────────────────┤
+│  … form fields …                                │   │  Panel: Campaigns│
+└─────────────────────────────────────────────────┘   └──────────────────┘
+```
+
+- **Back chevron**: `text-zinc-400 hover:text-white transition-colors`, icon `w-5 h-5`. No padding box, no hover background.
+- **Context label**: `<span className="text-zinc-600 select-none">·</span> <span className="text-sm text-zinc-500">Page Type</span>` — reinforces where the user is without competing with the title.
+- **Header buttons and form card share the same right edge** — wrap them in a common flex column so they align naturally.
+- **Right column** (`w-64 flex-shrink-0`): read-only info panels (schedule, related entities, future stats). Never put editable fields here.
+
+---
+
+### Tabs
+
+Use tabs when a detail form has 6+ fields that fall into two distinct categories. Standard split:
+
+| Tab | Contents |
+|-----|----------|
+| **Configuration** | Identity fields (name, color, notes), scheduling settings (duration, clock, policies) |
+| **Media Content** | Audio assets (intro/outro clips, jingle playlist, bed playlist, music playlists) |
+
+Tab bar pattern:
+```tsx
+{(['configuration', 'media-content'] as const).map((tab) => (
+  <button
+    type="button"
+    onClick={() => setActiveTab(tab)}
+    className={`mr-6 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+      activeTab === tab ? 'border-indigo-500 text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'
+    }`}
+  >
+    {tab === 'configuration' ? 'Configuration' : 'Media Content'}
+  </button>
+))}
+```
+
+---
+
+### Contextual help
+
+**Every form field gets a `HelpTooltip`** next to its label. This is a design standard — not optional.
+
+```tsx
+import { HelpTooltip } from '../../components/HelpTooltip';
+
+<Field label={<span className="flex items-center gap-1">Field Name <HelpTooltip text="Explanation." /></span>}>
+  ...
+</Field>
+```
+
+For section headings (`h2`), add the tooltip inline:
+```tsx
+<h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400">
+  Section Title <HelpTooltip text="Explanation." />
+</h2>
+```
+
+**Option names** that refer to a specific selectable value should be visually distinguished in the tooltip text using JSX:
+```tsx
+<HelpTooltip text={<>Choose <span className="font-semibold text-white">Repeat last clock</span> to tile the previous hour, or <span className="font-semibold text-white">Fall through</span> to continue without structure.</>} />
+```
+
+`HelpTooltip.text` accepts `React.ReactNode`, so JSX fragments are fine.
+
+---
+
+### Accordion lists
+
+When a list item has secondary/advanced controls (e.g. rotation tier, fallback config), hide them behind a per-item expand/collapse toggle rather than rendering everything inline. This keeps the list scannable at a glance.
+
+Pattern: collapsed row shows name + primary control + remove button. Expanded shows secondary controls in a bordered sub-panel. Use `ChevronRight` with `rotate-90` on open.
+
+```tsx
+const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+const toggleExpanded = (id: number) =>
+  setExpandedIds((prev) => {
+    const next = new Set(prev);
+    if (next.has(id)) next.delete(id); else next.add(id);
+    return next;
+  });
+```

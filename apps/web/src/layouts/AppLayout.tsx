@@ -13,11 +13,11 @@ const navItems = [
   { label: 'Schedule',     path: '/schedule',     icon: Calendar        },
   { label: 'Clocks',       path: '/clocks',       icon: Timer           },
   { label: 'Shows',        path: '/shows',        icon: Mic2            },
-  { label: 'Promo',        path: '/promo',        icon: Megaphone       },
   { label: 'Library',      path: '/library',      icon: Music2          },
-  { label: 'Customers',    path: '/customers',    icon: Users           },
   { label: 'Playlists',    path: '/playlists',    icon: ListMusic       },
   { label: 'Rotations',    path: '/rotations',    icon: Repeat          },
+  { label: 'Customers',    path: '/customers',    icon: Users           },
+  { label: 'Promos',       path: '/promo',        icon: Megaphone       },
   { label: 'Settings',     path: '/settings',     icon: Settings        },
   { label: 'Users',        path: '/users',        icon: UserCog         },
   { label: 'Certificates', path: '/certificates', icon: ShieldCheck     },
@@ -106,10 +106,6 @@ export function AppLayout() {
 
       {/* Main */}
       <div className="flex-1 flex flex-col overflow-hidden min-w-0">
-        {/* Top Bar */}
-        <header className="bg-zinc-900 border-b border-zinc-800 px-6 py-4 flex-shrink-0">
-          <h2 className="text-xl font-semibold text-zinc-100">Radio Automation System</h2>
-        </header>
         <main className="flex-1 overflow-auto p-6">
           <Outlet />
         </main>

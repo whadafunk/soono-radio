@@ -1,8 +1,9 @@
 import { HelpCircle } from 'lucide-react';
 import { useState, useRef } from 'react';
+import React from 'react';
 
 interface HelpTooltipProps {
-  text: string;
+  text: React.ReactNode;
 }
 
 export function HelpTooltip({ text }: HelpTooltipProps) {

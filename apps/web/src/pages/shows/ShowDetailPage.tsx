@@ -4,7 +4,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useRef, useState } from 'react';
 import {
-  ChevronLeft, BarChart2, Megaphone, Music2, Bell, Lock,
+  ChevronLeft, ChevronRight, BarChart2, Megaphone, Music2, Bell, Lock,
   Trash2, Plus, Upload, X, Loader2,
 } from 'lucide-react';
 import {
@@ -14,13 +14,14 @@ import {
 } from '@radio/shared';
 import { Media } from '@radio/shared';
 import {
-  fetchShow, updateShow, fetchClocks, fetchTemplateEntries,
+  fetchShow, updateShow, deleteShow, fetchClocks, fetchTemplateEntries,
   fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
   fetchPlaylists, fetchLibrary, fetchLibraryItem, fetchIngestJob,
   uploadLibraryFiles, fetchRotations, fetchShowCampaigns, fetchSupervisorConfig,
 } from '../../api';
 import type { PlaylistSummary, ShowCampaign } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
+import { BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, INPUT, SELECT } from '../../ui';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -91,12 +92,22 @@ export function ShowDetailPage() {
     queryFn: fetchSupervisorConfig,
   });
 
+  const [activeTab, setActiveTab] = useState<'configuration' | 'media-content'>('configuration');
+
   const updateMutation = useMutation({
     mutationFn: (patch: ShowPatch) => updateShow(showId, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['shows'] });
       qc.invalidateQueries({ queryKey: ['shows', showId] });
       reset(undefined, { keepValues: true });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: () => deleteShow(showId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['shows'] });
+      navigate('/shows');
     },
   });
 
@@ -176,328 +187,336 @@ export function ShowDetailPage() {
   const usedPlaylistIds = new Set(showMusicPlaylists.map((sp) => sp.playlist_id));
 
   return (
-    <div className="pb-10">
-      {/* ── Header ── */}
-      <div className="flex items-center justify-between mb-6">
-        <div className="flex items-center gap-3">
-          <Link
-            to="/shows"
-            className="p-1.5 text-zinc-500 hover:text-zinc-200 hover:bg-zinc-800 rounded-md transition-colors"
-          >
-            <ChevronLeft className="w-4 h-4" />
-          </Link>
-          <div className="flex items-center gap-2.5">
-            <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
-            <h1 className="text-lg font-semibold text-white">{show.name}</h1>
-          </div>
-          {showEntries.length > 0 ? (
-            <span className="text-xs px-2 py-0.5 rounded-full font-medium border bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
-              Scheduled
-            </span>
-          ) : (
-            <span className="text-xs px-2 py-0.5 rounded-full font-medium border bg-zinc-700/50 text-zinc-400 border-zinc-600/30">
-              Unscheduled
-            </span>
-          )}
-        </div>
+    <div className="pb-10 flex gap-6 items-start">
 
-        {isDirty && (
+      {/* ── Left column ── */}
+      <div className="flex-1 min-w-0 space-y-4">
+
+        {/* ── Header ── */}
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <Link to="/shows" className="text-zinc-400 hover:text-white transition-colors">
+              <ChevronLeft className="w-5 h-5" />
+            </Link>
+            <div className="flex items-center gap-2.5">
+              <div className="w-3 h-3 rounded-full flex-shrink-0" style={{ backgroundColor: hex }} />
+              <h1 className="text-lg font-semibold text-white">{show.name}</h1>
+              <span className="text-zinc-600 select-none">·</span>
+              <span className="text-sm text-zinc-500">Show Details</span>
+            </div>
+            {showEntries.length > 0 ? (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium border bg-emerald-500/15 text-emerald-300 border-emerald-500/30">
+                Scheduled
+              </span>
+            ) : (
+              <span className="text-xs px-2 py-0.5 rounded-full font-medium border bg-zinc-700/50 text-zinc-400 border-zinc-600/30">
+                Unscheduled
+              </span>
+            )}
+          </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
+              onClick={() => {
+                if (!window.confirm(`Delete "${show.name}"? This cannot be undone.`)) return;
+                deleteMutation.mutate();
+              }}
+              disabled={deleteMutation.isPending}
+              className={BTN_DESTRUCTIVE_SM}
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              Delete
+            </button>
+            <div className="w-px h-5 bg-zinc-700 mx-1" />
+            <button
+              type="button"
               onClick={() => reset()}
-              className="px-3 py-1.5 text-sm text-zinc-400 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+              disabled={!isDirty}
+              className={BTN_SECONDARY_SM}
             >
               Discard
             </button>
             <button
               form="show-detail-form"
               type="submit"
-              disabled={updateMutation.isPending}
-              className="px-4 py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50"
+              disabled={!isDirty || updateMutation.isPending}
+              className={BTN_PRIMARY_SM}
             >
               {updateMutation.isPending ? 'Saving…' : 'Save'}
             </button>
           </div>
-        )}
-      </div>
+        </div>
 
-      {/* ── Body ── */}
-      <div className="flex gap-6 items-start">
-
-        {/* ── Left column: editable fields ── */}
+        {/* ── Form card with tabs ── */}
         <form
           id="show-detail-form"
           onSubmit={handleSubmit(onSubmit)}
-          className="flex-1 min-w-0 space-y-5"
+          className="bg-zinc-900 border border-zinc-800 rounded-xl overflow-hidden"
         >
-          {/* Name */}
-          <Field label="Name" error={errors.name?.message}>
-            <input
-              {...register('name')}
-              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-            />
-          </Field>
-
-          {/* Host + Producer */}
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Host">
-              <input
-                {...register('host')}
-                placeholder="—"
-                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-              />
-            </Field>
-            <Field label="Producer">
-              <input
-                {...register('producer')}
-                placeholder="—"
-                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-              />
-            </Field>
+          {/* Tab bar */}
+          <div className="flex border-b border-zinc-800 px-6 pt-1">
+            {(['configuration', 'media-content'] as const).map((tab) => (
+              <button
+                key={tab}
+                type="button"
+                onClick={() => setActiveTab(tab)}
+                className={`mr-6 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
+                  activeTab === tab
+                    ? 'border-indigo-500 text-white'
+                    : 'border-transparent text-zinc-400 hover:text-zinc-200'
+                }`}
+              >
+                {tab === 'configuration' ? 'Configuration' : 'Media Content'}
+              </button>
+            ))}
           </div>
 
-          {/* Duration slider */}
-          <Field label={`Duration — ${formatDuration(selectedDuration)}`}>
-            <Controller
-              control={control}
-              name="duration_minutes"
-              render={({ field }) => (
-                <div className="flex items-center gap-3">
-                  <span className="text-xs text-zinc-500 w-8 text-right">{formatDuration(DURATION_MIN)}</span>
-                  <input
-                    type="range"
-                    min={DURATION_MIN}
-                    max={DURATION_MAX}
-                    step={DURATION_STEP}
-                    value={field.value ?? show.duration_minutes}
-                    onChange={(e) => field.onChange(Number(e.target.value))}
-                    className="flex-1 accent-indigo-500"
-                  />
-                  <span className="text-xs text-zinc-500 w-8">{formatDuration(DURATION_MAX)}</span>
+          {/* Tab content */}
+          <div className="p-6 space-y-5">
+            {activeTab === 'configuration' ? (
+              <>
+                <Field label={<span className="flex items-center gap-1">Name <HelpTooltip text="The show's display name, used in the schedule, supervisor logs, and reports." /></span>} error={errors.name?.message}>
+                  <input {...register('name')} className={INPUT} />
+                </Field>
+
+                <div className="grid grid-cols-2 gap-3">
+                  <Field label={<span className="flex items-center gap-1">Host <HelpTooltip text="The on-air presenter. Appears in schedule views and exported metadata." /></span>}>
+                    <input {...register('host')} placeholder="—" className={INPUT} />
+                  </Field>
+                  <Field label={<span className="flex items-center gap-1">Producer <HelpTooltip text="The behind-the-scenes producer. Informational only — not used by the scheduler." /></span>}>
+                    <input {...register('producer')} placeholder="—" className={INPUT} />
+                  </Field>
                 </div>
-              )}
-            />
-          </Field>
 
-          {/* Clock */}
-          <Field label="Assigned Clock">
-            <Controller
-              control={control}
-              name="default_clock_id"
-              render={({ field }) => (
-                <select
-                  value={field.value ?? ''}
-                  onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="">None</option>
-                  {clocks.map((c) => (
-                    <option key={c.id} value={c.id}>{c.name}</option>
-                  ))}
-                </select>
-              )}
-            />
-          </Field>
+                <Field label={<span className="flex items-center gap-1">Color <HelpTooltip text="Visual label used to identify this show in the schedule calendar." /></span>}>
+                  <div className="flex gap-2 flex-wrap">
+                    {SHOW_COLORS.map((color) => (
+                      <button
+                        key={color}
+                        type="button"
+                        onClick={() => setValue('color', color, { shouldDirty: true })}
+                        className={`w-7 h-7 rounded-full ${COLOR_DOT[color]} transition-all ${
+                          selectedColor === color
+                            ? 'ring-2 ring-offset-2 ring-offset-zinc-950 ring-white scale-110'
+                            : 'opacity-50 hover:opacity-90'
+                        }`}
+                      />
+                    ))}
+                  </div>
+                </Field>
 
-          {/* Extension policy */}
-          <Field
-            label={
-              <span className="flex items-center gap-1">
-                Extension policy
-                <HelpTooltip text="What to play when there is no clock assigned to cover part of the show's scheduled time — e.g. a DJ extends the show past the last clock hour. Repeat last clock tiles the last assigned clock again; Fall through keeps playing content sources without clock structure." />
-              </span>
-            }
-          >
-            <Controller
-              control={control}
-              name="extension_policy"
-              render={({ field }) => (
-                <select
-                  value={field.value ?? ''}
-                  onChange={(e) => field.onChange(e.target.value === '' ? null : e.target.value as ExtensionPolicy)}
-                  className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="">
-                    Station default — {supervisorConfig?.extension_policy === 'fall_through' ? 'Fall through' : 'Repeat last clock'}
-                  </option>
-                  {EXTENSION_POLICIES.map((p) => (
-                    <option key={p} value={p} className="bg-zinc-900">
-                      {p === 'repeat_last_clock' ? 'Repeat last clock' : 'Fall through'}
-                    </option>
-                  ))}
-                </select>
-              )}
-            />
-          </Field>
+                <Field label={<span className="flex items-center gap-1">Notes <HelpTooltip text="Internal notes about the show. Not broadcast or shown to listeners." /></span>}>
+                  <textarea
+                    {...register('notes')}
+                    rows={3}
+                    placeholder="Optional notes"
+                    className={`${INPUT} resize-none`}
+                  />
+                </Field>
 
-          {/* Color */}
-          <Field label="Color">
-            <div className="flex gap-2 flex-wrap">
-              {SHOW_COLORS.map((color) => (
-                <button
-                  key={color}
-                  type="button"
-                  onClick={() => setValue('color', color, { shouldDirty: true })}
-                  className={`w-7 h-7 rounded-full ${COLOR_DOT[color]} transition-all ${
-                    selectedColor === color
-                      ? 'ring-2 ring-offset-2 ring-offset-zinc-950 ring-white scale-110'
-                      : 'opacity-50 hover:opacity-90'
-                  }`}
-                />
-              ))}
-            </div>
-          </Field>
-
-          {/* Notes */}
-          <Field label="Notes">
-            <textarea
-              {...register('notes')}
-              rows={3}
-              placeholder="Optional notes"
-              className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 resize-none"
-            />
-          </Field>
-
-          {/* ── Intro / Outro ── */}
-          <section className="border-t border-zinc-800 pt-5 space-y-4">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Intro &amp; Outro</h2>
-            <Controller
-              control={control}
-              name="intro_media_id"
-              render={({ field }) => (
-                <MediaPickerField
-                  label="Intro clip"
-                  value={field.value ?? null}
-                  onChange={(v) => { field.onChange(v); setValue('intro_media_id', v, { shouldDirty: true }); }}
-                />
-              )}
-            />
-            <Controller
-              control={control}
-              name="outro_media_id"
-              render={({ field }) => (
-                <MediaPickerField
-                  label="Outro clip"
-                  value={field.value ?? null}
-                  onChange={(v) => { field.onChange(v); setValue('outro_media_id', v, { shouldDirty: true }); }}
-                />
-              )}
-            />
-          </section>
-
-          {/* ── Jingles ── */}
-          <section className="border-t border-zinc-800 pt-5">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Jingles</h2>
-            <Controller
-              control={control}
-              name="jingle_playlist_id"
-              render={({ field }) => (
-                <PlaylistSelect
-                  playlists={jinglePlaylists}
-                  value={field.value ?? null}
-                  onChange={(v) => { field.onChange(v); setValue('jingle_playlist_id', v, { shouldDirty: true }); }}
-                  placeholder="No jingle playlist assigned"
-                />
-              )}
-            />
-          </section>
-
-          {/* ── Beds ── */}
-          <section className="border-t border-zinc-800 pt-5">
-            <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Beds</h2>
-            <Controller
-              control={control}
-              name="bed_playlist_id"
-              render={({ field }) => (
-                <PlaylistSelect
-                  playlists={bedPlaylists}
-                  value={field.value ?? null}
-                  onChange={(v) => { field.onChange(v); setValue('bed_playlist_id', v, { shouldDirty: true }); }}
-                  placeholder="No bed playlist assigned"
-                />
-              )}
-            />
-          </section>
-
-          {/* ── Music Playlists ── */}
-          <MusicPlaylistsSection
-            showId={showId}
-            showMusicPlaylists={showMusicPlaylists}
-            availablePlaylists={musicPlaylists}
-            usedPlaylistIds={usedPlaylistIds}
-          />
-        </form>
-
-        {/* ── Right column: info panels ── */}
-        <div className="w-64 flex-shrink-0 space-y-4">
-
-          {/* This week */}
-          <Panel title="This Week">
-            {showEntries.length === 0 ? (
-              <p className="text-xs text-zinc-500 py-2">Not scheduled this week</p>
-            ) : (
-              <ul className="space-y-1">
-                {showEntries.map((entry) => {
-                  const day = weekDays[entry.day_of_week - 1];
-                  const isNext = entry.id === nextEntryId;
-                  return (
-                    <li
-                      key={entry.id}
-                      className={`flex items-center justify-between text-xs rounded px-1.5 py-0.5 -mx-1.5 ${
-                        isNext ? 'bg-indigo-500/10 text-indigo-300' : ''
-                      }`}
-                    >
-                      <span className={`font-medium ${isNext ? 'text-indigo-200' : 'text-zinc-300'}`}>
-                        {DAY_NAMES[entry.day_of_week - 1]} {day.getDate()}
-                        {isNext && <span className="ml-1 text-indigo-400 text-[10px]">next</span>}
-                      </span>
-                      <span className={`font-mono ${isNext ? 'text-indigo-300' : 'text-zinc-400'}`}>
-                        {entry.time_start}–{entry.time_end}
-                      </span>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </Panel>
-
-          {/* Campaigns */}
-          <Panel
-            title="Campaigns"
-            icon={<Megaphone className="w-3.5 h-3.5" />}
-          >
-            {showCampaigns.length === 0 ? (
-              <p className="text-xs text-zinc-500 py-1">No campaigns linked to this show.</p>
-            ) : (
-              <ul className="space-y-2">
-                {showCampaigns.map((c) => (
-                  <li key={c.id} className="text-xs">
-                    <div className="flex items-center justify-between gap-1">
-                      <span className={`font-medium truncate ${c.active ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>{c.name}</span>
-                      {c.plays_per_show != null && (
-                        <span className="flex-shrink-0 text-indigo-400 font-mono">{c.plays_per_show}×</span>
+                <section className="border-t border-zinc-800 pt-5 space-y-5">
+                  <Field label={<span className="flex items-center gap-1">{`Duration — ${formatDuration(selectedDuration)}`} <HelpTooltip text="How long the show runs. The supervisor uses this to determine how many clock hours to schedule." /></span>}>
+                    <Controller
+                      control={control}
+                      name="duration_minutes"
+                      render={({ field }) => (
+                        <div className="flex items-center gap-3">
+                          <span className="text-xs text-zinc-500 w-8 text-right">{formatDuration(DURATION_MIN)}</span>
+                          <input
+                            type="range"
+                            min={DURATION_MIN}
+                            max={DURATION_MAX}
+                            step={DURATION_STEP}
+                            value={field.value ?? show.duration_minutes}
+                            onChange={(e) => field.onChange(Number(e.target.value))}
+                            className="flex-1 accent-indigo-500"
+                          />
+                          <span className="text-xs text-zinc-500 w-8">{formatDuration(DURATION_MAX)}</span>
+                        </div>
                       )}
-                    </div>
-                    <span className="text-zinc-500">{c.customer_name}</span>
-                  </li>
-                ))}
-              </ul>
+                    />
+                  </Field>
+
+                  <Field label={<span className="flex items-center gap-1">Assigned Clock <HelpTooltip text="The default clock template for this show. Controls which segments play — music, jingles, spots, sweepers — unless a per-slot override is set on the schedule." /></span>}>
+                    <Controller
+                      control={control}
+                      name="default_clock_id"
+                      render={({ field }) => (
+                        <select
+                          value={field.value ?? ''}
+                          onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
+                          className={SELECT}
+                        >
+                          <option value="">None</option>
+                          {clocks.map((c) => (
+                            <option key={c.id} value={c.id}>{c.name}</option>
+                          ))}
+                        </select>
+                      )}
+                    />
+                  </Field>
+
+                  <Field
+                    label={
+                      <span className="flex items-center gap-1">
+                        Extension policy
+                        <HelpTooltip text={<>What to play when no clock covers part of the show's scheduled time — e.g. a DJ runs over. <span className="font-semibold text-white">Repeat last clock</span> tiles the last assigned clock again; <span className="font-semibold text-white">Fall through</span> keeps playing content sources without clock structure.</>} />
+                      </span>
+                    }
+                  >
+                    <Controller
+                      control={control}
+                      name="extension_policy"
+                      render={({ field }) => (
+                        <select
+                          value={field.value ?? ''}
+                          onChange={(e) => field.onChange(e.target.value === '' ? null : e.target.value as ExtensionPolicy)}
+                          className={SELECT}
+                        >
+                          <option value="">
+                            Station default — {supervisorConfig?.extension_policy === 'fall_through' ? 'Fall through' : 'Repeat last clock'}
+                          </option>
+                          {EXTENSION_POLICIES.map((p) => (
+                            <option key={p} value={p} className="bg-zinc-900">
+                              {p === 'repeat_last_clock' ? 'Repeat last clock' : 'Fall through'}
+                            </option>
+                          ))}
+                        </select>
+                      )}
+                    />
+                  </Field>
+                </section>
+              </>
+            ) : (
+              <>
+                <section className="space-y-4">
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Intro &amp; Outro</h2>
+                  <Controller
+                    control={control}
+                    name="intro_media_id"
+                    render={({ field }) => (
+                      <MediaPickerField
+                        label={<span className="flex items-center gap-1">Intro clip <HelpTooltip text="Audio played at the very start of the show, before the first scheduled segment begins." /></span>}
+                        value={field.value ?? null}
+                        onChange={(v) => { field.onChange(v); setValue('intro_media_id', v, { shouldDirty: true }); }}
+                      />
+                    )}
+                  />
+                  <Controller
+                    control={control}
+                    name="outro_media_id"
+                    render={({ field }) => (
+                      <MediaPickerField
+                        label={<span className="flex items-center gap-1">Outro clip <HelpTooltip text="Audio played at the very end of the show, after the last scheduled segment finishes." /></span>}
+                        value={field.value ?? null}
+                        onChange={(v) => { field.onChange(v); setValue('outro_media_id', v, { shouldDirty: true }); }}
+                      />
+                    )}
+                  />
+                </section>
+
+                <section className="border-t border-zinc-800 pt-5">
+                  <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Jingles <HelpTooltip text="Jingle playlist specific to this show. These play at jingle positions defined in the assigned clock, overriding the station's default jingle playlist." /></h2>
+                  <Controller
+                    control={control}
+                    name="jingle_playlist_id"
+                    render={({ field }) => (
+                      <PlaylistSelect
+                        playlists={jinglePlaylists}
+                        value={field.value ?? null}
+                        onChange={(v) => { field.onChange(v); setValue('jingle_playlist_id', v, { shouldDirty: true }); }}
+                        placeholder="No jingle playlist assigned"
+                      />
+                    )}
+                  />
+                </section>
+
+                <section className="border-t border-zinc-800 pt-5">
+                  <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Beds <HelpTooltip text="Music bed playlist for this show. Beds play as background audio under DJ talk segments when bed playback is enabled in the clock." /></h2>
+                  <Controller
+                    control={control}
+                    name="bed_playlist_id"
+                    render={({ field }) => (
+                      <PlaylistSelect
+                        playlists={bedPlaylists}
+                        value={field.value ?? null}
+                        onChange={(v) => { field.onChange(v); setValue('bed_playlist_id', v, { shouldDirty: true }); }}
+                        placeholder="No bed playlist assigned"
+                      />
+                    )}
+                  />
+                </section>
+
+                <MusicPlaylistsSection
+                  showId={showId}
+                  showMusicPlaylists={showMusicPlaylists}
+                  availablePlaylists={musicPlaylists}
+                  usedPlaylistIds={usedPlaylistIds}
+                />
+              </>
             )}
-          </Panel>
+          </div>
+        </form>
+      </div>
 
-          {/* Statistics — coming soon */}
-          <Panel
-            title="Statistics"
-            icon={<BarChart2 className="w-3.5 h-3.5" />}
-            locked
-          >
-            <p className="text-xs text-zinc-500 leading-relaxed">
-              Ratings, play counts, and profitability metrics will appear here.
-            </p>
-          </Panel>
+      {/* ── Right column: info panels ── */}
+      <div className="w-64 flex-shrink-0 space-y-4">
 
-        </div>
+        <Panel title="This Week">
+          {showEntries.length === 0 ? (
+            <p className="text-xs text-zinc-500 py-2">Not scheduled this week</p>
+          ) : (
+            <ul className="space-y-1">
+              {showEntries.map((entry) => {
+                const day = weekDays[entry.day_of_week - 1];
+                const isNext = entry.id === nextEntryId;
+                return (
+                  <li
+                    key={entry.id}
+                    className={`flex items-center justify-between text-xs rounded px-1.5 py-0.5 -mx-1.5 ${
+                      isNext ? 'bg-indigo-500/10 text-indigo-300' : ''
+                    }`}
+                  >
+                    <span className={`font-medium ${isNext ? 'text-indigo-200' : 'text-zinc-300'}`}>
+                      {DAY_NAMES[entry.day_of_week - 1]} {day.getDate()}
+                      {isNext && <span className="ml-1 text-indigo-400 text-[10px]">next</span>}
+                    </span>
+                    <span className={`font-mono ${isNext ? 'text-indigo-300' : 'text-zinc-400'}`}>
+                      {entry.time_start}–{entry.time_end}
+                    </span>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel title="Campaigns" icon={<Megaphone className="w-3.5 h-3.5" />}>
+          {showCampaigns.length === 0 ? (
+            <p className="text-xs text-zinc-500 py-1">No campaigns linked to this show.</p>
+          ) : (
+            <ul className="space-y-2">
+              {showCampaigns.map((c) => (
+                <li key={c.id} className="text-xs">
+                  <div className="flex items-center justify-between gap-1">
+                    <span className={`font-medium truncate ${c.active ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>{c.name}</span>
+                    {c.plays_per_show != null && (
+                      <span className="flex-shrink-0 text-indigo-400 font-mono">{c.plays_per_show}×</span>
+                    )}
+                  </div>
+                  <span className="text-zinc-500">{c.customer_name}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </Panel>
+
+        <Panel title="Statistics" icon={<BarChart2 className="w-3.5 h-3.5" />} locked>
+          <p className="text-xs text-zinc-500 leading-relaxed">
+            Ratings, play counts, and profitability metrics will appear here.
+          </p>
+        </Panel>
+
       </div>
     </div>
   );
@@ -515,6 +534,13 @@ function MusicPlaylistsSection({
 }) {
   const qc = useQueryClient();
   const [addingId, setAddingId] = useState<number | ''>('');
+  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
+  const toggleExpanded = (id: number) =>
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
 
   const { data: rotations = [] } = useQuery<Rotation[]>({
     queryKey: ['rotations'],
@@ -574,7 +600,7 @@ function MusicPlaylistsSection({
   return (
     <section className="border-t border-zinc-800 pt-5">
       <div className="flex items-center justify-between mb-3">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Show Music</h2>
+        <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400">Show Music <HelpTooltip text="Music playlists assigned to this show. Weight controls relative pick probability — a playlist with weight 2 is picked twice as often as one with weight 1." /></h2>
       </div>
 
       {showMusicPlaylists.length === 0 && unassigned.length === 0 && (
@@ -582,87 +608,98 @@ function MusicPlaylistsSection({
       )}
 
       {showMusicPlaylists.length > 0 && (
-        <ul className="space-y-2 mb-3">
-          {showMusicPlaylists.map((sp) => (
-            <li key={sp.id} className="group">
-              <div className="flex items-center gap-2">
-                <span className="flex-1 text-sm text-zinc-200 truncate">{sp.playlist_name}</span>
-                <div className="flex items-center gap-1 shrink-0">
-                  <span className="text-xs text-zinc-500">wt</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={99}
-                    defaultValue={sp.weight}
-                    onBlur={(e) => {
-                      const v = Number(e.target.value);
-                      if (v >= 1 && v !== sp.weight) weightMutation.mutate({ spid: sp.id, weight: v });
-                    }}
-                    className="w-12 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
-                  />
-                </div>
-                <button
-                  type="button"
-                  onClick={() => removeMutation.mutate(sp.id)}
-                  className="p-0.5 text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition"
+        <ul className="space-y-1.5 mb-3">
+          {showMusicPlaylists.map((sp) => {
+            const expanded = expandedIds.has(sp.id);
+            return (
+              <li key={sp.id} className="bg-zinc-800/50 rounded-lg border border-zinc-700/50">
+                {/* Summary row — click to expand */}
+                <div
+                  className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-zinc-800 rounded-lg transition-colors"
+                  onClick={() => toggleExpanded(sp.id)}
                 >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
-              </div>
-              {rotations.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-1 ml-0.5">
-                  <span className="text-xs text-zinc-600">rotation</span>
-                  <select
-                    value={sp.rotation_id ?? ''}
-                    onChange={(e) => {
-                      const v = e.target.value === '' ? null : Number(e.target.value);
-                      rotationMutation.mutate({ spid: sp.id, rotation_id: v });
-                    }}
-                    className="bg-zinc-800 border border-zinc-700/60 rounded px-1.5 py-0.5 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                  <ChevronRight className={`w-3.5 h-3.5 text-zinc-500 flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
+                  <span className="flex-1 text-sm text-zinc-200 truncate">{sp.playlist_name}</span>
+                  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
+                    <span className="flex items-center gap-0.5 text-xs text-zinc-500">wt <HelpTooltip text="Relative pick weight. A playlist with weight 2 is chosen twice as often as one with weight 1." /></span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={99}
+                      defaultValue={sp.weight}
+                      onBlur={(e) => {
+                        const v = Number(e.target.value);
+                        if (v >= 1 && v !== sp.weight) weightMutation.mutate({ spid: sp.id, weight: v });
+                      }}
+                      className="w-12 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); removeMutation.mutate(sp.id); }}
+                    className="p-0.5 text-zinc-600 hover:text-red-400 transition"
                   >
-                    <option value="">Default</option>
-                    {rotations.map((r) => (
-                      <option key={r.id} value={r.id}>{r.name}</option>
-                    ))}
-                  </select>
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
                 </div>
-              )}
-              <div className="flex items-center gap-1.5 mt-1 ml-0.5 flex-wrap">
-                <span className="text-xs text-zinc-600">tier</span>
-                <input
-                  type="text"
-                  defaultValue={sp.rotation_tier ?? ''}
-                  placeholder="e.g. hot"
-                  list="show-tiers-in-use"
-                  onBlur={(e) => {
-                    const next = e.target.value.trim();
-                    const cur = sp.rotation_tier ?? '';
-                    if (next === cur) return;
-                    tierMutation.mutate({ spid: sp.id, rotation_tier: next === '' ? null : next });
-                  }}
-                  className="w-20 bg-zinc-800 border border-zinc-700/60 rounded px-1.5 py-0.5 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-                />
-                <span className="text-xs text-zinc-600">fallback</span>
-                <input
-                  type="text"
-                  defaultValue={sp.fallback_tier ?? ''}
-                  placeholder="(none)"
-                  list="show-tiers-in-use"
-                  onBlur={(e) => {
-                    const next = e.target.value.trim();
-                    const cur = sp.fallback_tier ?? '';
-                    if (next === cur) return;
-                    fallbackTierMutation.mutate({
-                      spid: sp.id,
-                      fallback_tier: next === '' ? null : next,
-                    });
-                  }}
-                  className="w-20 bg-zinc-800 border border-zinc-700/60 rounded px-1.5 py-0.5 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-                />
-                <HelpTooltip text="When this playlist's pool is exhausted (all tracks in separation or empty), the picker tries the tier you name here. Leave blank for no fallback. Tier names are free-form labels — keep them consistent across the show." />
-              </div>
-            </li>
-          ))}
+
+                {/* Expanded: rotation / tier controls */}
+                {expanded && (
+                  <div className="px-3 pb-3 pt-1 space-y-2 border-t border-zinc-700/50">
+                    {rotations.length > 0 && (
+                      <div className="flex items-center gap-2">
+                        <span className="flex items-center gap-0.5 text-xs text-zinc-500 w-16 shrink-0">Rotation <HelpTooltip text={<>Override the rotation rules applied when picking from this playlist. Leave as <span className="font-semibold text-white">Default</span> to use the station's global rotation settings.</>} /></span>
+                        <select
+                          value={sp.rotation_id ?? ''}
+                          onChange={(e) => {
+                            const v = e.target.value === '' ? null : Number(e.target.value);
+                            rotationMutation.mutate({ spid: sp.id, rotation_id: v });
+                          }}
+                          className="flex-1 bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="">Default</option>
+                          {rotations.map((r) => (
+                            <option key={r.id} value={r.id}>{r.name}</option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs text-zinc-500 w-16 shrink-0">Tier</span>
+                      <input
+                        type="text"
+                        defaultValue={sp.rotation_tier ?? ''}
+                        placeholder="e.g. hot"
+                        list="show-tiers-in-use"
+                        onBlur={(e) => {
+                          const next = e.target.value.trim();
+                          const cur = sp.rotation_tier ?? '';
+                          if (next === cur) return;
+                          tierMutation.mutate({ spid: sp.id, rotation_tier: next === '' ? null : next });
+                        }}
+                        className="w-24 bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                      />
+                      <span className="text-xs text-zinc-500">fallback</span>
+                      <input
+                        type="text"
+                        defaultValue={sp.fallback_tier ?? ''}
+                        placeholder="(none)"
+                        list="show-tiers-in-use"
+                        onBlur={(e) => {
+                          const next = e.target.value.trim();
+                          const cur = sp.fallback_tier ?? '';
+                          if (next === cur) return;
+                          fallbackTierMutation.mutate({ spid: sp.id, fallback_tier: next === '' ? null : next });
+                        }}
+                        className="w-24 bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                      />
+                      <HelpTooltip text="When this playlist's pool is exhausted (all tracks in separation or empty), the picker tries the tier you name here. Leave blank for no fallback. Tier names are free-form labels — keep them consistent across the show." />
+                    </div>
+                  </div>
+                )}
+              </li>
+            );
+          })}
           <datalist id="show-tiers-in-use">
             {tiersInUse.map((t) => (
               <option key={t} value={t} />
@@ -676,7 +713,7 @@ function MusicPlaylistsSection({
           <select
             value={addingId}
             onChange={(e) => setAddingId(e.target.value === '' ? '' : Number(e.target.value))}
-            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-2.5 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+            className={`flex-1 ${SELECT}`}
           >
             <option value="">Add a music playlist…</option>
             {unassigned.map((p) => (
@@ -687,7 +724,7 @@ function MusicPlaylistsSection({
             type="button"
             disabled={addingId === '' || addMutation.isPending}
             onClick={() => { if (addingId !== '') addMutation.mutate(Number(addingId)); }}
-            className="flex items-center gap-1 px-2.5 py-1.5 text-xs bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
+            className={BTN_PRIMARY_SM}
           >
             <Plus className="w-3.5 h-3.5" /> Add
           </button>
@@ -714,7 +751,7 @@ function PlaylistSelect({
     <select
       value={value ?? ''}
       onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
-      className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:border-indigo-500"
+      className={SELECT}
     >
       <option value="">None</option>
       {playlists.map((p) => (
@@ -729,7 +766,7 @@ function PlaylistSelect({
 function MediaPickerField({
   label, value, onChange,
 }: {
-  label: string;
+  label: React.ReactNode;
   value: number | null;
   onChange: (id: number | null) => void;
 }) {
@@ -885,7 +922,7 @@ function MediaPickerField({
 function Field({ label, error, children }: { label: React.ReactNode; error?: string; children: React.ReactNode }) {
   return (
     <div>
-      <label className="flex items-center text-xs font-medium text-zinc-400 mb-1.5">{label}</label>
+      <label className="flex items-center text-xs font-medium text-zinc-300 mb-1">{label}</label>
       {children}
       {error && <p className="text-xs text-red-400 mt-1">{error}</p>}
     </div>

@@ -10,6 +10,7 @@ import {
   TemplateEntry,
 } from '@radio/shared';
 import { fetchShows, createShow, deleteShow, fetchTemplateEntries, fetchClocks } from '../../api';
+import { BTN_PRIMARY, BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, CARD, MODAL_OVERLAY, MODAL_BOX, INPUT, LABEL } from '../../ui';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -64,7 +65,7 @@ export function ShowsPage() {
   const qc = useQueryClient();
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<number | null>(null);
+  const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [sortCol, setSortCol] = useState<SortCol>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
@@ -97,15 +98,24 @@ export function ShowsPage() {
   });
 
   const deleteMutation = useMutation({
-    mutationFn: (id: number) => deleteShow(id),
-    onSuccess: () => {
+    mutationFn: (ids: number[]) => Promise.all(ids.map((id) => deleteShow(id))),
+    onSuccess: (_, ids) => {
       qc.invalidateQueries({ queryKey: ['shows'] });
       qc.invalidateQueries({ queryKey: ['template-entries'] });
-      setConfirmDeleteId(null);
-      showToast('success', 'Show deleted');
+      setSelectedIds(new Set());
+      showToast('success', ids.length === 1 ? 'Show deleted' : `${ids.length} shows deleted`);
     },
     onError: (err: Error) => showToast('error', err.message),
   });
+
+  const toggleSelect = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
 
   const clockById = useMemo(() => new Map(clocks.map((c) => [c.id, c.name])), [clocks]);
 
@@ -132,17 +142,21 @@ export function ShowsPage() {
     return [...enriched].sort(cmp);
   }, [shows, templateEntries, clockById, sortCol, sortDir]);
 
+  const allSelected = rows.length > 0 && rows.every((r) => selectedIds.has(r.show.id));
+  const toggleAll = () =>
+    setSelectedIds(allSelected ? new Set() : new Set(rows.map((r) => r.show.id)));
+
   const SortTh = ({ col, children }: { col: SortCol; children: React.ReactNode }) => {
     const active = sortCol === col;
     const Icon = active && sortDir === 'desc' ? ChevronDown : ChevronUp;
     return (
       <th
-        className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-800 cursor-pointer select-none hover:text-zinc-200 transition-colors"
+        className="px-4 py-3 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-700 cursor-pointer select-none hover:text-zinc-200 transition-colors"
         onClick={() => handleSort(col)}
       >
         <span className="flex items-center gap-1">
           {children}
-          <Icon className={`w-3 h-3 flex-shrink-0 ${active ? 'text-indigo-400' : 'text-zinc-600'}`} />
+          <Icon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-indigo-400' : 'text-zinc-400'}`} />
         </span>
       </th>
     );
@@ -152,17 +166,27 @@ export function ShowsPage() {
     <div className="space-y-4">
       {/* Header */}
       <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-xl font-semibold text-white">Shows</h1>
-          <p className="text-sm text-zinc-400 mt-0.5">Define show templates with hosts, schedules, and metadata</p>
+        <h1 className="text-xl font-semibold text-white">Shows</h1>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => {
+              const n = selectedIds.size;
+              if (!window.confirm(`Delete ${n} show${n > 1 ? 's' : ''}? This cannot be undone.`)) return;
+              deleteMutation.mutate([...selectedIds]);
+            }}
+            disabled={selectedIds.size === 0 || deleteMutation.isPending}
+            title={selectedIds.size === 0 ? 'Select one or more shows to delete' : undefined}
+            className={BTN_DESTRUCTIVE_SM}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            Delete
+          </button>
+          <div className="w-px h-5 bg-zinc-700 mx-1" />
+          <button onClick={() => setShowModal(true)} className={BTN_PRIMARY_SM}>
+            <Plus className="w-3.5 h-3.5" />
+            New Show
+          </button>
         </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
-        >
-          <Plus className="w-4 h-4" />
-          New Show
-        </button>
       </div>
 
       {/* Toast */}
@@ -175,7 +199,7 @@ export function ShowsPage() {
       )}
 
       {/* Table */}
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+      <div className={`${CARD} overflow-hidden`}>
         {isLoading ? (
           <div className="px-6 py-16 text-center text-zinc-400 text-sm">Loading shows…</div>
         ) : shows.length === 0 ? (
@@ -185,31 +209,49 @@ export function ShowsPage() {
           </div>
         ) : (
           <table className="w-full">
-            <thead>
-              <tr className="border-b border-zinc-800">
-                <th className="px-4 py-3 border-r border-zinc-800 w-10"></th>
+            <thead className="bg-zinc-800/60">
+              <tr className="border-b border-zinc-700">
+                <th className="px-4 py-3 w-12 border-r border-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={toggleAll}
+                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                  />
+                </th>
                 <SortTh col="name">Name</SortTh>
                 <SortTh col="host">Host</SortTh>
                 <SortTh col="clock">Clock</SortTh>
                 <SortTh col="duration">Duration</SortTh>
                 <SortTh col="next">Next</SortTh>
-                <th className="px-4 py-3 w-24"></th>
               </tr>
             </thead>
             <tbody className="divide-y divide-zinc-800/60">
-              {rows.map(({ show, showEntries, next, clockName }) => {
+              {rows.map(({ show, next, clockName }) => {
                 const cm = COLOR_META[show.color];
+                const isSelected = selectedIds.has(show.id);
                 return (
                   <tr
                     key={show.id}
-                    className={`transition-colors cursor-pointer group ${confirmDeleteId === show.id ? 'bg-red-900/10' : 'hover:bg-zinc-800/40'}`}
-                    onClick={() => confirmDeleteId === show.id ? undefined : navigate(`/shows/${show.id}`)}
+                    className={`transition-colors cursor-pointer ${
+                      isSelected ? 'bg-indigo-600/10' : 'hover:bg-zinc-800/40'
+                    }`}
+                    onClick={() => navigate(`/shows/${show.id}`)}
                   >
-                    <td className="px-4 py-3 border-r border-zinc-800/60">
-                      <div className={`w-3 h-3 rounded-full ${cm.dot} mx-auto`} />
+                    <td className="px-4 py-3 border-r border-zinc-800/60" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={() => {}}
+                        onClick={(e) => toggleSelect(show.id, e)}
+                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                      />
                     </td>
                     <td className="px-4 py-3">
-                      <span className="text-zinc-200 font-medium text-sm">{show.name}</span>
+                      <span className="flex items-center gap-2">
+                        <div className={`w-2 h-2 rounded-full ${cm.dot} flex-shrink-0`} />
+                        <span className="text-zinc-200 font-medium text-sm">{show.name}</span>
+                      </span>
                     </td>
                     <td className="px-4 py-3">
                       {show.host
@@ -234,37 +276,6 @@ export function ShowsPage() {
                         </span>
                       ) : (
                         <span className="text-xs text-zinc-500 italic">Unscheduled</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                      {confirmDeleteId === show.id ? (
-                        <div className="flex flex-col items-end gap-1.5">
-                          {showEntries.length > 0 && (
-                            <span className="text-[11px] text-amber-400 text-right leading-tight">
-                              Scheduled in {showEntries.length} slot{showEntries.length !== 1 ? 's' : ''}. Slots will be orphaned.
-                            </span>
-                          )}
-                          <div className="flex items-center gap-1.5 justify-end">
-                            <button
-                              onClick={() => deleteMutation.mutate(show.id)}
-                              disabled={deleteMutation.isPending}
-                              className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
-                            >Delete</button>
-                            <button
-                              onClick={() => setConfirmDeleteId(null)}
-                              className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
-                            >Cancel</button>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-                          <button
-                            onClick={() => setConfirmDeleteId(show.id)}
-                            className="p-1 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
-                        </div>
                       )}
                     </td>
                   </tr>
@@ -319,12 +330,9 @@ function ShowModal({
   };
 
   return (
-    <div
-      className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4"
-      onClick={onClose}
-    >
+    <div className={`${MODAL_OVERLAY} p-4`} onClick={onClose}>
       <div
-        className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-full max-w-lg flex flex-col max-h-[90vh]"
+        className={`${MODAL_BOX} max-w-lg max-h-[90vh]`}
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header */}
@@ -333,7 +341,7 @@ function ShowModal({
             <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider bg-zinc-800 px-2 py-0.5 rounded">Show</span>
             <h2 className="text-base font-semibold text-white">New Show</h2>
           </div>
-          <button onClick={onClose} className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors">
+          <button onClick={onClose} className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded-lg transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>
@@ -342,13 +350,13 @@ function ShowModal({
         <form id="show-form" onSubmit={handleSubmit(onSubmit)} className="flex-1 overflow-y-auto px-5 py-4 space-y-4">
           {/* Name */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1">
+            <label className={LABEL}>
               Name <span className="text-red-400">*</span>
             </label>
             <input
               {...register('name')}
               placeholder="e.g. Morning Drive"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
+              className={INPUT}
             />
             {errors.name && <p className="text-xs text-red-400 mt-1">{errors.name.message}</p>}
           </div>
@@ -356,26 +364,18 @@ function ShowModal({
           {/* Host + Producer */}
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1">Host</label>
-              <input
-                {...register('host')}
-                placeholder="Host name"
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-              />
+              <label className={LABEL}>Host</label>
+              <input {...register('host')} placeholder="Host name" className={INPUT} />
             </div>
             <div>
-              <label className="block text-xs font-medium text-zinc-300 mb-1">Producer</label>
-              <input
-                {...register('producer')}
-                placeholder="Producer name"
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500"
-              />
+              <label className={LABEL}>Producer</label>
+              <input {...register('producer')} placeholder="Producer name" className={INPUT} />
             </div>
           </div>
 
           {/* Color swatches */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-2">Color</label>
+            <label className={LABEL}>Color</label>
             <div className="flex gap-2 flex-wrap">
               {SHOW_COLORS.map((color) => {
                 const cm = COLOR_META[color];
@@ -399,12 +399,12 @@ function ShowModal({
 
           {/* Notes */}
           <div>
-            <label className="block text-xs font-medium text-zinc-300 mb-1">Notes</label>
+            <label className={LABEL}>Notes</label>
             <textarea
               {...register('notes')}
               rows={2}
               placeholder="Optional notes"
-              className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 resize-none"
+              className={`${INPUT} resize-none`}
             />
           </div>
 
@@ -412,19 +412,10 @@ function ShowModal({
 
         {/* Footer */}
         <div className="flex items-center justify-end gap-2 px-5 py-4 border-t border-zinc-800 flex-shrink-0">
-          <button
-            type="button"
-            onClick={onClose}
-            className="px-3 py-1.5 text-sm text-zinc-300 hover:text-white bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
-          >
+          <button type="button" onClick={onClose} className={BTN_SECONDARY_SM}>
             Cancel
           </button>
-          <button
-            form="show-form"
-            type="submit"
-            disabled={isSaving}
-            className="px-4 py-1.5 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-50"
-          >
+          <button form="show-form" type="submit" disabled={isSaving} className={BTN_PRIMARY}>
             {isSaving ? 'Creating…' : 'Create & Edit'}
           </button>
         </div>
