@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, Pause, Play, RotateCw, Lock, Unlock } from 'lucide-react';
+import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, Pause, Play, RotateCw, Lock, Unlock, Headphones, Square, Volume2 } from 'lucide-react';
 import {
   fetchIcecastStats,
   fetchIcecastConfig,
@@ -146,6 +146,9 @@ export function Dashboard() {
         reachable={supStatus?.reachable ?? false}
         onAirSource={supStatus?.on_air_source ?? 'none'}
       />
+
+      {/* Monitor Player */}
+      {config && <MonitorPlayer config={config} />}
 
       {/* Now Running — schedule resolver + supervisor controls */}
       {supStatus && <NowRunningCard status={supStatus} />}
@@ -314,7 +317,7 @@ export function Dashboard() {
   );
 }
 
-import type { NowPlaying, RecentPlay } from '@radio/shared';
+import type { IcecastConfig, NowPlaying, RecentPlay } from '@radio/shared';
 
 function NowPlayingCard({
   nowPlaying,
@@ -746,6 +749,139 @@ function RecentPlaysSection({ plays }: { plays: RecentPlay[] }) {
           </tbody>
         </table>
       </div>
+    </section>
+  );
+}
+
+function MonitorPlayer({ config }: { config: IcecastConfig }) {
+  const [mountIdx, setMountIdx] = useState(0);
+  const [playing, setPlaying] = useState(false);
+  const [buffering, setBuffering] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [volume, setVolume] = useState(0.8);
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  const socket = config.network.listen_sockets[0];
+  const port = socket?.port ?? 8000;
+  const proto = socket?.ssl ? 'https' : 'http';
+  const mount = config.mounts[mountIdx] ?? config.mounts[0];
+  const streamUrl = `${proto}://localhost:${port}${mount.name}`;
+
+  // Stop playback when mount changes
+  useEffect(() => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    audio.pause();
+    audio.src = '';
+    setPlaying(false);
+    setBuffering(false);
+    setError(null);
+  }, [mountIdx]);
+
+  // Sync volume without restarting stream
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.volume = volume;
+  }, [volume]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    const audio = audioRef.current;
+    return () => { if (audio) { audio.pause(); audio.src = ''; } };
+  }, []);
+
+  const toggle = () => {
+    const audio = audioRef.current;
+    if (!audio) return;
+    if (playing || buffering) {
+      audio.pause();
+      audio.src = '';
+      setPlaying(false);
+      setBuffering(false);
+      setError(null);
+    } else {
+      setError(null);
+      setBuffering(true);
+      // Append a cache-buster so the browser doesn't serve a stale response
+      audio.src = `${streamUrl}?t=${Date.now()}`;
+      audio.volume = volume;
+      audio.play().catch((e: Error) => {
+        setBuffering(false);
+        setError(e.message);
+      });
+    }
+  };
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
+      <div className="flex items-center gap-3">
+        <button
+          onClick={toggle}
+          title={playing || buffering ? 'Stop monitoring' : 'Listen live'}
+          className={`flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full transition-colors ${
+            playing
+              ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+              : buffering
+                ? 'bg-zinc-700 text-zinc-400'
+                : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white'
+          }`}
+        >
+          {buffering ? (
+            <Loader className="w-3.5 h-3.5 animate-spin" />
+          ) : playing ? (
+            <Square className="w-3.5 h-3.5 fill-current" />
+          ) : (
+            <Headphones className="w-3.5 h-3.5" />
+          )}
+        </button>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs font-medium text-zinc-300">Monitor</span>
+            {playing && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />}
+          </div>
+          {config.mounts.length > 1 ? (
+            <select
+              value={mountIdx}
+              onChange={(e) => setMountIdx(Number(e.target.value))}
+              className="mt-0.5 text-xs text-zinc-500 bg-transparent border-none outline-none cursor-pointer"
+            >
+              {config.mounts.map((m, i) => (
+                <option key={m.name} value={i}>{m.name}</option>
+              ))}
+            </select>
+          ) : (
+            <p className="text-xs font-mono text-zinc-500 truncate">{mount.name}</p>
+          )}
+        </div>
+
+        {error && (
+          <span className="text-xs text-red-400 truncate max-w-[160px]" title={error}>
+            {error}
+          </span>
+        )}
+
+        <div className="flex items-center gap-1.5 flex-shrink-0">
+          <Volume2 className="w-3.5 h-3.5 text-zinc-500" />
+          <input
+            type="range"
+            min={0}
+            max={1}
+            step={0.05}
+            value={volume}
+            onChange={(e) => setVolume(Number(e.target.value))}
+            className="w-20 accent-indigo-500"
+          />
+        </div>
+      </div>
+
+      {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
+      <audio
+        ref={audioRef}
+        onPlaying={() => { setBuffering(false); setPlaying(true); }}
+        onWaiting={() => setBuffering(true)}
+        onError={() => { setBuffering(false); setPlaying(false); setError('Stream unavailable — is Icecast running?'); }}
+        onEnded={() => { setPlaying(false); setBuffering(false); }}
+      />
     </section>
   );
 }
