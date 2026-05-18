@@ -1,9 +1,37 @@
 import { z } from 'zod';
+import type { MediaCategory } from './library.js';
 
 // ============ PLAYLISTS ============
 
-export const PLAYLIST_TYPES = ['music', 'jingle', 'bed', 'promo', 'spot'] as const;
+export const PLAYLIST_TYPES = ['music', 'jingle', 'bed', 'spot', 'promo', 'recording'] as const;
 export type PlaylistType = (typeof PLAYLIST_TYPES)[number];
+
+export const PLAYLIST_SUBCATEGORIES = {
+  music:     ['standard', 'hot_play', 'heavy_rotation'] as const,
+  // opener = show intro sting, closer = show outro sting, stationid = station ID clip, show = between-track jingle
+  jingle:    ['show', 'opener', 'closer', 'stationid']  as const,
+  spot:      []                                         as const,
+  promo:     []                                         as const,
+  bed:       []                                         as const,
+  recording: []                                         as const,
+} satisfies Record<PlaylistType, readonly string[]>;
+
+export const ALL_PLAYLIST_SUBCATEGORIES = [
+  'standard', 'hot_play', 'heavy_rotation',
+  'show', 'opener', 'closer', 'stationid',
+] as const;
+export type PlaylistSubcategory = (typeof ALL_PLAYLIST_SUBCATEGORIES)[number];
+
+/** Maps a playlist's type + subcategory to the media category it contains.
+ *  All jingle playlists draw from the 'jingle' category regardless of subcategory —
+ *  the subcategory encodes when/how the clip is used, not what it contains. */
+export function playlistMediaCategory(
+  type: PlaylistType,
+  subcategory: PlaylistSubcategory | string | null | undefined,
+): MediaCategory {
+  void subcategory; // all jingle subcategories target the same media category
+  return type as MediaCategory; // music, jingle, spot, promo, bed, recording
+}
 
 export const PLAYLIST_KINDS = ['static', 'dynamic'] as const;
 export type PlaylistKind = (typeof PLAYLIST_KINDS)[number];
@@ -54,6 +82,7 @@ export const PlaylistSchema = z.object({
   name: z.string(),
   description: z.string().nullable(),
   type: z.enum(PLAYLIST_TYPES),
+  subcategory: z.enum(ALL_PLAYLIST_SUBCATEGORIES).nullable().optional(),
   kind: z.enum(PLAYLIST_KINDS),
   rules: DynamicRulesSchema.nullable(),
   is_default: z.boolean().optional().default(false),
@@ -66,6 +95,7 @@ export const PlaylistCreateSchema = z.object({
   name: z.string().min(1, 'Name is required'),
   description: z.string().nullable().optional(),
   type: z.enum(PLAYLIST_TYPES),
+  subcategory: z.enum(ALL_PLAYLIST_SUBCATEGORIES).nullable().optional(),
   kind: z.enum(PLAYLIST_KINDS).default('static'),
   rules: DynamicRulesSchema.nullable().optional(),
   is_default: z.boolean().optional(),
@@ -75,6 +105,7 @@ export type PlaylistCreate = z.infer<typeof PlaylistCreateSchema>;
 export const PlaylistPatchSchema = z.object({
   name: z.string().min(1).optional(),
   description: z.string().nullable().optional(),
+  subcategory: z.enum(ALL_PLAYLIST_SUBCATEGORIES).nullable().optional(),
   rules: DynamicRulesSchema.nullable().optional(),
   is_default: z.boolean().optional(),
 });
@@ -90,6 +121,7 @@ export const PlaylistPreviewSchema = z.object({
     artist: z.string().nullable(),
     duration_seconds: z.number(),
     category: z.string(),
+    original_filename: z.string(),
   })),
 });
 export type PlaylistPreview = z.infer<typeof PlaylistPreviewSchema>;

@@ -17,12 +17,21 @@ import {
 import { CSS } from '@dnd-kit/utilities';
 import {
   GripVertical, Plus, Trash2, Check, X, Search, Loader,
+  Music, Bell, Waves, Tag, ChevronRight, Mic, Megaphone,
+  Flame, TrendingUp,
 } from 'lucide-react';
+import {
+  BTN_PRIMARY, BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM,
+  INPUT, LABEL, MODAL_OVERLAY, MODAL_BOX,
+} from '../../ui';
+import { SaveStatus } from '../../components/SaveStatus';
 import {
   PLAYLIST_TYPES,
   PLAYLIST_DEFAULT_TYPES,
+  PLAYLIST_SUBCATEGORIES,
   DYNAMIC_RULE_FIELDS,
-  type Playlist, type PlaylistCreate,
+  playlistMediaCategory,
+  type Playlist, type PlaylistCreate, type PlaylistType, type PlaylistSubcategory,
   type DynamicRules, type DynamicRuleCondition, type DynamicRuleField, type DynamicRuleOp,
   type PlaylistPreview, type MoodConditionValue,
 } from '@radio/shared';
@@ -155,20 +164,41 @@ const MOOD_COLORS: Record<string, string> = {
   electronic: 'bg-violet-500/20 text-violet-300 border-violet-700/50',
 };
 
-const TYPE_LABELS: Record<(typeof PLAYLIST_TYPES)[number], string> = {
-  music: 'Music',
-  jingle: 'Jingle',
-  bed: 'Bed',
-  promo: 'Promo',
-  spot: 'Spot',
+const TYPE_LABELS: Record<PlaylistType, string> = {
+  music:     'Music',
+  jingle:    'Jingle',
+  bed:       'Bed',
+  spot:      'Spot',
+  promo:     'Promo',
+  recording: 'Recording',
 };
 
-const TYPE_COLORS: Record<(typeof PLAYLIST_TYPES)[number], string> = {
-  music:  'bg-blue-600/20 text-blue-300 border border-blue-700/40',
-  jingle: 'bg-emerald-600/20 text-emerald-300 border border-emerald-700/40',
-  bed:    'bg-amber-600/20 text-amber-300 border border-amber-700/40',
-  promo:  'bg-violet-600/20 text-violet-300 border border-violet-700/40',
-  spot:   'bg-rose-600/20 text-rose-300 border border-rose-700/40',
+const TYPE_ICONS: Record<PlaylistType, React.ElementType> = {
+  music:     Music,
+  jingle:    Bell,
+  bed:       Waves,
+  spot:      Tag,
+  promo:     Megaphone,
+  recording: Mic,
+};
+
+const TYPE_COLORS: Record<PlaylistType, string> = {
+  music:     'bg-blue-600/20 text-blue-300 border border-blue-700/40',
+  jingle:    'bg-emerald-600/20 text-emerald-300 border border-emerald-700/40',
+  bed:       'bg-teal-600/20 text-teal-300 border border-teal-700/40',
+  spot:      'bg-rose-600/20 text-rose-300 border border-rose-700/40',
+  promo:     'bg-violet-600/20 text-violet-300 border border-violet-700/40',
+  recording: 'bg-zinc-600/20 text-zinc-300 border border-zinc-700/40',
+};
+
+const SUBCATEGORY_LABELS: Record<string, string> = {
+  standard:       'Standard',
+  hot_play:       'Hot Play',
+  heavy_rotation: 'Heavy Rotation',
+  show:           'Show',
+  opener:         'Opener',
+  closer:         'Closer',
+  stationid:      'Station ID',
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -202,113 +232,157 @@ function defaultValueForField(field: DynamicRuleField, op: DynamicRuleOp): Dynam
 
 // ─── New Playlist Modal ───────────────────────────────────────────────────────
 
+function defaultSubcategory(type: PlaylistType): PlaylistSubcategory | null {
+  const subs = PLAYLIST_SUBCATEGORIES[type] as readonly string[];
+  return subs.length > 0 ? (subs[0] as PlaylistSubcategory) : null;
+}
+
 function NewPlaylistModal({
+  existingNames,
   onConfirm,
   onCancel,
   isPending,
 }: {
-  onConfirm: (name: string, type: (typeof PLAYLIST_TYPES)[number], kind: 'static' | 'dynamic') => void;
+  existingNames: string[];
+  onConfirm: (name: string, type: PlaylistType, subcategory: PlaylistSubcategory | null, kind: 'static' | 'dynamic') => void;
   onCancel: () => void;
   isPending: boolean;
 }) {
   const [name, setName] = useState('');
-  const [type, setType] = useState<(typeof PLAYLIST_TYPES)[number]>('music');
+  const [type, setType] = useState<PlaylistType>('music');
+  const [subcategory, setSubcategory] = useState<PlaylistSubcategory | null>(defaultSubcategory('music'));
   const [kind, setKind] = useState<'static' | 'dynamic'>('static');
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => { inputRef.current?.focus(); }, []);
 
-  // Non-music types are always static
   useEffect(() => {
+    setSubcategory(defaultSubcategory(type));
     if (type !== 'music') setKind('static');
   }, [type]);
 
-  const submit = () => { if (name.trim()) onConfirm(name.trim(), type, kind); };
+  const hasConflict = name.trim().length > 0 &&
+    existingNames.some((n) => n.trim().toLowerCase() === name.trim().toLowerCase());
+
+  const submit = () => { if (name.trim() && !hasConflict) onConfirm(name.trim(), type, subcategory, kind); };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center">
-      <div className="absolute inset-0 bg-black/60" onClick={onCancel} />
-      <div className="relative bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl w-[460px] p-6 flex flex-col gap-5">
-        <h2 className="text-base font-semibold text-white">New Playlist</h2>
-
-        <div>
-          <label className="text-xs font-medium text-zinc-400 block mb-1.5">Name</label>
-          <input
-            ref={inputRef}
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') submit();
-              if (e.key === 'Escape') onCancel();
-            }}
-            placeholder="e.g. Morning Pop Hits"
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
-          />
-        </div>
-
-        <div>
-          <label className="text-xs font-medium text-zinc-400 block mb-1.5">Content type</label>
-          <div className="grid grid-cols-5 gap-1.5">
-            {PLAYLIST_TYPES.map((t) => (
-              <button
-                key={t}
-                onClick={() => setType(t)}
-                className={`py-2 rounded-lg text-sm border transition-colors ${
-                  type === t
-                    ? 'bg-zinc-700 border-zinc-500 text-white font-medium'
-                    : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
-                }`}
-              >
-                {TYPE_LABELS[t]}
-              </button>
-            ))}
-          </div>
-        </div>
-
-        {type === 'music' && (
-          <div>
-            <label className="text-xs font-medium text-zinc-400 block mb-1.5">How it's built</label>
-            <div className="flex rounded-lg border border-zinc-700 overflow-hidden text-sm">
-              <button
-                onClick={() => setKind('static')}
-                className={`flex-1 px-4 py-1.5 transition-colors ${
-                  kind === 'static'
-                    ? 'bg-zinc-700 text-white'
-                    : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                Static
-              </button>
-              <button
-                onClick={() => setKind('dynamic')}
-                className={`flex-1 px-4 py-1.5 transition-colors ${
-                  kind === 'dynamic'
-                    ? 'bg-indigo-600 text-white'
-                    : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                }`}
-              >
-                Dynamic
-              </button>
-            </div>
-            <p className="text-[11px] text-zinc-500 mt-1.5">
-              {kind === 'static'
-                ? 'Ordered track list you curate manually.'
-                : 'Tracks auto-matched by rules you define.'}
-            </p>
-          </div>
-        )}
-
-        <div className="flex gap-2 justify-end pt-1">
+    <div className={MODAL_OVERLAY} onClick={onCancel}>
+      <div className={`${MODAL_BOX} max-w-[460px]`} onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div className="px-6 py-4 border-b border-zinc-700 flex items-center justify-between flex-shrink-0">
+          <h2 className="text-lg font-semibold text-white">New Playlist</h2>
           <button
             onClick={onCancel}
-            className="px-4 py-2 text-sm text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
+            className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition-colors"
           >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+
+        {/* Body */}
+        <div className="p-6 flex flex-col gap-5">
+          <div>
+            <label className={LABEL}>Name</label>
+            <input
+              ref={inputRef}
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') submit();
+                if (e.key === 'Escape') onCancel();
+              }}
+              placeholder="e.g. Morning Pop Hits"
+              className={`${INPUT} ${hasConflict ? 'border-red-500 focus:border-red-500' : ''}`}
+            />
+            {hasConflict && (
+              <p className="mt-1.5 text-xs text-red-400">A playlist with this name already exists.</p>
+            )}
+          </div>
+
+          <div>
+            <label className={LABEL}>Content type</label>
+            <div className="grid grid-cols-3 gap-1.5">
+              {PLAYLIST_TYPES.map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setType(t)}
+                  className={`py-2 rounded-lg text-sm border transition-colors ${
+                    type === t
+                      ? 'bg-zinc-700 border-zinc-500 text-white font-medium'
+                      : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                  }`}
+                >
+                  {TYPE_LABELS[t]}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {(PLAYLIST_SUBCATEGORIES[type] as readonly string[]).length > 0 && (
+            <div>
+              <label className={LABEL}>{type === 'music' ? 'Use' : 'Role'}</label>
+              <div className="flex flex-wrap gap-1.5">
+                {(PLAYLIST_SUBCATEGORIES[type] as readonly string[]).map((s) => (
+                  <button
+                    key={s}
+                    onClick={() => setSubcategory(s as PlaylistSubcategory)}
+                    className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                      subcategory === s
+                        ? 'bg-zinc-700 border-zinc-500 text-white font-medium'
+                        : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:text-zinc-200 hover:border-zinc-600'
+                    }`}
+                  >
+                    {SUBCATEGORY_LABELS[s] ?? s}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {type === 'music' && (
+            <div>
+              <label className={LABEL}>How it's built</label>
+              <div className="flex rounded-lg border border-zinc-700 overflow-hidden text-sm">
+                <button
+                  onClick={() => setKind('static')}
+                  className={`flex-1 px-4 py-1.5 transition-colors ${
+                    kind === 'static'
+                      ? 'bg-zinc-700 text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Static
+                </button>
+                <button
+                  onClick={() => setKind('dynamic')}
+                  className={`flex-1 px-4 py-1.5 transition-colors ${
+                    kind === 'dynamic'
+                      ? 'bg-indigo-600 text-white'
+                      : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                  }`}
+                >
+                  Dynamic
+                </button>
+              </div>
+              <p className="text-[11px] text-zinc-500 mt-1.5">
+                {kind === 'static'
+                  ? 'Ordered track list you curate manually.'
+                  : 'Tracks auto-matched by rules you define.'}
+              </p>
+            </div>
+          )}
+        </div>
+
+        {/* Footer */}
+        <div className="flex items-center justify-end gap-2 px-6 py-4 border-t border-zinc-700 flex-shrink-0">
+          <button onClick={onCancel} className={BTN_SECONDARY_SM}>
             Cancel
           </button>
           <button
             onClick={submit}
-            disabled={!name.trim() || isPending}
-            className="px-4 py-2 text-sm text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50 flex items-center gap-2"
+            disabled={!name.trim() || hasConflict || isPending}
+            className={BTN_PRIMARY}
           >
             {isPending && <Loader className="w-3.5 h-3.5 animate-spin" />}
             Create playlist
@@ -324,13 +398,45 @@ function NewPlaylistModal({
 export function PlaylistsPage() {
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<number | null>(null);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
   const [isCreating, setIsCreating] = useState(false);
+  const [filter, setFilter] = useState<PlaylistType | 'all'>('all');
+  const [collapsedTypes, setCollapsedTypes] = useState<Set<PlaylistType>>(new Set());
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
+  const [confirmDelete, setConfirmDelete] = useState(false);
+  const confirmDeleteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const toggleTypeCollapsed = (t: PlaylistType) =>
+    setCollapsedTypes((prev) => {
+      const next = new Set(prev);
+      if (next.has(t)) next.delete(t); else next.add(t);
+      return next;
+    });
+
+  const toggleCheck = (id: number) =>
+    setCheckedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+
+  const clearChecked = () => {
+    setCheckedIds(new Set());
+    setConfirmDelete(false);
+    if (confirmDeleteTimer.current) clearTimeout(confirmDeleteTimer.current);
+  };
 
   const showToast = useCallback((type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 3500);
+    setSaveStatus({ type, message });
+    setTimeout(() => setSaveStatus(null), 3000);
   }, []);
+
+  useEffect(() => {
+    if (confirmDelete) {
+      setConfirmDelete(false);
+      if (confirmDeleteTimer.current) clearTimeout(confirmDeleteTimer.current);
+    }
+  }, [checkedIds, selectedId]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const { data: playlists = [] } = useQuery<Playlist[]>({
     queryKey: ['playlists'],
@@ -348,52 +454,112 @@ export function PlaylistsPage() {
     onError: (e) => showToast('error', (e as Error).message),
   });
 
-  const setDefaultMutation = useMutation({
-    mutationFn: (id: number) => apiPatch<Playlist>(`/playlists/${id}`, { is_default: true }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playlists'] }),
+  const bulkDeleteMutation = useMutation({
+    mutationFn: (ids: number[]) => Promise.all(ids.map((id) => apiDelete(`/playlists/${id}`))).then(() => ids),
+    onSuccess: (ids) => {
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      if (selectedId !== null && ids.includes(selectedId)) setSelectedId(null);
+      setCheckedIds(new Set());
+      setConfirmDelete(false);
+      showToast('success', `${ids.length} playlist${ids.length !== 1 ? 's' : ''} deleted`);
+    },
     onError: (e) => showToast('error', (e as Error).message),
   });
+
+  const singleDeleteMutation = useMutation({
+    mutationFn: (id: number) => apiDelete(`/playlists/${id}`).then(() => id),
+    onSuccess: (id) => {
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+      queryClient.removeQueries({ queryKey: ['playlist-tracks', id] });
+      setSelectedId(null);
+      setConfirmDelete(false);
+      showToast('success', 'Playlist deleted');
+    },
+    onError: (e) => showToast('error', (e as Error).message),
+  });
+
+  const handleDeleteClick = () => {
+    if (confirmDelete) {
+      if (confirmDeleteTimer.current) clearTimeout(confirmDeleteTimer.current);
+      if (checkedIds.size > 0) {
+        bulkDeleteMutation.mutate(Array.from(checkedIds));
+      } else if (selectedId !== null) {
+        singleDeleteMutation.mutate(selectedId);
+      }
+    } else {
+      setConfirmDelete(true);
+      confirmDeleteTimer.current = setTimeout(() => setConfirmDelete(false), 4000);
+    }
+  };
 
   const selectedPlaylist = playlists.find((p) => p.id === selectedId) ?? null;
 
   return (
     <div className="h-full flex flex-col gap-4">
       {/* ── Top ribbon ── */}
-      <div className="flex-shrink-0 flex items-center justify-between">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Playlists</h1>
-          <p className="text-zinc-400 mt-1 text-sm">
-            Manage static track lists and smart dynamic playlists.
-          </p>
+      <div className="flex-shrink-0 flex items-center gap-4">
+        <h1 className="text-xl font-semibold text-white flex-shrink-0">Playlists ({playlists.length})</h1>
+        <div className="flex-1"><SaveStatus status={saveStatus} /></div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            onClick={clearChecked}
+            disabled={checkedIds.size === 0}
+            className={BTN_SECONDARY_SM}
+          >
+            Deselect
+          </button>
+          <button
+            onClick={handleDeleteClick}
+            disabled={(checkedIds.size === 0 && selectedId === null) || bulkDeleteMutation.isPending || singleDeleteMutation.isPending}
+            className={`${BTN_DESTRUCTIVE_SM} ${confirmDelete ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-zinc-900 animate-pulse' : ''}`}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {(bulkDeleteMutation.isPending || singleDeleteMutation.isPending)
+              ? 'Deleting…'
+              : confirmDelete
+                ? 'Click again to delete'
+                : checkedIds.size > 0
+                  ? `Delete (${checkedIds.size})`
+                  : 'Delete'}
+          </button>
+          <div className="w-px h-5 bg-zinc-700 mx-1 flex-shrink-0" />
+          <button onClick={() => setIsCreating(true)} className={BTN_PRIMARY_SM}>
+            <Plus className="w-3.5 h-3.5" /> New Playlist
+          </button>
         </div>
-        <button
-          onClick={() => setIsCreating(true)}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors"
-        >
-          <Plus className="w-4 h-4" /> New Playlist
-        </button>
       </div>
-
-      {toast && (
-        <div
-          className={`flex-shrink-0 px-4 py-2.5 rounded-lg text-sm ${
-            toast.type === 'success'
-              ? 'bg-green-900/20 border border-green-800 text-green-300'
-              : 'bg-red-900/20 border border-red-800 text-red-300'
-          }`}
-        >
-          {toast.message}
-        </div>
-      )}
 
       <div className="flex-1 min-h-0 flex gap-4">
         {/* ── Left panel ── */}
-        <div className="w-72 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-          <div className="px-3 py-2.5 border-b border-zinc-800 flex items-center gap-2 flex-shrink-0">
-            <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex-1">Playlists</span>
-            {playlists.length > 0 && (
-              <span className="text-xs text-zinc-600">{playlists.length}</span>
-            )}
+        <div className="w-[330px] flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          {/* Type filter tabs — two rows */}
+          <div className="flex-shrink-0 border-b border-zinc-800">
+            <div className="flex border-b border-zinc-800/60">
+              {(['all', 'music', 'jingle', 'bed'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFilter(t)}
+                  className={`flex-1 flex items-center justify-center px-1 py-2.5 text-xs font-medium transition-colors ${
+                    filter === t ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+                  }`}
+                >
+                  {t === 'all' ? `All (${playlists.length})` : `${TYPE_LABELS[t]} (${playlists.filter((p) => p.type === t).length})`}
+                </button>
+              ))}
+            </div>
+            <div className="flex">
+              {(['spot', 'promo', 'recording'] as const).map((t) => (
+                <button
+                  key={t}
+                  onClick={() => setFilter(t)}
+                  className={`flex-1 flex items-center justify-center px-1 py-2.5 text-xs font-medium transition-colors ${
+                    filter === t ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
+                  }`}
+                >
+                  {`${TYPE_LABELS[t]} (${playlists.filter((p) => p.type === t).length})`}
+                </button>
+              ))}
+            </div>
           </div>
 
           <div className="flex-1 overflow-y-auto">
@@ -402,52 +568,35 @@ export function PlaylistsPage() {
                 <p className="text-xs text-zinc-500">No playlists yet.</p>
                 <p className="text-xs text-zinc-600 mt-1">Use the button above to create one.</p>
               </div>
+            ) : filter !== 'all' ? (
+              (() => {
+                const group = playlists.filter((p) => p.type === filter);
+                if (group.length === 0) return (
+                  <p className="px-4 py-6 text-xs text-zinc-500 text-center">
+                    No {TYPE_LABELS[filter].toLowerCase()} playlists yet.
+                  </p>
+                );
+                return group.map((pl) => <PlaylistItem key={pl.id} pl={pl} selectedId={selectedId} onSelect={setSelectedId}isChecked={checkedIds.has(pl.id)} onToggleCheck={toggleCheck} />);
+              })()
             ) : (
               PLAYLIST_TYPES.map((type) => {
                 const group = playlists.filter((p) => p.type === type);
                 if (group.length === 0) return null;
+                const collapsed = collapsedTypes.has(type);
+                const TypeIcon = TYPE_ICONS[type];
                 return (
                   <div key={type}>
-                    <div className="px-3 pt-3 pb-1 text-[10px] font-semibold uppercase tracking-wider text-zinc-500 select-none">
-                      {TYPE_LABELS[type]}
-                    </div>
-                    {group.map((pl) => {
-                      const isSelected = pl.id === selectedId;
-                      const canBeDefault = DEFAULT_ELIGIBLE_TYPES.has(pl.type);
-                      return (
-                        <button
-                          key={pl.id}
-                          onClick={() => setSelectedId(pl.id)}
-                          className={`group w-full text-left px-3 py-2 border-b border-zinc-800/40 transition-colors ${
-                            isSelected
-                              ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
-                              : 'hover:bg-zinc-800/50'
-                          }`}
-                        >
-                          <div className="flex items-center gap-2 min-w-0">
-                            <span className="text-sm text-white truncate flex-1">{pl.name}</span>
-                            {pl.kind === 'dynamic' && (
-                              <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-indigo-600/30 text-indigo-300 font-medium">
-                                dynamic
-                              </span>
-                            )}
-                            {canBeDefault && (pl.is_default ? (
-                              <span className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
-                                default
-                              </span>
-                            ) : (
-                              <button
-                                onClick={(e) => { e.stopPropagation(); setDefaultMutation.mutate(pl.id); }}
-                                className="flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded text-zinc-600 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors opacity-0 group-hover:opacity-100"
-                                title="Set as default"
-                              >
-                                default
-                              </button>
-                            ))}
-                          </div>
-                        </button>
-                      );
-                    })}
+                    <button
+                      onClick={() => toggleTypeCollapsed(type)}
+                      className="w-full flex items-center gap-2 px-3 py-2 border-b border-zinc-800/60 bg-zinc-800/40 hover:bg-zinc-800/70 transition-colors"
+                    >
+                      <ChevronRight className={`w-3 h-3 text-zinc-300 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+                      <TypeIcon className="w-3 h-3 text-zinc-300" />
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">
+                        {TYPE_LABELS[type]} ({group.length})
+                      </span>
+                    </button>
+                    {!collapsed && group.map((pl) => <PlaylistItem key={pl.id} pl={pl} selectedId={selectedId} onSelect={setSelectedId}isChecked={checkedIds.has(pl.id)} onToggleCheck={toggleCheck} />)}
                   </div>
                 );
               })
@@ -461,13 +610,11 @@ export function PlaylistsPage() {
             <StaticEditor
               playlist={selectedPlaylist}
               showToast={showToast}
-              onDeleted={() => setSelectedId(null)}
             />
           ) : (
             <DynamicEditor
               playlist={selectedPlaylist}
               showToast={showToast}
-              onDeleted={() => setSelectedId(null)}
             />
           )
         ) : (
@@ -483,8 +630,9 @@ export function PlaylistsPage() {
       {/* ── Modal ── */}
       {isCreating && (
         <NewPlaylistModal
-          onConfirm={(name, type, kind) =>
-            createMutation.mutate({ name, type, kind })
+          existingNames={playlists.map((p) => p.name)}
+          onConfirm={(name, type, subcategory, kind) =>
+            createMutation.mutate({ name, type, subcategory: subcategory ?? undefined, kind })
           }
           onCancel={() => setIsCreating(false)}
           isPending={createMutation.isPending}
@@ -494,21 +642,147 @@ export function PlaylistsPage() {
   );
 }
 
+// ─── Left panel list item ────────────────────────────────────────────────────
+
+const BADGE_DISPLAY = 'flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-zinc-700 text-zinc-500 font-medium whitespace-nowrap';
+const BADGE_ACTIVE  = 'flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-amber-600/50 text-amber-400 font-medium whitespace-nowrap';
+const BADGE_ACTION  = 'flex-shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-dashed border-zinc-700 text-zinc-600 font-medium whitespace-nowrap hover:border-zinc-500 hover:text-zinc-400 transition-colors';
+
+function PlaylistItem({
+  pl, selectedId, onSelect, isChecked, onToggleCheck,
+}: {
+  pl: Playlist;
+  selectedId: number | null;
+  onSelect: (id: number) => void;
+  isChecked: boolean;
+  onToggleCheck: (id: number) => void;
+}) {
+  const queryClient = useQueryClient();
+  const isSelected = pl.id === selectedId;
+  const canBeDefault = DEFAULT_ELIGIBLE_TYPES.has(pl.type);
+  const isMusic = pl.type === 'music';
+  const isJingle = pl.type === 'jingle';
+  const isDynamic = pl.kind === 'dynamic';
+  const isHotPlay = pl.subcategory === 'hot_play';
+  const isHeavyRotation = pl.subcategory === 'heavy_rotation';
+
+  const setSubcategoryMutation = useMutation({
+    mutationFn: (subcategory: PlaylistSubcategory) =>
+      apiPatch<Playlist>(`/playlists/${pl.id}`, { subcategory }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playlists'] }),
+  });
+
+  const defaultMutation = useMutation({
+    mutationFn: (value: boolean) => apiPatch<Playlist>(`/playlists/${pl.id}`, { is_default: value }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playlists'] }),
+  });
+
+  const toggleSubcategory = (e: React.MouseEvent, sub: PlaylistSubcategory) => {
+    e.stopPropagation();
+    if (setSubcategoryMutation.isPending) return;
+    setSubcategoryMutation.mutate(pl.subcategory === sub ? 'standard' : sub);
+  };
+
+  return (
+    <div
+      onClick={() => onSelect(pl.id)}
+      className={`w-full text-left px-3 py-2 border-b border-zinc-800/40 transition-colors cursor-pointer select-none ${
+        isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'
+      }`}
+    >
+      {/* Row 1: checkbox + name + fixed badge column */}
+      <div className="flex items-center gap-2 min-w-0">
+        <input
+          type="checkbox"
+          checked={isChecked}
+          onChange={() => onToggleCheck(pl.id)}
+          onClick={(e) => e.stopPropagation()}
+          className="flex-shrink-0 w-3.5 h-3.5 accent-indigo-500 cursor-pointer rounded"
+        />
+        <span className="text-sm text-white truncate flex-1 min-w-0">{pl.name}</span>
+        {/* Badge column — natural width, no reserved slots for absent badges */}
+        <div className="flex items-center gap-1 flex-shrink-0">
+          {/* Jingle subcategory — only shown for jingle type */}
+          {isJingle && pl.subcategory && (
+            <span className={BADGE_DISPLAY}>{SUBCATEGORY_LABELS[pl.subcategory] ?? pl.subcategory}</span>
+          )}
+          {/* S/D — music only; other types are always static so no badge */}
+          {isMusic && (
+            <span className="w-4 text-center text-xs font-bold text-white">{isDynamic ? 'D' : 'S'}</span>
+          )}
+          {/* Default — eligible types only, clickable to toggle */}
+          {canBeDefault && (pl.is_default ? (
+            <button
+              onClick={(e) => { e.stopPropagation(); defaultMutation.mutate(false); }}
+              className={BADGE_ACTIVE}
+              title="Remove default status"
+            >
+              default
+            </button>
+          ) : (
+            <button
+              onClick={(e) => { e.stopPropagation(); defaultMutation.mutate(true); }}
+              className={BADGE_ACTION}
+              title="Set as default"
+            >
+              default
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Row 2 (music only): hot-play and heavy-rotation icon toggles */}
+      {isMusic && (
+        <div className="flex items-center gap-1 mt-1 pl-[22px]">
+          <button
+            onClick={(e) => toggleSubcategory(e, 'hot_play')}
+            title={isHotPlay ? 'Hot Play — click to reset to Standard' : 'Set as Hot Play'}
+            className={`p-1 rounded transition-colors ${
+              isHotPlay
+                ? 'text-red-400 bg-red-500/15'
+                : 'text-zinc-400 hover:text-red-400'
+            }`}
+          >
+            <Flame className="w-3.5 h-3.5" />
+          </button>
+          <button
+            onClick={isDynamic ? (e) => e.stopPropagation() : (e) => toggleSubcategory(e, 'heavy_rotation')}
+            disabled={isDynamic}
+            title={
+              isDynamic ? 'Heavy Rotation not available for dynamic playlists'
+              : isHeavyRotation ? 'Heavy Rotation — click to reset to Standard'
+              : 'Set as Heavy Rotation'
+            }
+            className={`p-1 rounded transition-colors ${
+              isHeavyRotation
+                ? 'text-violet-300 bg-violet-500/15'
+                : isDynamic
+                  ? 'text-zinc-600 cursor-not-allowed'
+                  : 'text-zinc-400 hover:text-violet-400'
+            }`}
+          >
+            <TrendingUp className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ─── Shared editor header ────────────────────────────────────────────────────
 
 function PlaylistHeader({
   playlist,
-  onDeleted,
   showToast,
+  count,
 }: {
   playlist: Playlist;
-  onDeleted: () => void;
   showToast: (type: 'success' | 'error', message: string) => void;
+  count?: number | null;
 }) {
   const queryClient = useQueryClient();
   const [editingName, setEditingName] = useState(false);
   const [draftName, setDraftName] = useState(playlist.name);
-  const [confirmDelete, setConfirmDelete] = useState(false);
 
   useEffect(() => {
     setDraftName(playlist.name);
@@ -523,20 +797,16 @@ function PlaylistHeader({
     onError: (e) => showToast('error', (e as Error).message),
   });
 
-  const setDefaultMutation = useMutation({
-    mutationFn: () => apiPatch<Playlist>(`/playlists/${playlist.id}`, { is_default: true }),
+  const setSubcategoryMutation = useMutation({
+    mutationFn: (subcategory: PlaylistSubcategory) =>
+      apiPatch<Playlist>(`/playlists/${playlist.id}`, { subcategory }),
     onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playlists'] }),
     onError: (e) => showToast('error', (e as Error).message),
   });
 
-  const deleteMutation = useMutation({
-    mutationFn: () => apiDelete(`/playlists/${playlist.id}`),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['playlists'] });
-      queryClient.removeQueries({ queryKey: ['playlist-tracks', playlist.id] });
-      showToast('success', 'Playlist deleted');
-      onDeleted();
-    },
+  const toggleDefaultMutation = useMutation({
+    mutationFn: (value: boolean) => apiPatch<Playlist>(`/playlists/${playlist.id}`, { is_default: value }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['playlists'] }),
     onError: (e) => showToast('error', (e as Error).message),
   });
 
@@ -549,8 +819,9 @@ function PlaylistHeader({
   };
 
   return (
-    <div className="flex-shrink-0 flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-4">
-      <div className="flex-1 min-w-0 flex items-center gap-3">
+    <div className="flex-shrink-0 flex flex-col gap-2.5 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-4">
+      {/* Row 1: name */}
+      <div className="min-w-0">
         {editingName ? (
           <input
             autoFocus
@@ -566,66 +837,78 @@ function PlaylistHeader({
         ) : (
           <button
             onClick={() => setEditingName(true)}
-            className="text-lg font-semibold text-white hover:text-indigo-200 transition-colors text-left truncate"
+            className="flex items-baseline gap-1.5 text-left hover:text-indigo-200 transition-colors w-full"
             title="Click to rename"
           >
-            {playlist.name}
+            <span className="text-lg font-semibold text-white truncate min-w-0">{playlist.name}</span>
+            {count != null && <span className="text-base text-zinc-400 font-normal flex-shrink-0">({count})</span>}
           </button>
-        )}
-        <span className={`flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full font-medium ${TYPE_COLORS[playlist.type]}`}>
-          {TYPE_LABELS[playlist.type]}
-        </span>
-        <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded font-medium ${
-          playlist.kind === 'dynamic'
-            ? 'bg-indigo-600/30 text-indigo-300'
-            : 'bg-zinc-800 text-zinc-500'
-        }`}>
-          {playlist.kind}
-        </span>
-        {canBeDefault && playlist.is_default && (
-          <span className="flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
-            Default
-          </span>
         )}
       </div>
 
-      <div className="flex items-center gap-2 flex-shrink-0">
-        {canBeDefault && !playlist.is_default && !confirmDelete && (
-          <button
-            onClick={() => setDefaultMutation.mutate()}
-            disabled={setDefaultMutation.isPending}
-            className="text-xs px-2.5 py-0.5 rounded-full text-zinc-500 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
-          >
-            Set as default
-          </button>
+      {/* Row 2: type + S/D (music only) + default badges */}
+      <div className="flex items-center gap-2">
+        <span className={`text-xs px-2.5 py-0.5 rounded-full font-medium ${TYPE_COLORS[playlist.type]}`}>
+          {playlist.type !== 'music' && playlist.subcategory
+            ? `${TYPE_LABELS[playlist.type]} / ${SUBCATEGORY_LABELS[playlist.subcategory] ?? playlist.subcategory}`
+            : TYPE_LABELS[playlist.type]}
+        </span>
+        {playlist.type === 'music' && (
+          <span className="text-xs px-2 py-0.5 rounded font-medium bg-indigo-600/30 text-indigo-300">
+            {playlist.kind}
+          </span>
         )}
-        {confirmDelete ? (
-          <>
-            <span className="text-xs text-zinc-400">Delete this playlist?</span>
-            <button
-              onClick={() => deleteMutation.mutate()}
-              disabled={deleteMutation.isPending}
-              className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors disabled:opacity-50"
-            >
-              {deleteMutation.isPending ? 'Deleting…' : 'Yes, delete'}
-            </button>
-            <button
-              onClick={() => setConfirmDelete(false)}
-              className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
-            >
-              Cancel
-            </button>
-          </>
-        ) : (
+        {canBeDefault && (
           <button
-            onClick={() => setConfirmDelete(true)}
-            className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors"
-            title="Delete playlist"
+            onClick={() => toggleDefaultMutation.mutate(!playlist.is_default)}
+            disabled={toggleDefaultMutation.isPending}
+            title={playlist.is_default ? 'Remove default status' : 'Set as default'}
+            className={`text-xs px-2.5 py-0.5 rounded-full font-medium transition-colors disabled:opacity-50 ${
+              playlist.is_default
+                ? 'bg-amber-500/20 text-amber-300 border border-amber-500/30'
+                : 'text-zinc-500 border border-dashed border-zinc-600 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10'
+            }`}
           >
-            <Trash2 className="w-3.5 h-3.5" />
+            Default
           </button>
         )}
       </div>
+
+      {/* Row 3: music subcategory toggle with icons */}
+      {playlist.type === 'music' && (
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-zinc-500 flex-shrink-0">Use</span>
+          <div className="flex rounded border border-zinc-700 overflow-hidden text-xs">
+            {(PLAYLIST_SUBCATEGORIES.music as readonly string[]).map((sub) => {
+              const unavailable = sub === 'heavy_rotation' && playlist.kind === 'dynamic';
+              const isActive = playlist.subcategory === sub;
+              return (
+                <button
+                  key={sub}
+                  onClick={() => !unavailable && setSubcategoryMutation.mutate(sub as PlaylistSubcategory)}
+                  disabled={setSubcategoryMutation.isPending || unavailable}
+                  title={unavailable ? 'Heavy Rotation is not available for dynamic playlists' : undefined}
+                  className={`flex items-center gap-1 px-3 py-1 font-medium transition-colors ${
+                    isActive
+                      ? 'bg-zinc-700 text-white'
+                      : unavailable
+                        ? 'text-zinc-700 cursor-not-allowed'
+                        : 'bg-transparent text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/60'
+                  }`}
+                >
+                  {sub === 'hot_play' && (
+                    <Flame className={`w-3.5 h-3.5 ${isActive ? 'text-red-400' : unavailable ? 'text-zinc-700' : 'text-zinc-500'}`} />
+                  )}
+                  {sub === 'heavy_rotation' && (
+                    <TrendingUp className={`w-3.5 h-3.5 ${isActive ? 'text-violet-300' : unavailable ? 'text-zinc-700' : 'text-zinc-500'}`} />
+                  )}
+                  {SUBCATEGORY_LABELS[sub] ?? sub}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -633,11 +916,10 @@ function PlaylistHeader({
 // ─── Static editor ────────────────────────────────────────────────────────────
 
 function StaticEditor({
-  playlist, showToast, onDeleted,
+  playlist, showToast,
 }: {
   playlist: Playlist;
   showToast: (type: 'success' | 'error', message: string) => void;
-  onDeleted: () => void;
 }) {
   const queryClient = useQueryClient();
   const [localTracks, setLocalTracks] = useState<TrackRow[] | null>(null);
@@ -702,14 +984,14 @@ function StaticEditor({
 
   return (
     <div className="flex-1 min-w-0 flex flex-col gap-4">
-      <PlaylistHeader playlist={playlist} showToast={showToast} onDeleted={onDeleted} />
+      <PlaylistHeader playlist={playlist} showToast={showToast} count={tracks.length} />
 
       {/* Track list */}
       <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg">
         {/* Search / add */}
         <div className="flex-shrink-0 border-b border-zinc-800 px-4 py-3">
           <LibrarySearch
-            category={playlist.type}
+            category={playlistMediaCategory(playlist.type, playlist.subcategory)}
             onAddMultiple={(ids) => addTracksMutation.mutate(ids)}
             adding={addTracksMutation.isPending}
           />
@@ -967,11 +1249,10 @@ function LibrarySearch({
 // ─── Dynamic editor ───────────────────────────────────────────────────────────
 
 function DynamicEditor({
-  playlist, showToast, onDeleted,
+  playlist, showToast,
 }: {
   playlist: Playlist;
   showToast: (type: 'success' | 'error', message: string) => void;
-  onDeleted: () => void;
 }) {
   const queryClient = useQueryClient();
 
@@ -983,11 +1264,18 @@ function DynamicEditor({
   useEffect(() => {
     setRules(playlist.rules ?? { match: 'all', conditions: [] });
     setDirty(false);
+    setShowAll(false);
+    setAllSample([]);
   }, [playlist.id, playlist.rules]);
 
   // Debounced preview
   const [preview, setPreview] = useState<PlaylistPreview | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
+
+  // Full-list expansion
+  const [showAll, setShowAll] = useState(false);
+  const [allSample, setAllSample] = useState<PlaylistPreview['sample']>([]);
+  const [allSampleLoading, setAllSampleLoading] = useState(false);
 
   useEffect(() => {
     const t = setTimeout(async () => {
@@ -1017,6 +1305,25 @@ function DynamicEditor({
   const updateRules = (next: DynamicRules) => {
     setRules(next);
     setDirty(true);
+    setShowAll(false);
+    setAllSample([]);
+  };
+
+  const handleShowAll = async () => {
+    if (!preview || allSampleLoading) return;
+    setAllSampleLoading(true);
+    try {
+      const result = await apiPost<PlaylistPreview>(
+        `/playlists/${playlist.id}/preview?limit=${Math.min(preview.count, 500)}`,
+        rules,
+      );
+      setAllSample(result.sample);
+      setShowAll(true);
+    } catch {
+      // silent
+    } finally {
+      setAllSampleLoading(false);
+    }
   };
 
   const addCondition = () => {
@@ -1041,19 +1348,10 @@ function DynamicEditor({
 
   return (
     <div className="flex-1 min-w-0 flex flex-col gap-4 min-h-0 overflow-y-auto">
-      <PlaylistHeader playlist={playlist} showToast={showToast} onDeleted={onDeleted} />
+      <PlaylistHeader playlist={playlist} showToast={showToast} count={previewLoading ? null : (preview?.count ?? null)} />
 
       {/* Rules builder */}
       <div className="flex-shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        {/* Implicit category constraint */}
-        <div className="px-5 py-2.5 border-b border-zinc-800 flex items-center gap-1.5 text-xs text-zinc-500">
-          <span>Always filters to</span>
-          <span className={`px-2 py-0.5 rounded-full font-medium ${TYPE_COLORS[playlist.type]}`}>
-            {TYPE_LABELS[playlist.type]}
-          </span>
-          <span>tracks · then apply:</span>
-        </div>
-
         {/* Match mode */}
         <div className="px-5 py-3 border-b border-zinc-800 flex items-center gap-3">
           <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Match</span>
@@ -1085,7 +1383,7 @@ function DynamicEditor({
         <div className="divide-y divide-zinc-800/60">
           {rules.conditions.length === 0 && (
             <p className="px-5 py-4 text-sm text-zinc-500">
-              No conditions — playlist will match all {TYPE_LABELS[playlist.type].toLowerCase()} tracks.
+              No conditions — playlist will match all {playlist.subcategory ? (SUBCATEGORY_LABELS[playlist.subcategory] ?? playlist.subcategory).toLowerCase() : TYPE_LABELS[playlist.type].toLowerCase()} tracks.
             </p>
           )}
           {rules.conditions.map((cond, i) => (
@@ -1110,9 +1408,9 @@ function DynamicEditor({
             <button
               onClick={() => saveMutation.mutate()}
               disabled={saveMutation.isPending}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50"
+              className={BTN_PRIMARY_SM}
             >
-              {saveMutation.isPending ? <Loader className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+              {saveMutation.isPending ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Check className="w-3.5 h-3.5" />}
               Save rules
             </button>
           )}
@@ -1121,9 +1419,19 @@ function DynamicEditor({
 
       {/* Preview */}
       <div className="flex-shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-4">
-        <div className="flex items-center gap-2 mb-3">
-          <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Preview</span>
-          {previewLoading && <Loader className="w-3.5 h-3.5 text-indigo-400 animate-spin" />}
+        <div className="flex items-center justify-between mb-3">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Preview</span>
+            {(previewLoading || allSampleLoading) && <Loader className="w-3.5 h-3.5 text-indigo-400 animate-spin" />}
+          </div>
+          {showAll && (
+            <button
+              onClick={() => { setShowAll(false); setAllSample([]); }}
+              className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors"
+            >
+              Show less
+            </button>
+          )}
         </div>
 
         {preview && !previewLoading ? (
@@ -1131,21 +1439,44 @@ function DynamicEditor({
             <p className="text-sm text-zinc-300 mb-2">
               <span className="font-semibold text-white">{preview.count}</span> track{preview.count !== 1 ? 's' : ''} match
             </p>
-            {preview.sample.length > 0 && (
-              <div className="space-y-1">
-                {preview.sample.slice(0, 5).map((t) => (
+            {showAll ? (
+              <div className="max-h-60 overflow-y-auto space-y-1 pr-1">
+                {allSample.map((t) => (
                   <div key={t.id} className="flex items-center gap-2 text-xs text-zinc-400">
                     <span className="flex-1 truncate">
-                      {t.title ?? '—'}
+                      {t.title ?? <span className="italic text-zinc-500">{t.original_filename}</span>}
                       {t.artist && <span className="text-zinc-500"> · {t.artist}</span>}
                     </span>
                     <span className="flex-shrink-0 font-mono">{fmtDuration(t.duration_seconds)}</span>
                   </div>
                 ))}
-                {preview.count > 5 && (
-                  <p className="text-xs text-zinc-600">and {preview.count - 5} more…</p>
+                {preview.count > 500 && (
+                  <p className="text-xs text-zinc-600 pt-1">Showing first 500 of {preview.count} matches.</p>
                 )}
               </div>
+            ) : (
+              preview.sample.length > 0 && (
+                <div className="space-y-1">
+                  {preview.sample.map((t) => (
+                    <div key={t.id} className="flex items-center gap-2 text-xs text-zinc-400">
+                      <span className="flex-1 truncate">
+                        {t.title ?? <span className="italic text-zinc-500">{t.original_filename}</span>}
+                        {t.artist && <span className="text-zinc-500"> · {t.artist}</span>}
+                      </span>
+                      <span className="flex-shrink-0 font-mono">{fmtDuration(t.duration_seconds)}</span>
+                    </div>
+                  ))}
+                  {preview.count > 5 && (
+                    <button
+                      onClick={handleShowAll}
+                      disabled={allSampleLoading}
+                      className="text-xs text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-50"
+                    >
+                      and {preview.count - 5} more…
+                    </button>
+                  )}
+                </div>
+              )
             )}
           </>
         ) : !previewLoading ? (

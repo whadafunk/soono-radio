@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, ne, asc, inArray, and, or, like, gte, lte, between, sql, SQL } from 'drizzle-orm';
+import { eq, ne, asc, inArray, and, or, like, gte, lte, between, sql, SQL, isNull } from 'drizzle-orm';
 import {
   PlaylistCreateSchema,
   PlaylistPatchSchema,
@@ -9,12 +9,14 @@ import {
   DynamicRulesSchema,
   MediaTagsUpdateSchema,
   PLAYLIST_DEFAULT_TYPES,
+  playlistMediaCategory,
   type DynamicRuleCondition,
   type DynamicRules,
   type PlaylistType,
+  type PlaylistSubcategory,
 } from '@radio/shared';
 import { db } from '../db/index.js';
-import { playlists, playlistMedia, media, mediaTags, MEDIA_CATEGORIES } from '../db/schema.js';
+import { playlists, playlistMedia, media, mediaTags, MEDIA_CATEGORIES, shows, rotations, clocks, musicCampaigns } from '../db/schema.js';
 
 const DEFAULT_ELIGIBLE = new Set<PlaylistType>(PLAYLIST_DEFAULT_TYPES);
 
@@ -109,14 +111,17 @@ export async function playlistRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/playlists', async (request, reply) => {
     const parsed = PlaylistCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
-    const { name, description, type, kind, rules, is_default } = parsed.data;
+    const { name, description, type, subcategory, kind, rules, is_default } = parsed.data;
     if (is_default && DEFAULT_ELIGIBLE.has(type)) {
-      await db.update(playlists).set({ is_default: false }).where(eq(playlists.type, type));
+      const subWhere = subcategory != null ? eq(playlists.subcategory, subcategory) : isNull(playlists.subcategory);
+      await db.update(playlists).set({ is_default: false })
+        .where(and(eq(playlists.type, type), subWhere));
     }
     const [row] = await db.insert(playlists).values({
       name,
       description: description ?? null,
       type,
+      subcategory: subcategory ?? null,
       kind,
       rules: kind === 'dynamic' ? (rules ?? { match: 'all', conditions: [] }) : null,
       is_default: is_default && DEFAULT_ELIGIBLE.has(type) ? true : false,
@@ -137,10 +142,12 @@ export async function playlistRoutes(fastify: FastifyInstance) {
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
     const patch = { ...parsed.data };
     if (patch.is_default) {
-      const [existing] = await db.select({ type: playlists.type }).from(playlists).where(eq(playlists.id, id));
+      const [existing] = await db.select({ type: playlists.type, subcategory: playlists.subcategory }).from(playlists).where(eq(playlists.id, id));
       if (!existing) return reply.status(404).send({ error: 'Playlist not found' });
       if (DEFAULT_ELIGIBLE.has(existing.type)) {
-        await db.update(playlists).set({ is_default: false }).where(and(eq(playlists.type, existing.type), ne(playlists.id, id)));
+        const subWhere2 = existing.subcategory != null ? eq(playlists.subcategory, existing.subcategory) : isNull(playlists.subcategory);
+        await db.update(playlists).set({ is_default: false })
+          .where(and(eq(playlists.type, existing.type), subWhere2, ne(playlists.id, id)));
       } else {
         patch.is_default = false;
       }
@@ -155,6 +162,21 @@ export async function playlistRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/playlists/:id', async (request, reply) => {
     const id = Number(request.params.id);
+
+    // Check music_campaigns first — RESTRICT FK means we must error explicitly
+    const campaignRef = await db.select({ id: musicCampaigns.id })
+      .from(musicCampaigns).where(eq(musicCampaigns.playlist_id, id)).limit(1);
+    if (campaignRef.length > 0) {
+      return reply.status(409).send({ error: 'Playlist is referenced by an active music campaign and cannot be deleted.' });
+    }
+
+    // Null out soft FK references that lack ON DELETE CASCADE/SET NULL in the DB
+    await db.update(shows).set({ jingle_playlist_id: null }).where(eq(shows.jingle_playlist_id, id));
+    await db.update(shows).set({ bed_playlist_id: null }).where(eq(shows.bed_playlist_id, id));
+    await db.update(rotations).set({ hot_play_playlist_id: null }).where(eq(rotations.hot_play_playlist_id, id));
+    await db.update(clocks).set({ station_id_playlist_id: null }).where(eq(clocks.station_id_playlist_id, id));
+    await db.update(clocks).set({ jingle_playlist_id: null }).where(eq(clocks.jingle_playlist_id, id));
+
     await db.delete(playlists).where(eq(playlists.id, id));
     return reply.status(204).send();
   });
@@ -250,7 +272,7 @@ export async function playlistRoutes(fastify: FastifyInstance) {
 
   // Accepts draft rules in the body for live preview; falls back to saved rules.
   // Always adds an implicit category = playlist.type filter.
-  fastify.post<{ Params: { id: string }; Body: unknown }>('/playlists/:id/preview', async (request, reply) => {
+  fastify.post<{ Params: { id: string }; Querystring: { limit?: string }; Body: unknown }>('/playlists/:id/preview', async (request, reply) => {
     const id = Number(request.params.id);
     const [playlist] = await db.select().from(playlists).where(eq(playlists.id, id));
     if (!playlist) return reply.status(404).send({ error: 'Playlist not found' });
@@ -262,17 +284,22 @@ export async function playlistRoutes(fastify: FastifyInstance) {
     );
     if (!parsed.success) return reply.status(400).send({ error: 'Invalid rules' });
 
-    const categoryWhere = eq(media.category, playlist.type);
+    const mediaCategory = playlistMediaCategory(
+      playlist.type as PlaylistType,
+      playlist.subcategory as PlaylistSubcategory | null,
+    );
+    const categoryWhere = eq(media.category, mediaCategory);
     const rulesWhere = rulesToWhere(parsed.data);
     const where = rulesWhere ? and(categoryWhere, rulesWhere) : categoryWhere;
 
     const [{ total }] = await db.select({ total: sql<number>`COUNT(*)` }).from(media).where(where);
+    const limit = Math.min(Math.max(1, parseInt(request.query.limit ?? '') || 5), 500);
     const sample = await db
-      .select({ id: media.id, title: media.title, artist: media.artist, duration_seconds: media.duration_seconds, category: media.category })
+      .select({ id: media.id, title: media.title, artist: media.artist, duration_seconds: media.duration_seconds, category: media.category, original_filename: media.original_filename })
       .from(media)
       .where(where)
-      .orderBy(sql`RANDOM()`)
-      .limit(5);
+      .orderBy(limit > 5 ? asc(media.title) : sql`RANDOM()`)
+      .limit(limit);
 
     return reply.send({ count: total, sample });
   });
