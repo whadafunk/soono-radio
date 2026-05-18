@@ -92,13 +92,14 @@ export function RotationsPage() {
       if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [checkedIds]);
+  }, [checkedIds, selectedId]);
 
   const handleDeleteClick = () => {
     if (confirmingDelete) {
       if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
       setConfirmingDelete(false);
-      deleteMutation.mutate([...checkedIds]);
+      if (checkedIds.size > 0) deleteMutation.mutate([...checkedIds]);
+      else if (selectedId !== null) deleteMutation.mutate([selectedId]);
     } else {
       setConfirmingDelete(true);
       deleteConfirmTimer.current = setTimeout(() => setConfirmingDelete(false), 4000);
@@ -270,8 +271,8 @@ export function RotationsPage() {
           <div className="w-px h-5 bg-zinc-700 mx-1" />
           <button
             onClick={handleDeleteClick}
-            disabled={checkedIds.size === 0 || deleteMutation.isPending}
-            title={checkedIds.size === 0 ? 'Select rotations to delete' : undefined}
+            disabled={(checkedIds.size === 0 && selectedId === null) || deleteMutation.isPending}
+            title={checkedIds.size === 0 && selectedId === null ? 'Select a rotation to delete' : undefined}
             className={`${BTN_DESTRUCTIVE_SM} ${confirmingDelete ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-zinc-900 animate-pulse' : ''}`}
           >
             <Trash2 className="w-3.5 h-3.5" />
@@ -388,8 +389,7 @@ export function RotationsPage() {
                     >
                       <ChevronRight className={`w-3 h-3 text-zinc-300 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
                       <KindIcon className="w-3 h-3 text-zinc-300" />
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">{KIND_META[k].label}</span>
-                      <span className="ml-auto text-[11px] text-zinc-400">{group.length}</span>
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">{KIND_META[k].label} ({group.length})</span>
                     </button>
                     {!collapsed && group.map(renderItem)}
                   </div>
