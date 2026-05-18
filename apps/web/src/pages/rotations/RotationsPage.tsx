@@ -270,6 +270,13 @@ export function RotationsPage() {
           )}
           <div className="w-px h-5 bg-zinc-700 mx-1" />
           <button
+            onClick={() => setCheckedIds(new Set())}
+            disabled={checkedIds.size === 0}
+            className={BTN_SECONDARY_SM}
+          >
+            Deselect
+          </button>
+          <button
             onClick={handleDeleteClick}
             disabled={(checkedIds.size === 0 && selectedId === null) || deleteMutation.isPending}
             title={checkedIds.size === 0 && selectedId === null ? 'Select a rotation to delete' : undefined}

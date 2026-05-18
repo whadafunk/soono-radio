@@ -409,6 +409,20 @@ Page headers that have save/delete/bulk actions follow a fixed pattern:
 
 **Bulk actions** appear in the list page header (always visible, disabled when no items selected). Only include operations that genuinely apply to multiple items at once — e.g. Delete.
 
+**Deselect** is always present next to Delete, disabled when nothing is checked:
+
+```tsx
+<button
+  onClick={() => setCheckedIds(new Set())}
+  disabled={checkedIds.size === 0}
+  className={BTN_SECONDARY_SM}
+>
+  Deselect
+</button>
+```
+
+Place it immediately to the left of the Delete button (same divider group).
+
 **Single-item actions** (Edit, Open, View Detail) are not bulk actions. Clicking a row navigates to the detail page. Do not add an Edit button to the list header.
 
 ---
