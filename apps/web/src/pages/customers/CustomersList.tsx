@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm, useController, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
@@ -8,7 +8,6 @@ import {
   Trash2,
   ChevronDown,
   ChevronUp,
-  ChevronsUpDown,
   Pencil,
   X,
   UserPlus,
@@ -37,7 +36,8 @@ import {
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
 import { MusicCampaignsPage } from './MusicCampaignsPage';
-import { INPUT, LABEL } from '../../ui';
+import { BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, INPUT, LABEL } from '../../ui';
+import { SaveStatus } from '../../components/SaveStatus';
 import {
   fetchCustomers,
   createCustomer,
@@ -84,30 +84,6 @@ function sortRows<T extends object>(rows: T[], sort: SortConfig): T[] {
   });
 }
 
-function handleShiftClick<T extends number>(
-  id: T,
-  orderedIds: T[],
-  selected: Set<T>,
-  setSelected: React.Dispatch<React.SetStateAction<Set<T>>>,
-  lastClicked: T | null,
-  setLastClicked: (id: T) => void,
-  e: React.MouseEvent,
-) {
-  if (e.shiftKey && lastClicked !== null) {
-    const a = orderedIds.indexOf(lastClicked);
-    const b = orderedIds.indexOf(id);
-    const lo = Math.min(a, b);
-    const hi = Math.max(a, b);
-    setSelected((prev) => {
-      const next = new Set(prev);
-      orderedIds.slice(lo, hi + 1).forEach((i) => next.add(i));
-      return next;
-    });
-  } else {
-    setSelected((prev) => (prev.size === 1 && prev.has(id) ? new Set<T>() : new Set<T>([id])));
-    setLastClicked(id);
-  }
-}
 
 export function CustomersList() {
   const queryClient = useQueryClient();
@@ -116,9 +92,6 @@ export function CustomersList() {
   const [selectedCustomerIds, setSelectedCustomerIds] = useState<Set<number>>(new Set());
   const [selectedCampaignIds, setSelectedCampaignIds] = useState<Set<number>>(new Set());
   const [selectedContactIds, setSelectedContactIds] = useState<Set<number>>(new Set());
-  const [lastClickedCustomerId, setLastClickedCustomerId] = useState<number | null>(null);
-  const [lastClickedCampaignId, setLastClickedCampaignId] = useState<number | null>(null);
-  const [lastClickedContactId, setLastClickedContactId] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'campaigns' | 'contacts' | 'music-campaigns'>('campaigns');
   const [editTarget, setEditTarget] = useState<{
     type: 'customer' | 'campaign' | 'contact';
@@ -127,16 +100,39 @@ export function CustomersList() {
   const [isCreatingCustomer, setIsCreatingCustomer] = useState(false);
   const [isCreatingCampaign, setIsCreatingCampaign] = useState(false);
   const [isCreatingContact, setIsCreatingContact] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
   const [customerSort, setCustomerSort] = useState<SortConfig>(null);
   const [campaignSort, setCampaignSort] = useState<SortConfig>(null);
   const [contactSort, setContactSort] = useState<SortConfig>(null);
+  const [focusedCampaignId, setFocusedCampaignId] = useState<number | null>(null);
+  const [focusedContactId, setFocusedContactId] = useState<number | null>(null);
   const [confirmDeleteCustomers, setConfirmDeleteCustomers] = useState(false);
+  const [confirmingDeleteCustomers, setConfirmingDeleteCustomers] = useState(false);
+  const [confirmingDeleteCampaigns, setConfirmingDeleteCampaigns] = useState(false);
+  const [confirmingDeleteContacts, setConfirmingDeleteContacts] = useState(false);
+  const deleteCustomerTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deleteCampaignTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const deleteContactTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 3000);
+  const showSaveStatus = (type: 'success' | 'error' | 'warning', message: string) => {
+    setSaveStatus({ type, message });
+    setTimeout(() => setSaveStatus(null), 3000);
   };
+
+  useEffect(() => {
+    setConfirmingDeleteCustomers(false);
+    if (deleteCustomerTimer.current) clearTimeout(deleteCustomerTimer.current);
+  }, [selectedCustomerIds]);
+
+  useEffect(() => {
+    setConfirmingDeleteCampaigns(false);
+    if (deleteCampaignTimer.current) clearTimeout(deleteCampaignTimer.current);
+  }, [selectedCampaignIds, focusedCampaignId]);
+
+  useEffect(() => {
+    setConfirmingDeleteContacts(false);
+    if (deleteContactTimer.current) clearTimeout(deleteContactTimer.current);
+  }, [selectedContactIds, focusedContactId]);
 
   const { data: rawCustomers = [], isLoading } = useQuery({
     queryKey: ['customers'],
@@ -197,50 +193,83 @@ export function CustomersList() {
     }
   };
 
-  const handleCustomerClick = (id: number, orderedIds: number[], e: React.MouseEvent) => {
-    if (e.shiftKey) {
-      handleShiftClick(
-        id,
-        orderedIds,
-        selectedCustomerIds,
-        setSelectedCustomerIds,
-        lastClickedCustomerId,
-        setLastClickedCustomerId,
-        e,
-      );
-    } else {
-      const isOnlySelected = selectedCustomerIds.size === 1 && selectedCustomerIds.has(id);
-      if (isOnlySelected) {
-        setSelectedCustomerIds(new Set());
-        setFocusedCustomerId(null);
-        setLastClickedCustomerId(null);
-      } else {
-        setSelectedCustomerIds(new Set([id]));
-        setFocusedCustomerId(id);
-        setLastClickedCustomerId(id);
-      }
-    }
+  const handleCustomerRowClick = (id: number) => {
+    setFocusedCustomerId((prev) => (prev === id ? null : id));
   };
+
+  const toggleCustomerCheckbox = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedCustomerIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const allCustomersSelected = customers.length > 0 && customers.every((c) => selectedCustomerIds.has(c.id));
+  const toggleAllCustomers = () =>
+    setSelectedCustomerIds(allCustomersSelected ? new Set() : new Set(customers.map((c) => c.id)));
+
+  const toggleCampaignCheckbox = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedCampaignIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const allCampaignsSelected = displayedCampaigns.length > 0 && displayedCampaigns.every((c) => selectedCampaignIds.has(c.id));
+  const toggleAllCampaigns = () =>
+    setSelectedCampaignIds(allCampaignsSelected ? new Set() : new Set(displayedCampaigns.map((c) => c.id)));
+
+  const toggleContactCheckbox = (id: number, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setSelectedContactIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const allContactsSelected = displayedContacts.length > 0 && (displayedContacts as Array<{ id: number }>).every((c) => selectedContactIds.has(c.id));
+  const toggleAllContacts = () =>
+    setSelectedContactIds(allContactsSelected ? new Set() : new Set((displayedContacts as Array<{ id: number }>).map((c) => c.id)));
 
   const clearCustomerFocus = () => {
     setFocusedCustomerId(null);
     setSelectedCustomerIds(new Set());
-    setLastClickedCustomerId(null);
   };
 
   const canEditCustomer = selectedCustomerIds.size === 1;
-  const canDeleteCustomer = selectedCustomerIds.size > 0;
   const editCustomerId = canEditCustomer ? [...selectedCustomerIds][0] : null;
 
+  // Effective delete set: checkboxes take priority; fall back to focused row.
+  const effectiveCustomerDeleteIds: number[] =
+    selectedCustomerIds.size > 0
+      ? [...selectedCustomerIds]
+      : focusedCustomerId !== null
+        ? [focusedCustomerId]
+        : [];
+  const canDeleteCustomer = effectiveCustomerDeleteIds.length > 0;
+
   const canEditCampaign = selectedCampaignIds.size === 1;
-  const canDeleteCampaign = selectedCampaignIds.size > 0;
   const editCampaignId = canEditCampaign ? [...selectedCampaignIds][0] : null;
+  const effectiveCampaignDeleteIds: number[] =
+    selectedCampaignIds.size > 0
+      ? [...selectedCampaignIds]
+      : focusedCampaignId !== null ? [focusedCampaignId] : [];
+  const canDeleteCampaign = effectiveCampaignDeleteIds.length > 0;
 
   const canEditContact = selectedContactIds.size === 1;
-  const canDeleteContact = selectedContactIds.size > 0;
   const editContactId = canEditContact ? [...selectedContactIds][0] : null;
+  const effectiveContactDeleteIds: number[] =
+    selectedContactIds.size > 0
+      ? [...selectedContactIds]
+      : focusedContactId !== null ? [focusedContactId] : [];
+  const canDeleteContact = effectiveContactDeleteIds.length > 0;
 
-  const selectedCustomersHaveCampaigns = [...selectedCustomerIds].some((cid) =>
+  const selectedCustomersHaveCampaigns = effectiveCustomerDeleteIds.some((cid) =>
     allCampaigns.some((c) => c.customer_id === cid),
   );
 
@@ -251,9 +280,9 @@ export function CustomersList() {
       setIsCreatingCustomer(false);
       setFocusedCustomerId(newCustomer.id);
       setSelectedCustomerIds(new Set([newCustomer.id]));
-      showToast('success', 'Customer created');
+      showSaveStatus('success', 'Customer created');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const updateCustomerMutation = useMutation({
@@ -261,25 +290,24 @@ export function CustomersList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       setEditTarget(null);
-      showToast('success', 'Customer updated');
+      showSaveStatus('success', 'Customer updated');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const deleteCustomersMutation = useMutation({
     mutationFn: (ids: number[]) => deleteCustomers(ids),
-    onSuccess: () => {
+    onSuccess: (_, ids) => {
       queryClient.invalidateQueries({ queryKey: ['customers'] });
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setSelectedCustomerIds(new Set());
       setFocusedCustomerId(null);
-      setLastClickedCustomerId(null);
       setConfirmDeleteCustomers(false);
-      showToast('success', 'Customer(s) deleted');
+      showSaveStatus('error', ids.length === 1 ? 'Customer deleted' : `${ids.length} customers deleted`);
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const deleteCustomerMutation = useMutation({
@@ -292,9 +320,9 @@ export function CustomersList() {
       setSelectedCustomerIds(new Set());
       setFocusedCustomerId(null);
       setEditTarget(null);
-      showToast('success', 'Customer deleted');
+      showSaveStatus('error', 'Customer deleted');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const updateCampaignMutation = useMutation({
@@ -302,20 +330,24 @@ export function CustomersList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       setEditTarget(null);
-      showToast('success', 'Campaign updated');
+      showSaveStatus('success', 'Campaign updated');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
+  });
+
+  const toggleCampaignActiveMutation = useMutation({
+    mutationFn: ({ id, active }: { id: number; active: boolean }) => updateCampaign(id, { active }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['campaigns'] }),
   });
 
   const deleteCampaignsMutation = useMutation({
     mutationFn: (ids: number[]) => deleteCampaigns(ids),
-    onSuccess: () => {
+    onSuccess: (_, ids) => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       setSelectedCampaignIds(new Set());
-      setLastClickedCampaignId(null);
-      showToast('success', 'Campaign(s) deleted');
+      showSaveStatus('error', ids.length === 1 ? 'Campaign deleted' : `${ids.length} campaigns deleted`);
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const deleteCampaignMutation = useMutation({
@@ -323,9 +355,9 @@ export function CustomersList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       setEditTarget(null);
-      showToast('success', 'Campaign deleted');
+      showSaveStatus('error', 'Campaign deleted');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const createCampaignMutation = useMutation({
@@ -333,9 +365,9 @@ export function CustomersList() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       setIsCreatingCampaign(false);
-      showToast('success', 'Campaign created');
+      showSaveStatus('success', 'Campaign created');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const createContactMutation = useMutation({
@@ -362,22 +394,21 @@ export function CustomersList() {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setIsCreatingContact(false);
-      showToast('success', 'Contact added');
+      showSaveStatus('success', 'Contact added');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const deleteContactsMutation = useMutation({
     mutationFn: (ids: number[]) => deleteContacts(ids),
-    onSuccess: () => {
+    onSuccess: (_, ids) => {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setSelectedContactIds(new Set());
-      setLastClickedContactId(null);
-      showToast('success', 'Contact(s) deleted');
+      showSaveStatus('error', ids.length === 1 ? 'Contact deleted' : `${ids.length} contacts deleted`);
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const associateContactMutation = useMutation({
@@ -387,7 +418,7 @@ export function CustomersList() {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const dissociateContactMutation = useMutation({
@@ -397,7 +428,7 @@ export function CustomersList() {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const setPrimaryMutation = useMutation({
@@ -414,7 +445,7 @@ export function CustomersList() {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const updateContactMutation = useMutation({
@@ -423,9 +454,9 @@ export function CustomersList() {
       queryClient.invalidateQueries({ queryKey: ['contacts'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setEditTarget(null);
-      showToast('success', 'Contact updated');
+      showSaveStatus('success', 'Contact updated');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const deleteContactMutation = useMutation({
@@ -435,30 +466,48 @@ export function CustomersList() {
       queryClient.invalidateQueries({ queryKey: ['contacts-all'] });
       queryClient.invalidateQueries({ queryKey: ['contacts-all-with-customers'] });
       setEditTarget(null);
-      showToast('success', 'Contact deleted');
+      showSaveStatus('error', 'Contact deleted');
     },
-    onError: (err) => showToast('error', (err as Error).message),
+    onError: (err) => showSaveStatus('error', (err as Error).message),
   });
 
   const handleDeleteCustomers = () => {
     if (selectedCustomersHaveCampaigns) {
+      setConfirmingDeleteCustomers(false);
+      if (deleteCustomerTimer.current) clearTimeout(deleteCustomerTimer.current);
       setConfirmDeleteCustomers(true);
+    } else if (confirmingDeleteCustomers) {
+      if (deleteCustomerTimer.current) clearTimeout(deleteCustomerTimer.current);
+      setConfirmingDeleteCustomers(false);
+      deleteCustomersMutation.mutate(effectiveCustomerDeleteIds);
     } else {
-      deleteCustomersMutation.mutate([...selectedCustomerIds]);
+      setConfirmingDeleteCustomers(true);
+      deleteCustomerTimer.current = setTimeout(() => setConfirmingDeleteCustomers(false), 4000);
     }
   };
 
   const handleDeleteCampaigns = () => {
-    deleteCampaignsMutation.mutate([...selectedCampaignIds]);
+    if (confirmingDeleteCampaigns) {
+      if (deleteCampaignTimer.current) clearTimeout(deleteCampaignTimer.current);
+      setConfirmingDeleteCampaigns(false);
+      deleteCampaignsMutation.mutate(effectiveCampaignDeleteIds);
+    } else {
+      setConfirmingDeleteCampaigns(true);
+      deleteCampaignTimer.current = setTimeout(() => setConfirmingDeleteCampaigns(false), 4000);
+    }
   };
 
   const handleDeleteContacts = () => {
-    deleteContactsMutation.mutate([...selectedContactIds]);
+    if (confirmingDeleteContacts) {
+      if (deleteContactTimer.current) clearTimeout(deleteContactTimer.current);
+      setConfirmingDeleteContacts(false);
+      deleteContactsMutation.mutate(effectiveContactDeleteIds);
+    } else {
+      setConfirmingDeleteContacts(true);
+      deleteContactTimer.current = setTimeout(() => setConfirmingDeleteContacts(false), 4000);
+    }
   };
 
-  const orderedCustomerIds = customers.map((c) => c.id);
-  const orderedCampaignIds = displayedCampaigns.map((c) => c.id);
-  const orderedContactIds = (displayedContacts as Array<{ id: number }>).map((c) => c.id);
 
   if (isLoading)
     return (
@@ -473,17 +522,43 @@ export function CustomersList() {
 
   return (
     <div className="space-y-2 h-full flex flex-col">
-      {toast && (
-        <div
-          className={`flex items-center gap-2 px-4 py-3 rounded-lg ${
-            toast.type === 'success'
-              ? 'bg-green-900/20 border border-green-800 text-green-300'
-              : 'bg-red-900/20 border border-red-800 text-red-300'
-          }`}
-        >
-          <p>{toast.message}</p>
+      {/* Header */}
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl font-semibold text-white flex-shrink-0">Customers ({customers.length})</h1>
+        <div className="flex-1 min-w-0">
+          <SaveStatus status={saveStatus} />
         </div>
-      )}
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            onClick={() => setIsCreatingCustomer(true)}
+            className={BTN_PRIMARY_SM}
+          >
+            <Plus className="w-3.5 h-3.5" />
+            New Customer
+          </button>
+          <button
+            onClick={() => {
+              if (editCustomerId) setEditTarget({ type: 'customer', id: editCustomerId });
+            }}
+            disabled={!canEditCustomer}
+            className={BTN_SECONDARY_SM}
+          >
+            <Pencil className="w-3.5 h-3.5" />
+            Edit
+          </button>
+          <button
+            onClick={handleDeleteCustomers}
+            disabled={!canDeleteCustomer || deleteCustomersMutation.isPending}
+            title={!canDeleteCustomer ? 'Select customers to delete' : undefined}
+            className={`${BTN_DESTRUCTIVE_SM} ${confirmingDeleteCustomers ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-zinc-900 animate-pulse' : ''}`}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {confirmingDeleteCustomers
+              ? 'Click again to delete'
+              : `Delete${effectiveCustomerDeleteIds.length > 0 ? ` (${effectiveCustomerDeleteIds.length})` : ''}`}
+          </button>
+        </div>
+      </div>
 
       {/* Bulk customer delete confirm dialog */}
       {confirmDeleteCustomers && (
@@ -493,7 +568,7 @@ export function CustomersList() {
             onClick={(e) => e.stopPropagation()}
           >
             <p className="text-sm text-zinc-100 font-medium">
-              Delete {selectedCustomerIds.size} customer{selectedCustomerIds.size > 1 ? 's' : ''}?
+              Delete {effectiveCustomerDeleteIds.length} customer{effectiveCustomerDeleteIds.length > 1 ? 's' : ''}?
             </p>
             <p className="text-xs text-amber-400">
               Warning: these customers have active campaigns that will also be deleted.
@@ -508,7 +583,7 @@ export function CustomersList() {
                 Cancel
               </button>
               <button
-                onClick={() => deleteCustomersMutation.mutate([...selectedCustomerIds])}
+                onClick={() => deleteCustomersMutation.mutate(effectiveCustomerDeleteIds)}
                 disabled={deleteCustomersMutation.isPending}
                 className="px-4 py-1.5 bg-red-600 hover:bg-red-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
               >
@@ -521,49 +596,18 @@ export function CustomersList() {
 
       {/* TOP: Customers Table */}
       <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-        <div className="px-6 py-4 border-b border-zinc-800 flex items-center gap-2 bg-zinc-800/50">
-          <h2 className="text-sm font-semibold text-zinc-300 uppercase tracking-wider flex-1">
-            Customers ({customers.length})
-          </h2>
-          <button
-            onClick={() => setIsCreatingCustomer(true)}
-            className="flex items-center gap-2 px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs rounded-lg transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            New
-          </button>
-          <button
-            onClick={() => {
-              if (editCustomerId) setEditTarget({ type: 'customer', id: editCustomerId });
-            }}
-            disabled={!canEditCustomer}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg transition-colors ${
-              canEditCustomer
-                ? 'text-zinc-300 hover:text-white bg-zinc-700 hover:bg-zinc-600'
-                : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
-            }`}
-          >
-            <Pencil className="w-3 h-3" />
-            Edit
-          </button>
-          <button
-            onClick={handleDeleteCustomers}
-            disabled={!canDeleteCustomer || deleteCustomersMutation.isPending}
-            className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-lg transition-colors ${
-              canDeleteCustomer
-                ? 'text-red-400 hover:bg-red-900/20 bg-zinc-700'
-                : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
-            }`}
-          >
-            <Trash2 className="w-3 h-3" />
-            {selectedCustomerIds.size > 1 ? `Delete (${selectedCustomerIds.size})` : 'Delete'}
-          </button>
-        </div>
-
         <div className="flex-1 overflow-auto">
           <table className="w-full text-sm">
-            <thead className="bg-zinc-800 sticky top-0">
-              <tr>
+            <thead className="bg-zinc-800/60 sticky top-0">
+              <tr className="border-b border-zinc-700">
+                <th className="px-4 py-2 w-10 border-r border-zinc-700">
+                  <input
+                    type="checkbox"
+                    checked={allCustomersSelected}
+                    onChange={toggleAllCustomers}
+                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                  />
+                </th>
                 <SortableHeader
                   label="Name"
                   column="name"
@@ -578,7 +622,7 @@ export function CustomersList() {
                   direction={customerSort?.direction}
                   onSort={() => toggleSort('email', setCustomerSort, customerSort)}
                 />
-                <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider">
                   Status
                 </th>
               </tr>
@@ -587,15 +631,23 @@ export function CustomersList() {
               {customers.map((customer) => (
                 <tr
                   key={customer.id}
-                  onClick={(e) => handleCustomerClick(customer.id, orderedCustomerIds, e)}
+                  onClick={() => handleCustomerRowClick(customer.id)}
                   onDoubleClick={() => setEditTarget({ type: 'customer', id: customer.id })}
                   title="Double-click to edit"
                   className={`cursor-pointer transition-colors ${
-                    selectedCustomerIds.has(customer.id)
-                      ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
+                    focusedCustomerId === customer.id
+                      ? 'bg-indigo-600/20'
                       : 'hover:bg-zinc-800/50'
                   }`}
                 >
+                  <td className="px-4 py-3 border-r border-zinc-800/60" onClick={(e) => toggleCustomerCheckbox(customer.id, e)}>
+                    <input
+                      type="checkbox"
+                      checked={selectedCustomerIds.has(customer.id)}
+                      onChange={() => {}}
+                      className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                    />
+                  </td>
                   <td className="px-6 py-3 font-medium text-white">{customer.name}</td>
                   <td className="px-6 py-3 text-zinc-300">{customer.email || '—'}</td>
                   <td className="px-6 py-3">
@@ -628,33 +680,33 @@ export function CustomersList() {
         <div className="flex items-center border-b border-indigo-900/30 bg-slate-900/50">
           <button
             onClick={() => setActiveTab('campaigns')}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${
+            className={`px-4 py-3 text-sm font-medium transition-colors rounded-t ${
               activeTab === 'campaigns'
-                ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
-                : 'text-zinc-300 hover:text-white'
+                ? 'text-white bg-zinc-800'
+                : 'text-zinc-300 hover:text-white hover:bg-zinc-800/50'
             }`}
           >
             Campaigns ({displayedCampaigns.length})
           </button>
           <button
-            onClick={() => setActiveTab('contacts')}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${
-              activeTab === 'contacts'
-                ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
-                : 'text-zinc-300 hover:text-white'
-            }`}
-          >
-            Contacts ({displayedContacts.length})
-          </button>
-          <button
             onClick={() => setActiveTab('music-campaigns')}
-            className={`px-6 py-3 text-sm font-medium transition-colors ${
+            className={`px-4 py-3 text-sm font-medium transition-colors rounded-t ${
               activeTab === 'music-campaigns'
-                ? 'text-white border-b-2 border-indigo-500 bg-slate-950'
-                : 'text-zinc-300 hover:text-white'
+                ? 'text-white bg-zinc-800'
+                : 'text-zinc-300 hover:text-white hover:bg-zinc-800/50'
             }`}
           >
             Music Campaigns
+          </button>
+          <button
+            onClick={() => setActiveTab('contacts')}
+            className={`px-4 py-3 text-sm font-medium transition-colors rounded-t ${
+              activeTab === 'contacts'
+                ? 'text-white bg-zinc-800'
+                : 'text-zinc-300 hover:text-white hover:bg-zinc-800/50'
+            }`}
+          >
+            Contacts ({displayedContacts.length})
           </button>
           <div className="flex-1" />
           {focusedCustomerId && focusedCustomerName && (
@@ -675,57 +727,56 @@ export function CustomersList() {
         <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
           {activeTab === 'campaigns' ? (
             <div className="flex-1 min-h-0 flex flex-col">
-              <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-2 bg-zinc-800/30">
+              <div className="flex items-center gap-3 px-5 py-3 border-b border-zinc-800 bg-zinc-800/30">
+                <h2 className="text-sm font-semibold text-white flex-shrink-0">
+                  Campaigns ({displayedCampaigns.length})
+                </h2>
                 <div className="flex-1" />
-                <button
-                  onClick={() => {
-                    if (focusedCustomerId) setIsCreatingCampaign(true);
-                  }}
-                  disabled={!focusedCustomerId}
-                  className={`flex items-center gap-2 px-3 py-1 text-xs rounded transition-colors ${
-                    focusedCustomerId
-                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                      : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
-                  }`}
-                >
-                  <Plus className="w-3 h-3" />
-                  New Campaign
-                </button>
-                <button
-                  onClick={() => {
-                    if (editCampaignId) setEditTarget({ type: 'campaign', id: editCampaignId });
-                  }}
-                  disabled={!canEditCampaign}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                    canEditCampaign
-                      ? 'text-zinc-300 hover:text-white bg-zinc-700 hover:bg-zinc-600'
-                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
-                  }`}
-                >
-                  <Pencil className="w-3 h-3" />
-                  Edit
-                </button>
-                <button
-                  onClick={handleDeleteCampaigns}
-                  disabled={!canDeleteCampaign || deleteCampaignsMutation.isPending}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                    canDeleteCampaign
-                      ? 'text-red-400 hover:bg-red-900/20 bg-zinc-700'
-                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
-                  }`}
-                >
-                  <Trash2 className="w-3 h-3" />
-                  {selectedCampaignIds.size > 1
-                    ? `Delete (${selectedCampaignIds.size})`
-                    : 'Delete'}
-                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => { if (focusedCustomerId) setIsCreatingCampaign(true); }}
+                    disabled={!focusedCustomerId}
+                    title={!focusedCustomerId ? 'Select a customer first' : undefined}
+                    className={BTN_PRIMARY_SM}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    New Campaign
+                  </button>
+                  <button
+                    onClick={() => { if (editCampaignId) setEditTarget({ type: 'campaign', id: editCampaignId }); }}
+                    disabled={!canEditCampaign}
+                    className={BTN_SECONDARY_SM}
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    onClick={handleDeleteCampaigns}
+                    disabled={!canDeleteCampaign || deleteCampaignsMutation.isPending}
+                    title={!canDeleteCampaign ? 'Select campaigns to delete' : undefined}
+                    className={`${BTN_DESTRUCTIVE_SM} ${confirmingDeleteCampaigns ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-zinc-900 animate-pulse' : ''}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {confirmingDeleteCampaigns
+                      ? 'Click again to delete'
+                      : `Delete${effectiveCampaignDeleteIds.length > 0 ? ` (${effectiveCampaignDeleteIds.length})` : ''}`}
+                  </button>
+                </div>
               </div>
               <div className="flex-1 overflow-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-zinc-800 sticky top-0">
-                    <tr>
+                <table className="w-full text-sm">
+                  <thead className="bg-zinc-800/60 sticky top-0">
+                    <tr className="border-b border-zinc-700">
+                      <th className="px-4 py-2 w-10 border-r border-zinc-700">
+                        <input
+                          type="checkbox"
+                          checked={allCampaignsSelected}
+                          onChange={toggleAllCampaigns}
+                          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                        />
+                      </th>
                       {!focusedCustomerId && (
-                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider border-r border-indigo-800">
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-700">
                           Customer
                         </th>
                       )}
@@ -735,7 +786,6 @@ export function CustomersList() {
                         isActive={campaignSort?.column === 'name'}
                         direction={campaignSort?.direction}
                         onSort={() => toggleSort('name', setCampaignSort, campaignSort)}
-                        borderColor="border-indigo-800"
                       />
                       <SortableHeader
                         label="Plays/mo"
@@ -745,7 +795,6 @@ export function CustomersList() {
                         onSort={() =>
                           toggleSort('plays_per_month', setCampaignSort, campaignSort)
                         }
-                        borderColor="border-indigo-800"
                       />
                       <SortableHeader
                         label="Period"
@@ -753,10 +802,12 @@ export function CustomersList() {
                         isActive={campaignSort?.column === 'starts_on'}
                         direction={campaignSort?.direction}
                         onSort={() => toggleSort('starts_on', setCampaignSort, campaignSort)}
-                        borderColor="border-indigo-800"
                       />
-                      <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider">
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-700">
                         Pacing
+                      </th>
+                      <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+                        Active
                       </th>
                     </tr>
                   </thead>
@@ -767,81 +818,77 @@ export function CustomersList() {
                         campaign={campaign}
                         showCustomer={!focusedCustomerId}
                         isSelected={selectedCampaignIds.has(campaign.id)}
-                        onClick={(e) =>
-                          handleShiftClick(
-                            campaign.id,
-                            orderedCampaignIds,
-                            selectedCampaignIds,
-                            setSelectedCampaignIds,
-                            lastClickedCampaignId,
-                            setLastClickedCampaignId,
-                            e,
-                          )
-                        }
+                        isFocused={focusedCampaignId === campaign.id}
+                        onToggle={(e) => toggleCampaignCheckbox(campaign.id, e)}
+                        onRowClick={() => setFocusedCampaignId((prev) => prev === campaign.id ? null : campaign.id)}
                         onEdit={() => setEditTarget({ type: 'campaign', id: campaign.id })}
+                        onToggleActive={(active) => toggleCampaignActiveMutation.mutate({ id: campaign.id, active })}
                       />
                     ))}
                   </tbody>
                 </table>
 
                 {displayedCampaigns.length === 0 && (
-                  <div className="p-4 text-center text-zinc-300 text-xs">No campaigns</div>
+                  <div className="p-4 text-center text-zinc-300 text-sm">No campaigns</div>
                 )}
               </div>
             </div>
-          ) : activeTab === 'contacts' ? (
+          ) : activeTab === 'music-campaigns' ? (
+            <div className="flex-1 min-h-0 flex flex-col overflow-hidden">
+              <MusicCampaignsPage showSaveStatus={showSaveStatus} focusedCustomerId={focusedCustomerId} />
+            </div>
+          ) : (
             <div className="flex-1 min-h-0 flex flex-col">
-              <div className="px-6 py-3 border-b border-zinc-800 flex items-center gap-2 bg-zinc-800/30">
+              <div className="flex items-center gap-3 px-5 py-3 border-b border-zinc-800 bg-zinc-800/30">
+                <h2 className="text-sm font-semibold text-white flex-shrink-0">
+                  Contacts ({displayedContacts.length})
+                </h2>
                 <div className="flex-1" />
-                <button
-                  onClick={() => {
-                    if (focusedCustomerId) setIsCreatingContact(true);
-                  }}
-                  disabled={!focusedCustomerId}
-                  className={`flex items-center gap-2 px-3 py-1 text-xs rounded transition-colors ${
-                    focusedCustomerId
-                      ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
-                      : 'bg-zinc-800 text-zinc-600 cursor-not-allowed'
-                  }`}
-                >
-                  <Plus className="w-3 h-3" />
-                  New Contact
-                </button>
-                <button
-                  onClick={() => {
-                    if (editContactId) setEditTarget({ type: 'contact', id: editContactId });
-                  }}
-                  disabled={!canEditContact}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                    canEditContact
-                      ? 'text-zinc-300 hover:text-white bg-zinc-700 hover:bg-zinc-600'
-                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
-                  }`}
-                >
-                  <Pencil className="w-3 h-3" />
-                  Edit
-                </button>
-                <button
-                  onClick={handleDeleteContacts}
-                  disabled={!canDeleteContact || deleteContactsMutation.isPending}
-                  className={`flex items-center gap-1.5 px-2.5 py-1 text-xs rounded-lg transition-colors ${
-                    canDeleteContact
-                      ? 'text-red-400 hover:bg-red-900/20 bg-zinc-700'
-                      : 'text-zinc-600 bg-zinc-800 cursor-not-allowed'
-                  }`}
-                >
-                  <Trash2 className="w-3 h-3" />
-                  {selectedContactIds.size > 1
-                    ? `Delete (${selectedContactIds.size})`
-                    : 'Delete'}
-                </button>
+                <div className="flex items-center gap-2 flex-shrink-0">
+                  <button
+                    onClick={() => { if (focusedCustomerId) setIsCreatingContact(true); }}
+                    disabled={!focusedCustomerId}
+                    title={!focusedCustomerId ? 'Select a customer first' : undefined}
+                    className={BTN_PRIMARY_SM}
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    New Contact
+                  </button>
+                  <button
+                    onClick={() => { if (editContactId) setEditTarget({ type: 'contact', id: editContactId }); }}
+                    disabled={!canEditContact}
+                    className={BTN_SECONDARY_SM}
+                  >
+                    <Pencil className="w-3.5 h-3.5" />
+                    Edit
+                  </button>
+                  <button
+                    onClick={handleDeleteContacts}
+                    disabled={!canDeleteContact || deleteContactsMutation.isPending}
+                    title={!canDeleteContact ? 'Select contacts to delete' : undefined}
+                    className={`${BTN_DESTRUCTIVE_SM} ${confirmingDeleteContacts ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-zinc-900 animate-pulse' : ''}`}
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                    {confirmingDeleteContacts
+                      ? 'Click again to delete'
+                      : `Delete${effectiveContactDeleteIds.length > 0 ? ` (${effectiveContactDeleteIds.length})` : ''}`}
+                  </button>
+                </div>
               </div>
               <div className="flex-1 overflow-auto">
-                <table className="w-full text-xs">
-                  <thead className="bg-zinc-800 sticky top-0">
-                    <tr>
+                <table className="w-full text-sm">
+                  <thead className="bg-zinc-800/60 sticky top-0">
+                    <tr className="border-b border-zinc-700">
+                      <th className="px-4 py-2 w-10 border-r border-zinc-700">
+                        <input
+                          type="checkbox"
+                          checked={allContactsSelected}
+                          onChange={toggleAllContacts}
+                          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                        />
+                      </th>
                       {!focusedCustomerId && (
-                        <th className="px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider border-r border-indigo-800">
+                        <th className="px-4 py-2 text-left text-xs font-semibold text-zinc-400 uppercase tracking-wider border-r border-zinc-700">
                           Customer(s)
                         </th>
                       )}
@@ -851,7 +898,6 @@ export function CustomersList() {
                         isActive={contactSort?.column === 'name'}
                         direction={contactSort?.direction}
                         onSort={() => toggleSort('name', setContactSort, contactSort)}
-                        borderColor="border-indigo-800"
                       />
                       <SortableHeader
                         label="Email"
@@ -859,7 +905,6 @@ export function CustomersList() {
                         isActive={contactSort?.column === 'email'}
                         direction={contactSort?.direction}
                         onSort={() => toggleSort('email', setContactSort, contactSort)}
-                        borderColor="border-indigo-800"
                       />
                       <SortableHeader
                         label="Phone"
@@ -867,7 +912,6 @@ export function CustomersList() {
                         isActive={contactSort?.column === 'phone'}
                         direction={contactSort?.direction}
                         onSort={() => toggleSort('phone', setContactSort, contactSort)}
-                        borderColor="border-indigo-800"
                       />
                       <SortableHeader
                         label="Role"
@@ -875,7 +919,6 @@ export function CustomersList() {
                         isActive={contactSort?.column === 'role'}
                         direction={contactSort?.direction}
                         onSort={() => toggleSort('role', setContactSort, contactSort)}
-                        borderColor="border-indigo-800"
                       />
                     </tr>
                   </thead>
@@ -888,36 +931,32 @@ export function CustomersList() {
                       return (
                         <tr
                           key={contact.id}
-                          onClick={(e) =>
-                            handleShiftClick(
-                              contact.id,
-                              orderedContactIds,
-                              selectedContactIds,
-                              setSelectedContactIds,
-                              lastClickedContactId,
-                              setLastClickedContactId,
-                              e,
-                            )
-                          }
-                          onDoubleClick={() =>
-                            setEditTarget({ type: 'contact', id: contact.id })
-                          }
+                          onClick={() => setFocusedContactId((prev) => prev === contact.id ? null : contact.id)}
+                          onDoubleClick={() => setEditTarget({ type: 'contact', id: contact.id })}
                           title="Double-click to edit"
                           className={`cursor-pointer transition-colors ${
-                            selectedContactIds.has(contact.id)
-                              ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
+                            selectedContactIds.has(contact.id) || focusedContactId === contact.id
+                              ? 'bg-indigo-600/20'
                               : 'hover:bg-slate-900/50'
                           }`}
                         >
+                          <td className="px-4 py-3 border-r border-zinc-800/60" onClick={(e) => toggleContactCheckbox(contact.id, e)}>
+                            <input
+                              type="checkbox"
+                              checked={selectedContactIds.has(contact.id)}
+                              onChange={() => {}}
+                              className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                            />
+                          </td>
                           {!focusedCustomerId && (
-                            <td className="px-6 py-2 text-zinc-400">
+                            <td className="px-6 py-3 text-zinc-400">
                               {withCustomers.customer_names?.join(', ') || '—'}
                             </td>
                           )}
-                          <td className="px-6 py-2 font-medium text-white">{contact.name}</td>
-                          <td className="px-6 py-2 text-zinc-300">{contact.email || '—'}</td>
-                          <td className="px-6 py-2 text-zinc-300">{contact.phone || '—'}</td>
-                          <td className="px-6 py-2 text-zinc-300">
+                          <td className="px-6 py-3 font-medium text-white">{contact.name}</td>
+                          <td className="px-6 py-3 text-zinc-300">{contact.email || '—'}</td>
+                          <td className="px-6 py-3 text-zinc-300">{contact.phone || '—'}</td>
+                          <td className="px-6 py-3 text-zinc-300">
                             <span className="text-xs px-2 py-0.5 bg-slate-800 rounded">
                               {contact.role || 'General'}
                             </span>
@@ -929,13 +968,9 @@ export function CustomersList() {
                 </table>
 
                 {displayedContacts.length === 0 && (
-                  <div className="p-4 text-center text-zinc-300 text-xs">No contacts</div>
+                  <div className="p-4 text-center text-zinc-300 text-sm">No contacts</div>
                 )}
               </div>
-            </div>
-          ) : (
-            <div className="flex-1 overflow-auto p-4">
-              <MusicCampaignsPage />
             </div>
           )}
         </div>
@@ -1025,7 +1060,7 @@ function SortableHeader({
   isActive,
   direction,
   onSort,
-  borderColor = 'border-zinc-600',
+  borderColor = 'border-zinc-700',
 }: {
   label: string;
   column: string;
@@ -1034,23 +1069,16 @@ function SortableHeader({
   onSort: () => void;
   borderColor?: string;
 }) {
+  const Icon = isActive && direction === 'desc' ? ChevronDown : ChevronUp;
   return (
     <th
       onClick={onSort}
-      className={`px-6 py-2 text-left text-xs font-medium text-zinc-400 uppercase tracking-wider cursor-pointer hover:text-white select-none transition-colors border-r ${borderColor}`}
+      className={`px-4 py-2 text-left text-xs font-semibold uppercase tracking-wider cursor-pointer select-none transition-colors border-r ${borderColor} ${isActive ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'}`}
     >
-      <div className="flex items-center gap-1">
+      <span className="flex items-center gap-1">
         {label}
-        {isActive ? (
-          direction === 'asc' ? (
-            <ChevronUp className="w-3 h-3" />
-          ) : (
-            <ChevronDown className="w-3 h-3" />
-          )
-        ) : (
-          <ChevronsUpDown className="w-3 h-3 opacity-30" />
-        )}
-      </div>
+        <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-indigo-400' : 'text-zinc-400'}`} />
+      </span>
     </th>
   );
 }
@@ -1617,14 +1645,20 @@ function CampaignTableRow({
   campaign,
   showCustomer,
   isSelected,
-  onClick,
+  isFocused,
+  onToggle,
+  onRowClick,
   onEdit,
+  onToggleActive,
 }: {
   campaign: Campaign & { customer_name: string };
   showCustomer: boolean;
   isSelected: boolean;
-  onClick: (e: React.MouseEvent) => void;
+  isFocused: boolean;
+  onToggle: (e: React.MouseEvent) => void;
+  onRowClick: () => void;
   onEdit: () => void;
+  onToggleActive: (active: boolean) => void;
 }) {
   const { data: pacing } = useQuery({
     queryKey: ['campaign-pacing', campaign.id],
@@ -1633,24 +1667,32 @@ function CampaignTableRow({
 
   return (
     <tr
-      onClick={onClick}
+      onClick={onRowClick}
       onDoubleClick={onEdit}
       title="Double-click to edit"
       className={`cursor-pointer transition-colors ${
-        isSelected
-          ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500'
+        isSelected || isFocused
+          ? 'bg-indigo-600/20'
           : 'hover:bg-slate-900/50'
       }`}
     >
+      <td className="px-4 py-3 border-r border-zinc-800/60" onClick={onToggle}>
+        <input
+          type="checkbox"
+          checked={isSelected}
+          onChange={() => {}}
+          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+        />
+      </td>
       {showCustomer && (
-        <td className="px-6 py-2 text-zinc-400">{campaign.customer_name}</td>
+        <td className="px-6 py-3 text-zinc-400">{campaign.customer_name}</td>
       )}
-      <td className="px-6 py-2 font-medium text-white">{campaign.name}</td>
-      <td className="px-6 py-2 text-zinc-300">{campaign.plays_per_month}</td>
-      <td className="px-6 py-2 text-zinc-300 text-xs">
+      <td className="px-6 py-3 font-medium text-white">{campaign.name}</td>
+      <td className="px-6 py-3 text-zinc-300">{campaign.plays_per_month}</td>
+      <td className="px-6 py-3 text-zinc-300">
         {campaign.starts_on} → {campaign.ends_on}
       </td>
-      <td className="px-6 py-2">
+      <td className="px-6 py-3 border-r border-zinc-800/60">
         {pacing && (
           <div className="flex items-center gap-2">
             <div className="text-xs font-medium text-white">{pacing.pct}%</div>
@@ -1659,6 +1701,14 @@ function CampaignTableRow({
             </span>
           </div>
         )}
+      </td>
+      <td className="px-6 py-3" onClick={(e) => e.stopPropagation()}>
+        <input
+          type="checkbox"
+          checked={campaign.active}
+          onChange={(e) => onToggleActive(e.target.checked)}
+          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+        />
       </td>
     </tr>
   );

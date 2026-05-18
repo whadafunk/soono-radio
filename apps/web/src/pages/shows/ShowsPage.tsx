@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
@@ -11,6 +11,7 @@ import {
 } from '@radio/shared';
 import { fetchShows, createShow, deleteShow, fetchTemplateEntries, fetchClocks } from '../../api';
 import { BTN_PRIMARY, BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, CARD, MODAL_OVERLAY, MODAL_BOX, INPUT, LABEL } from '../../ui';
+import { SaveStatus } from '../../components/SaveStatus';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -66,14 +67,23 @@ export function ShowsPage() {
   const navigate = useNavigate();
   const [showModal, setShowModal] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<number>>(new Set());
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const deleteConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sortCol, setSortCol] = useState<SortCol>('name');
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc');
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 3000);
+  const showSaveStatus = (type: 'success' | 'error' | 'warning', message: string) => {
+    setSaveStatus({ type, message });
+    setTimeout(() => setSaveStatus(null), 3000);
   };
+
+  useEffect(() => {
+    if (confirmingDelete) {
+      setConfirmingDelete(false);
+      if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
+    }
+  }, [selectedIds]);
 
   const handleSort = (col: SortCol) => {
     if (col === sortCol) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
@@ -94,7 +104,7 @@ export function ShowsPage() {
       setShowModal(false);
       navigate(`/shows/${newShow.id}`);
     },
-    onError: (err: Error) => showToast('error', err.message),
+    onError: (err: Error) => showSaveStatus('error', err.message),
   });
 
   const deleteMutation = useMutation({
@@ -103,10 +113,21 @@ export function ShowsPage() {
       qc.invalidateQueries({ queryKey: ['shows'] });
       qc.invalidateQueries({ queryKey: ['template-entries'] });
       setSelectedIds(new Set());
-      showToast('success', ids.length === 1 ? 'Show deleted' : `${ids.length} shows deleted`);
+      showSaveStatus('error', ids.length === 1 ? 'Show deleted' : `${ids.length} shows deleted`);
     },
-    onError: (err: Error) => showToast('error', err.message),
+    onError: (err: Error) => showSaveStatus('error', err.message),
   });
+
+  const handleDeleteClick = () => {
+    if (confirmingDelete) {
+      if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
+      setConfirmingDelete(false);
+      deleteMutation.mutate([...selectedIds]);
+    } else {
+      setConfirmingDelete(true);
+      deleteConfirmTimer.current = setTimeout(() => setConfirmingDelete(false), 4000);
+    }
+  };
 
   const toggleSelect = (id: number, e: React.MouseEvent) => {
     e.stopPropagation();
@@ -151,7 +172,7 @@ export function ShowsPage() {
     const Icon = active && sortDir === 'desc' ? ChevronDown : ChevronUp;
     return (
       <th
-        className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wider border-r border-zinc-700 cursor-pointer select-none transition-colors ${
+        className={`px-4 py-2 text-left text-xs font-semibold uppercase tracking-wider border-r border-zinc-700 cursor-pointer select-none transition-colors ${
           active ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
         }`}
         onClick={() => handleSort(col)}
@@ -167,21 +188,20 @@ export function ShowsPage() {
   return (
     <div className="space-y-4">
       {/* Header */}
-      <div className="flex items-center justify-between">
-        <h1 className="text-xl font-semibold text-white">Shows</h1>
-        <div className="flex items-center gap-2">
+      <div className="flex items-center gap-3">
+        <h1 className="text-xl font-semibold text-white flex-shrink-0">Shows</h1>
+        <div className="flex-1 min-w-0">
+          <SaveStatus status={saveStatus} />
+        </div>
+        <div className="flex items-center gap-2 flex-shrink-0">
           <button
-            onClick={() => {
-              const n = selectedIds.size;
-              if (!window.confirm(`Delete ${n} show${n > 1 ? 's' : ''}? This cannot be undone.`)) return;
-              deleteMutation.mutate([...selectedIds]);
-            }}
+            onClick={handleDeleteClick}
             disabled={selectedIds.size === 0 || deleteMutation.isPending}
             title={selectedIds.size === 0 ? 'Select one or more shows to delete' : undefined}
-            className={BTN_DESTRUCTIVE_SM}
+            className={`${BTN_DESTRUCTIVE_SM} ${confirmingDelete ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-zinc-900 animate-pulse' : ''}`}
           >
             <Trash2 className="w-3.5 h-3.5" />
-            Delete
+            {confirmingDelete ? 'Click again to delete' : `Delete${selectedIds.size > 0 ? ` (${selectedIds.size})` : ''}`}
           </button>
           <div className="w-px h-5 bg-zinc-700 mx-1" />
           <button onClick={() => setShowModal(true)} className={BTN_PRIMARY_SM}>
@@ -190,15 +210,6 @@ export function ShowsPage() {
           </button>
         </div>
       </div>
-
-      {/* Toast */}
-      {toast && (
-        <div className={`fixed bottom-6 right-6 px-4 py-3 rounded-lg text-sm font-medium shadow-lg z-50 ${
-          toast.type === 'success' ? 'bg-emerald-600 text-white' : 'bg-red-600 text-white'
-        }`}>
-          {toast.message}
-        </div>
-      )}
 
       {/* Table */}
       <div className={`${CARD} overflow-hidden`}>
@@ -213,7 +224,7 @@ export function ShowsPage() {
           <table className="w-full">
             <thead className="bg-zinc-800/60">
               <tr className="border-b border-zinc-700">
-                <th className="px-4 py-3 w-12 border-r border-zinc-700">
+                <th className="px-4 py-2 w-12 border-r border-zinc-700">
                   <input
                     type="checkbox"
                     checked={allSelected}

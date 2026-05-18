@@ -45,6 +45,8 @@ import {
   FinishPolicy,
   JoinPolicy,
   Rotation,
+  playlistMediaCategory,
+  type Playlist,
 } from '@radio/shared';
 import {
   fetchClocks,
@@ -59,6 +61,7 @@ import {
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
+import { SaveStatus } from '../../components/SaveStatus';
 
 // ─── Handover / sweep labels ──────────────────────────────────────────────────
 
@@ -279,7 +282,7 @@ export function ClocksPage() {
   const [clockDirty, setClockDirty] = useState(false);
   const [segsDirty, setSegsDirty] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -288,9 +291,9 @@ export function ClocksPage() {
 
   const dirty = clockDirty || segsDirty;
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 3000);
+  const showSaveStatus = (type: 'success' | 'error', message: string) => {
+    setSaveStatus({ type, message });
+    setTimeout(() => setSaveStatus(null), 3000);
   };
 
   const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
@@ -344,9 +347,9 @@ export function ClocksPage() {
       queryClient.invalidateQueries({ queryKey: ['clock-segments', selectedId] });
       setClockDirty(false);
       setSegsDirty(false);
-      showToast('success', 'Clock saved');
+      showSaveStatus('success', 'Clock saved');
     },
-    onError: (e) => showToast('error', (e as Error).message),
+    onError: (e) => showSaveStatus('error', (e as Error).message),
   });
 
   const createMutation = useMutation({
@@ -358,9 +361,9 @@ export function ClocksPage() {
       // POST /clocks returns the raw DB row; augment with derived fields that the
       // GET list handler adds so selectClock doesn't crash on missing properties.
       selectClock({ ...created, duration_seconds: 0, used: false, slot_count: 0, assigned_shows: [] }, []);
-      showToast('success', 'Clock created');
+      showSaveStatus('success', 'Clock created');
     },
-    onError: (e) => showToast('error', (e as Error).message),
+    onError: (e) => showSaveStatus('error', (e as Error).message),
   });
 
   const deleteMutation = useMutation({
@@ -376,9 +379,9 @@ export function ClocksPage() {
       setConfirmDelete(false);
       setExpandedId(null);
       setListConfirmDeleteId(null);
-      showToast('success', 'Clock deleted');
+      showSaveStatus('success', 'Clock deleted');
     },
-    onError: (e) => showToast('error', (e as Error).message),
+    onError: (e) => showSaveStatus('error', (e as Error).message),
   });
 
   const selectClock = (clock: ClockType, segments: ClockSegment[]) => {
@@ -484,12 +487,6 @@ export function ClocksPage() {
 
   return (
     <div className="h-full flex flex-col gap-4">
-      {toast && (
-        <div className={`flex-shrink-0 px-4 py-2.5 rounded-lg text-sm ${toast.type === 'success' ? 'bg-green-900/20 border border-green-800 text-green-300' : 'bg-red-900/20 border border-red-800 text-red-300'}`}>
-          {toast.message}
-        </div>
-      )}
-
       <div className="flex-1 min-h-0 flex gap-4">
         {/* Left: clock list */}
         <div className="w-64 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
@@ -630,6 +627,7 @@ export function ClocksPage() {
                   <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
                     Scheduled{draftClock.slot_count > 0 ? ` (${draftClock.slot_count})` : ''}
                   </span>
+                  <SaveStatus status={saveStatus} />
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
                     onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
@@ -754,6 +752,7 @@ export function ClocksPage() {
                           onChange={(id) => updateDraftClock((c) => ({ ...c, station_id_playlist_id: id }))}
                           playlists={allPlaylists}
                           categories={['jingle']}
+                          filter={(p) => p.subcategory === 'stationid'}
                         />
                       </div>
                       <div>
@@ -1693,7 +1692,7 @@ function SourcesEditor({
       const usedIds = new Set(
         sources.filter((s) => s.type === 'playlist').map((s) => (s as Extract<SegmentSourceEntry, { type: 'playlist' }>).playlist_id),
       );
-      const candidates = cats.length ? playlists.filter((p) => cats.includes(p.type)) : playlists;
+      const candidates = cats.length ? playlists.filter((p) => cats.includes(playlistMediaCategory(p.type as any, p.subcategory as any))) : playlists;
       const first = candidates.find((p) => !usedIds.has(p.id)) ?? candidates[0];
       onChange([...sources, { type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false, rotation_id: null }]);
     } else {
@@ -1712,7 +1711,7 @@ function SourcesEditor({
   const bedPlaylistCapped = (segType === 'live' || segType === 'live_audience') &&
     sources.filter((s) => s.type === 'playlist').length >= 1;
   const cats = playlistCategoriesForSegType(segType);
-  const eligiblePlaylists = cats.length ? playlists.filter((p) => cats.includes(p.type)) : playlists;
+  const eligiblePlaylists = cats.length ? playlists.filter((p) => cats.includes(playlistMediaCategory(p.type as any, p.subcategory as any))) : playlists;
   const canAddPlaylist = !bedPlaylistCapped && validTypes.includes('playlist') && eligiblePlaylists.length > 0;
   const canAddOther = validTypes.some((t) => !REPEATABLE.has(t) && !usedSingles.has(t));
   const canAdd = canAddPlaylist || canAddOther;
@@ -1780,7 +1779,7 @@ function classifyStopSetSources(sources: SegmentSourceEntry[], playlists: Playli
       promosRotation = s.rotation;
     } else if (s.type === 'playlist') {
       const pl = playlists.find((p) => p.id === s.playlist_id);
-      if (pl?.type === 'spot') {
+      if (playlistMediaCategory(pl?.type as any, (pl as any)?.subcategory) === 'spot') {
         campaignsMode = 'playlist';
         campaignsPlaylistId = s.playlist_id;
         campaignsRotation = s.rotation;
@@ -1848,7 +1847,7 @@ function StopSetSourcesEditor({
         playlists={playlists}
         onModeChange={(mode) => {
           const m = mode as StopSetCampaignsMode;
-          const firstSpot = playlists.find((p) => p.type === 'spot');
+          const firstSpot = playlists.find((p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'spot');
           updateState({
             campaignsMode: m,
             campaignsPlaylistId: m === 'playlist' ? (state.campaignsPlaylistId ?? firstSpot?.id ?? null) : null,
@@ -1873,7 +1872,7 @@ function StopSetSourcesEditor({
         playlists={playlists}
         onModeChange={(mode) => {
           const m = mode as StopSetPromosMode;
-          const firstPromo = playlists.find((p) => p.type === 'promo');
+          const firstPromo = playlists.find((p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'promo');
           updateState({
             promosMode: m,
             promosPlaylistId: m === 'playlist' ? (state.promosPlaylistId ?? firstPromo?.id ?? null) : null,
@@ -1980,7 +1979,7 @@ function SourceRow({
     const ps = source as PlaylistSource;
     const pl = playlists.find(p => p.id === ps.playlist_id);
     if (!pl) return null;
-    return pl.type === 'spot' ? 'playlist_spot' : 'playlist_promo';
+    return playlistMediaCategory(pl.type as any, pl.subcategory as any) === 'spot' ? 'playlist_spot' : 'playlist_promo';
   }, [segType, source, playlists]);
 
   const [stopSetVariant, setStopSetVariant] = useState<'playlist_promo' | 'playlist_spot'>('playlist_promo');
@@ -2002,11 +2001,11 @@ function SourceRow({
   const handleTypeChange = (val: string) => {
     if (val === 'playlist_promo') {
       setStopSetVariant('playlist_promo');
-      const first = playlists.find(p => p.type === 'promo');
+      const first = playlists.find(p => playlistMediaCategory(p.type as any, p.subcategory as any) === 'promo');
       onChange({ type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false });
     } else if (val === 'playlist_spot') {
       setStopSetVariant('playlist_spot');
-      const first = playlists.find(p => p.type === 'spot');
+      const first = playlists.find(p => playlistMediaCategory(p.type as any, p.subcategory as any) === 'spot');
       onChange({ type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false });
     } else {
       onChange(makeDefaultSource(val as SegmentSourceEntry['type']));
@@ -2357,15 +2356,19 @@ function PlaylistIdInput({ value, onChange }: { value: number | null; onChange: 
   );
 }
 
-function PlaylistDropdown({ value, onChange, playlists, categories, invalid, allowNone = true }: {
+function PlaylistDropdown({ value, onChange, playlists, categories, filter, invalid, allowNone = true }: {
   value: number | null;
   onChange: (v: number | null) => void;
   playlists: PlaylistSummary[];
   categories?: string[];
+  filter?: (p: PlaylistSummary) => boolean;
   invalid?: boolean;
   allowNone?: boolean;
 }) {
-  const filtered = categories?.length ? playlists.filter(p => categories.includes(p.type)) : playlists;
+  const byCategory = categories?.length
+    ? playlists.filter(p => categories.includes(playlistMediaCategory(p.type as any, p.subcategory as any)))
+    : playlists;
+  const filtered = filter ? byCategory.filter(filter) : byCategory;
   return (
     <select
       value={value ?? ''}

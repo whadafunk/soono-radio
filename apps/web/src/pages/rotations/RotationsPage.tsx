@@ -1,9 +1,11 @@
-import { useState } from 'react';
+import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Plus, Check, X, Trash2, Music, Megaphone } from 'lucide-react';
+import { Plus, Check, X, Trash2, Music, Megaphone, ChevronRight } from 'lucide-react';
 import { Rotation, RotationType, RotationKind, SongPosition, ROTATION_TYPES, ROTATION_KINDS, SONG_POSITIONS } from '@radio/shared';
 import { fetchRotations, createRotation, updateRotation, deleteRotation, fetchPlaylists } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
+import { SaveStatus } from '../../components/SaveStatus';
+import { BTN_PRIMARY, BTN_SECONDARY, BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, INPUT, SELECT, MODAL_OVERLAY, MODAL_BOX } from '../../ui';
 
 const KIND_META: Record<RotationKind, { label: string; icon: typeof Music; desc: string }> = {
   music:   { label: 'Music',   icon: Music,      desc: 'Draws from playlists. Used by show playlists and music-segment sources.' },
@@ -66,13 +68,46 @@ export function RotationsPage() {
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('');
   const [newKind, setNewKind] = useState<RotationKind>('music');
-  const [confirmDelete, setConfirmDelete] = useState(false);
-  const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
   const [kindFilter, setKindFilter] = useState<RotationKind | 'all'>('all');
+  const [checkedIds, setCheckedIds] = useState<Set<number>>(new Set());
+  const [collapsedKinds, setCollapsedKinds] = useState<Set<RotationKind>>(new Set());
 
-  const showToast = (type: 'success' | 'error', message: string) => {
-    setToast({ type, message });
-    setTimeout(() => setToast(null), 3000);
+  const nameExists = (name: string, excludeId?: number) =>
+    rotations.some((r) => r.id !== excludeId && r.name.trim().toLowerCase() === name.trim().toLowerCase());
+
+  const toggleKindCollapsed = (k: RotationKind) =>
+    setCollapsedKinds((prev) => {
+      const next = new Set(prev);
+      if (next.has(k)) next.delete(k); else next.add(k);
+      return next;
+    });
+  const [confirmingDelete, setConfirmingDelete] = useState(false);
+  const deleteConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Reset confirmation if selection changes
+  useEffect(() => {
+    if (confirmingDelete) {
+      setConfirmingDelete(false);
+      if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [checkedIds]);
+
+  const handleDeleteClick = () => {
+    if (confirmingDelete) {
+      if (deleteConfirmTimer.current) clearTimeout(deleteConfirmTimer.current);
+      setConfirmingDelete(false);
+      deleteMutation.mutate([...checkedIds]);
+    } else {
+      setConfirmingDelete(true);
+      deleteConfirmTimer.current = setTimeout(() => setConfirmingDelete(false), 4000);
+    }
+  };
+
+  const showSaveStatus = (type: 'success' | 'error' | 'warning', message: string) => {
+    setSaveStatus({ type, message });
+    setTimeout(() => setSaveStatus(null), 3000);
   };
 
   const { data: rotations = [] } = useQuery({ queryKey: ['rotations'], queryFn: fetchRotations });
@@ -101,9 +136,9 @@ export function RotationsPage() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['rotations'] });
       setDirty(false);
-      showToast('success', 'Rotation saved');
+      showSaveStatus('success', 'Rotation saved');
     },
-    onError: (e) => showToast('error', (e as Error).message),
+    onError: (e) => showSaveStatus('error', (e as Error).message),
   });
 
   const createMutation = useMutation({
@@ -120,28 +155,34 @@ export function RotationsPage() {
       setCreatingNew(false);
       setNewName('');
       selectRotation(created);
-      showToast('success', 'Rotation created');
+      showSaveStatus('success', 'Rotation created');
     },
-    onError: (e) => showToast('error', (e as Error).message),
+    onError: (e) => showSaveStatus('error', (e as Error).message),
   });
 
   const deleteMutation = useMutation({
-    mutationFn: deleteRotation,
-    onSuccess: () => {
+    mutationFn: (ids: number[]) => Promise.all(ids.map(deleteRotation)),
+    onSuccess: (_data, ids) => {
       queryClient.invalidateQueries({ queryKey: ['rotations'] });
-      setSelectedId(null);
-      setDraft(null);
-      setDirty(false);
-      setConfirmDelete(false);
-      showToast('success', 'Rotation deleted');
+      setCheckedIds(new Set());
+      if (selectedId !== null && ids.includes(selectedId)) {
+        setSelectedId(null);
+        setDraft(null);
+        setDirty(false);
+      }
+      showSaveStatus('error', ids.length === 1 ? 'Rotation deleted' : `${ids.length} rotations deleted`);
     },
-    onError: (e) => showToast('error', (e as Error).message),
+    onError: (e) => showSaveStatus('error', (e as Error).message),
   });
 
   const setDefaultMutation = useMutation({
     mutationFn: (id: number) => updateRotation(id, { is_default: true }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['rotations'] }),
-    onError: (e) => showToast('error', (e as Error).message),
+    onSuccess: (_data, id) => {
+      queryClient.invalidateQueries({ queryKey: ['rotations'] });
+      const name = rotations.find((r) => r.id === id)?.name;
+      showSaveStatus('warning', name ? `"${name}" set as default` : 'Default updated');
+    },
+    onError: (e) => showSaveStatus('error', (e as Error).message),
   });
 
   const selectRotation = (r: Rotation) => {
@@ -158,7 +199,6 @@ export function RotationsPage() {
       heavy_rotation_enabled: r.heavy_rotation_enabled ?? false,
     });
     setDirty(false);
-    setConfirmDelete(false);
   };
 
   const updateDraft = (updater: (d: RotationDraft) => RotationDraft) => {
@@ -193,108 +233,88 @@ export function RotationsPage() {
   };
 
   return (
+    <>
     <div className="h-full flex flex-col gap-4">
-      <div className="flex items-center justify-between flex-shrink-0">
-        <div>
-          <h1 className="text-3xl font-bold text-white">Rotations</h1>
-          <p className="text-zinc-400 mt-1 text-sm">Define how tracks are selected from playlists.</p>
+      <div className="flex items-center gap-4 flex-shrink-0">
+        <h1 className="text-xl font-semibold text-white flex-shrink-0">Rotations</h1>
+        <div className="flex-1"><SaveStatus status={saveStatus} /></div>
+        <div className="flex items-center gap-2 flex-shrink-0">
+          {draft && (
+            <>
+              {rotations.find((r) => r.id === draft.id)?.is_default ? (
+                <span className="text-xs px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
+                  Default
+                </span>
+              ) : (
+                <button
+                  onClick={() => setDefaultMutation.mutate(draft.id)}
+                  disabled={setDefaultMutation.isPending}
+                  className="text-xs px-2.5 py-1 rounded-full text-zinc-500 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
+                >
+                  Set as default
+                </button>
+              )}
+              <div className="w-px h-5 bg-zinc-700 mx-1" />
+              <button onClick={handleDiscard} disabled={!dirty} className={BTN_SECONDARY_SM}>
+                Discard
+              </button>
+              <button
+                onClick={() => saveMutation.mutate()}
+                disabled={!dirty || saveMutation.isPending || (!!draft && nameExists(draft.name, draft.id))}
+                className={BTN_PRIMARY_SM}
+              >
+                {saveMutation.isPending ? 'Saving…' : 'Save'}
+              </button>
+            </>
+          )}
+          <div className="w-px h-5 bg-zinc-700 mx-1" />
+          <button
+            onClick={handleDeleteClick}
+            disabled={checkedIds.size === 0 || deleteMutation.isPending}
+            title={checkedIds.size === 0 ? 'Select rotations to delete' : undefined}
+            className={`${BTN_DESTRUCTIVE_SM} ${confirmingDelete ? 'ring-2 ring-red-400 ring-offset-1 ring-offset-zinc-900 animate-pulse' : ''}`}
+          >
+            <Trash2 className="w-3.5 h-3.5" />
+            {confirmingDelete ? 'Click again to delete' : `Delete${checkedIds.size > 0 ? ` (${checkedIds.size})` : ''}`}
+          </button>
+          <button onClick={() => setCreatingNew(true)} className={BTN_PRIMARY_SM}>
+            <Plus className="w-3.5 h-3.5" />
+            New Rotation
+          </button>
         </div>
       </div>
 
-      {toast && (
-        <div className={`flex-shrink-0 px-4 py-2.5 rounded-lg text-sm ${
-          toast.type === 'success'
-            ? 'bg-green-900/20 border border-green-800 text-green-300'
-            : 'bg-red-900/20 border border-red-800 text-red-300'
-        }`}>
-          {toast.message}
-        </div>
-      )}
-
       <div className="flex-1 min-h-0 flex gap-4">
         {/* Left: list */}
-        <div className="w-56 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
-          <div className="px-4 py-3 border-b border-zinc-800 flex items-center justify-between">
-            <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Rotations</span>
-            <button
-              onClick={() => setCreatingNew(true)}
-              className="p-1 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition-colors"
-              title="New rotation"
-            >
-              <Plus className="w-3.5 h-3.5" />
-            </button>
-          </div>
-
+        <div className="w-[311px] flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
           {/* Kind filter tabs */}
-          <div className="flex border-b border-zinc-800 text-xs">
-            {(['all', ...ROTATION_KINDS] as const).map((k) => (
+          <div className="flex border-b border-zinc-800">
+            {(['all', ...ROTATION_KINDS] as const).map((k) => {
+              const Icon = k !== 'all' ? KIND_META[k].icon : null;
+              return (
               <button
                 key={k}
                 onClick={() => setKindFilter(k)}
-                className={`flex-1 py-1.5 transition-colors ${
-                  kindFilter === k ? 'text-white bg-zinc-800/60 border-b border-indigo-500' : 'text-zinc-500 hover:text-zinc-300'
+                className={`flex items-center justify-center gap-1.5 px-4 py-3.5 text-xs font-medium transition-colors ${
+                  kindFilter === k ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
                 }`}
               >
-                {k === 'all' ? 'All' : KIND_META[k].label}
+                {Icon && <Icon className="w-3 h-3" />}
+                {k === 'all'
+                  ? `All (${rotations.length})`
+                  : `${KIND_META[k].label} (${rotations.filter((r) => (r.kind ?? 'music') === k).length})`}
               </button>
-            ))}
+              );
+            })}
           </div>
 
-          {creatingNew && (
-            <div className="px-3 py-2 border-b border-zinc-800 flex flex-col gap-1.5">
-              <div className="flex gap-1.5">
-                {ROTATION_KINDS.map((k) => {
-                  const Icon = KIND_META[k].icon;
-                  return (
-                    <button
-                      key={k}
-                      onClick={() => setNewKind(k)}
-                      className={`flex-1 flex items-center justify-center gap-1 px-1.5 py-1 rounded text-xs transition-colors ${
-                        newKind === k ? 'bg-indigo-600/30 text-indigo-300 border border-indigo-500/50' : 'bg-zinc-800 text-zinc-400 border border-transparent hover:text-zinc-200'
-                      }`}
-                    >
-                      <Icon className="w-3 h-3" />
-                      {KIND_META[k].label}
-                    </button>
-                  );
-                })}
-              </div>
-              <div className="flex gap-1.5">
-                <input
-                  autoFocus
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter' && newName.trim() && !createMutation.isPending) createMutation.mutate({ name: newName.trim(), kind: newKind });
-                    if (e.key === 'Escape') { setCreatingNew(false); setNewName(''); }
-                  }}
-                  placeholder="Rotation name…"
-                  className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
-                />
-                <button
-                  onClick={() => newName.trim() && !createMutation.isPending && createMutation.mutate({ name: newName.trim(), kind: newKind })}
-                  disabled={!newName.trim() || createMutation.isPending}
-                  className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-40 disabled:cursor-default"
-                >
-                  <Check className="w-3.5 h-3.5" />
-                </button>
-                <button
-                  onClick={() => { setCreatingNew(false); setNewName(''); }}
-                  className="p-1 text-zinc-500 hover:text-zinc-300 transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              </div>
-            </div>
-          )}
 
           <div className="flex-1 overflow-auto">
-            {rotations.length === 0 && !creatingNew && (
+            {rotations.length === 0 && (
               <p className="px-4 py-6 text-xs text-zinc-400 text-center">No rotations yet.<br />Create one to get started.</p>
             )}
-            {rotations
-              .filter((r) => kindFilter === 'all' || (r.kind ?? 'music') === kindFilter)
-              .map((r) => {
+            {(() => {
+              const renderItem = (r: Rotation) => {
                 const meta = TYPE_META[r.type];
                 const kind = r.kind ?? 'music';
                 const KindIcon = KIND_META[kind].icon;
@@ -308,6 +328,20 @@ export function RotationsPage() {
                     }`}
                   >
                     <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={checkedIds.has(r.id)}
+                        onChange={() => {}}
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setCheckedIds((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(r.id)) next.delete(r.id); else next.add(r.id);
+                            return next;
+                          });
+                        }}
+                        className="w-3.5 h-3.5 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer flex-shrink-0"
+                      />
                       <KindIcon className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
                       <span className="text-sm font-medium text-white truncate flex-1">{r.name}</span>
                       {r.is_default ? (
@@ -333,83 +367,57 @@ export function RotationsPage() {
                     </div>
                   </button>
                 );
-              })}
+              };
+
+              if (kindFilter !== 'all') {
+                return rotations
+                  .filter((r) => (r.kind ?? 'music') === kindFilter)
+                  .map(renderItem);
+              }
+
+              return ROTATION_KINDS.map((k) => {
+                const group = rotations.filter((r) => (r.kind ?? 'music') === k);
+                if (group.length === 0) return null;
+                const collapsed = collapsedKinds.has(k);
+                const KindIcon = KIND_META[k].icon;
+                return (
+                  <div key={k}>
+                    <button
+                      onClick={() => toggleKindCollapsed(k)}
+                      className="w-full flex items-center gap-2 px-3 py-2 border-b border-zinc-800/60 bg-zinc-800/40 hover:bg-zinc-800/70 transition-colors"
+                    >
+                      <ChevronRight className={`w-3 h-3 text-zinc-300 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
+                      <KindIcon className="w-3 h-3 text-zinc-300" />
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">{KIND_META[k].label}</span>
+                      <span className="ml-auto text-[11px] text-zinc-400">{group.length}</span>
+                    </button>
+                    {!collapsed && group.map(renderItem)}
+                  </div>
+                );
+              });
+            })()}
           </div>
         </div>
 
         {/* Right: editor */}
         {draft ? (
           <div className="flex-1 min-w-0 flex flex-col gap-4">
-            {/* Header */}
-            <div className="flex-shrink-0 flex items-center gap-3 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-4">
-              <input
-                value={draft.name}
-                onChange={(e) => updateDraft((d) => ({ ...d, name: e.target.value }))}
-                className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
-              />
-              {rotations.find((r) => r.id === draft.id)?.is_default ? (
-                <span className="flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 border border-amber-500/30 font-medium">
-                  Default
-                </span>
-              ) : (
-                <button
-                  onClick={() => setDefaultMutation.mutate(draft.id)}
-                  disabled={setDefaultMutation.isPending}
-                  className="flex-shrink-0 text-xs px-2.5 py-0.5 rounded-full text-zinc-500 border border-zinc-700 hover:text-amber-300 hover:border-amber-500/30 hover:bg-amber-500/10 transition-colors disabled:opacity-50"
-                >
-                  Set as default
-                </button>
-              )}
-              <div className="flex items-center gap-2 flex-shrink-0">
-                {dirty && (
-                  <>
-                    <button
-                      onClick={handleDiscard}
-                      className="px-3 py-1.5 text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors"
-                    >
-                      Discard
-                    </button>
-                    <button
-                      onClick={() => saveMutation.mutate()}
-                      disabled={saveMutation.isPending}
-                      className="px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50"
-                    >
-                      {saveMutation.isPending ? 'Saving…' : 'Save'}
-                    </button>
-                  </>
-                )}
-                {!dirty && !confirmDelete && (
-                  <button
-                    onClick={() => setConfirmDelete(true)}
-                    className="p-1.5 text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors"
-                    title="Delete rotation"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                )}
-                {confirmDelete && (
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-zinc-400">Delete?</span>
-                    <button
-                      onClick={() => deleteMutation.mutate(draft.id)}
-                      disabled={deleteMutation.isPending}
-                      className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors"
-                    >
-                      Yes
-                    </button>
-                    <button
-                      onClick={() => setConfirmDelete(false)}
-                      className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
-                    >
-                      Cancel
-                    </button>
-                  </div>
+            {/* Kind + Type + Params */}
+            <div className="flex-1 min-h-0 bg-zinc-900 border border-zinc-800 rounded-lg px-5 pb-5 pt-3 space-y-6 overflow-auto">
+              <div>
+                <label className="flex items-center gap-1 text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-2">
+                  Name
+                  <HelpTooltip text="Display name for this rotation. Used in show playlists, clock segments, and logs." />
+                </label>
+                <input
+                  value={draft.name}
+                  onChange={(e) => updateDraft((d) => ({ ...d, name: e.target.value }))}
+                  className={`w-full px-3 py-2 bg-zinc-800 border rounded-lg text-sm text-white focus:outline-none ${nameExists(draft.name, draft.id) ? 'border-red-500 focus:border-red-500' : 'border-zinc-700 focus:border-indigo-500'}`}
+                />
+                {nameExists(draft.name, draft.id) && (
+                  <p className="mt-1.5 text-xs text-red-400">A rotation with this name already exists.</p>
                 )}
               </div>
-            </div>
-
-            {/* Kind + Type + Params */}
-            <div className="flex-1 min-h-0 bg-zinc-900 border border-zinc-800 rounded-lg p-5 space-y-6 overflow-auto">
               <div className="flex items-center gap-3 pb-3 border-b border-zinc-800/60">
                 {(() => {
                   const Icon = KIND_META[draft.kind].icon;
@@ -449,23 +457,21 @@ export function RotationsPage() {
 
               {draft.kind === 'sweeper' && (
                 <div>
-                  <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
+                  <label className="flex items-center gap-1 text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">
                     Fire at
+                    <HelpTooltip text={<>When this sweeper fires relative to the underlying music track. <span className="font-semibold text-white">At song start</span> fires before the first bar; <span className="font-semibold text-white">At song end</span> fires after it finishes; <span className="font-semibold text-white">Any time</span> fires mid-track. Source pool is defined in Clocks → Sweepers.</>} />
                   </label>
                   <select
                     value={draft.song_position ?? 'any'}
                     onChange={(e) =>
                       updateDraft((d) => ({ ...d, song_position: e.target.value as SongPosition }))
                     }
-                    className="w-64 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                    className={`max-w-xs ${SELECT}`}
                   >
                     {SONG_POSITIONS.map((p) => (
                       <option key={p} value={p} className="bg-zinc-900">{SONG_POSITION_LABELS[p]}</option>
                     ))}
                   </select>
-                  <p className="mt-2 text-xs text-zinc-500">
-                    When this sweeper fires relative to the underlying music track. Source pool is derived from sweeper type (see Clocks &gt; Sweepers).
-                  </p>
                 </div>
               )}
 
@@ -559,6 +565,67 @@ export function RotationsPage() {
         )}
       </div>
     </div>
+
+    {/* New Rotation modal */}
+
+    {creatingNew && (
+      <div className={MODAL_OVERLAY} onClick={() => { setCreatingNew(false); setNewName(''); }}>
+        <div className={`${MODAL_BOX} max-w-sm p-6 gap-5`} onClick={(e) => e.stopPropagation()}>
+          <h2 className="text-base font-semibold text-white">New Rotation</h2>
+
+          <div className="flex gap-2">
+            {ROTATION_KINDS.map((k) => {
+              const Icon = KIND_META[k].icon;
+              return (
+                <button
+                  key={k}
+                  onClick={() => setNewKind(k)}
+                  className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
+                    newKind === k
+                      ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/50'
+                      : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-zinc-200'
+                  }`}
+                >
+                  <Icon className="w-3.5 h-3.5" />
+                  {KIND_META[k].label}
+                </button>
+              );
+            })}
+          </div>
+
+          <div>
+            <input
+              autoFocus
+              value={newName}
+              onChange={(e) => setNewName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newName.trim() && !createMutation.isPending && !nameExists(newName)) createMutation.mutate({ name: newName.trim(), kind: newKind });
+                if (e.key === 'Escape') { setCreatingNew(false); setNewName(''); }
+              }}
+              placeholder="Rotation name…"
+              className={`${INPUT} ${newName.trim() && nameExists(newName) ? 'border-red-500 focus:border-red-500' : ''}`}
+            />
+            {newName.trim() && nameExists(newName) && (
+              <p className="mt-1.5 text-xs text-red-400">A rotation with this name already exists.</p>
+            )}
+          </div>
+
+          <div className="flex justify-end gap-2">
+            <button onClick={() => { setCreatingNew(false); setNewName(''); }} className={BTN_SECONDARY}>
+              Cancel
+            </button>
+            <button
+              onClick={() => newName.trim() && !nameExists(newName) && !createMutation.isPending && createMutation.mutate({ name: newName.trim(), kind: newKind })}
+              disabled={!newName.trim() || nameExists(newName) || createMutation.isPending}
+              className={BTN_PRIMARY}
+            >
+              {createMutation.isPending ? 'Creating…' : 'Create Rotation'}
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+    </>
   );
 }
 
@@ -577,7 +644,10 @@ function ParamsForm({
         </label>
         <div className="grid grid-cols-2 gap-6">
           <div>
-            <label className="block text-sm text-zinc-300 mb-1.5">Track separation</label>
+            <label className="flex items-center gap-1 text-sm text-zinc-300 mb-1.5">
+              Track separation
+              <HelpTooltip text="Minimum minutes that must pass before the same track can play again. Set higher for small playlists to reduce repetition." />
+            </label>
             <div className="flex items-center gap-2">
               <input
                 type="number"
@@ -585,13 +655,16 @@ function ParamsForm({
                 max={480}
                 value={(params.separation_minutes as number) ?? 60}
                 onChange={(e) => onChange('separation_minutes', Math.max(1, parseInt(e.target.value, 10) || 1))}
-                className="w-20 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
               />
-              <span className="text-xs text-zinc-400">min between same track</span>
+              <span className="text-xs text-zinc-400">min</span>
             </div>
           </div>
           <div>
-            <label className="block text-sm text-zinc-300 mb-1.5">Artist separation</label>
+            <label className="flex items-center gap-1 text-sm text-zinc-300 mb-1.5">
+              Artist separation
+              <HelpTooltip text={<>Minimum minutes between tracks by the same artist. Set to <span className="font-semibold text-white">0</span> to disable artist separation entirely.</>} />
+            </label>
             <div className="flex items-center gap-2">
               <input
                 type="number"
@@ -599,9 +672,9 @@ function ParamsForm({
                 max={240}
                 value={(params.artist_separation_minutes as number) ?? 0}
                 onChange={(e) => onChange('artist_separation_minutes', Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-20 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
               />
-              <span className="text-xs text-zinc-400">min between same artist (0 = off)</span>
+              <span className="text-xs text-zinc-400">min (0 = off)</span>
             </div>
           </div>
         </div>
@@ -616,8 +689,10 @@ function ParamsForm({
           Parameters
         </label>
         <div>
-          <label className="block text-sm text-zinc-300 mb-1.5">
-            Pool size <span className="text-zinc-500">(optional)</span>
+          <label className="flex items-center gap-1 text-sm text-zinc-300 mb-1.5">
+            Pool size
+            <span className="text-zinc-500">(optional)</span>
+            <HelpTooltip text="Limits candidates to the N tracks played least recently. Leave blank to consider the entire playlist." />
           </label>
           <div className="flex items-center gap-2">
             <input
@@ -629,9 +704,9 @@ function ParamsForm({
                 const v = parseInt(e.target.value, 10);
                 onChange('pool_size', isNaN(v) ? undefined : Math.max(1, v));
               }}
-              className="w-20 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+              className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
             />
-            <span className="text-xs text-zinc-400">tracks to consider (blank = entire playlist)</span>
+            <span className="text-xs text-zinc-400">tracks (blank = all)</span>
           </div>
         </div>
       </div>
@@ -645,11 +720,14 @@ function ParamsForm({
           Parameters
         </label>
         <div>
-          <label className="block text-sm text-zinc-300 mb-1.5">Order by</label>
+          <label className="flex items-center gap-1 text-sm text-zinc-300 mb-1.5">
+            Order by
+            <HelpTooltip text={<>Fixed cycle order. <span className="font-semibold text-white">Date added</span> cycles chronologically; <span className="font-semibold text-white">Manual order</span> follows the playlist's drag order.</>} />
+          </label>
           <select
             value={(params.order_by as string) ?? 'added_date'}
             onChange={(e) => onChange('order_by', e.target.value)}
-            className="px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+            className={`max-w-xs ${SELECT}`}
           >
             <option value="added_date">Date added</option>
             <option value="title">Title (A–Z)</option>
