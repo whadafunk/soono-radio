@@ -6,24 +6,23 @@ import {
   Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle, Wand2,
   SlidersHorizontal, ListPlus, Plus,
 } from 'lucide-react';
-import { MEDIA_CATEGORIES, PLAYLIST_TYPES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
+import { MEDIA_CATEGORIES, playlistMediaCategory, PLAYLIST_SUBCATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
 import { FacetDrawer, FacetFilters, EMPTY_FACET_FILTERS, countActiveFacets } from './FacetDrawer';
 
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
-  music: 'Music',
-  jingle: 'Jingle',
-  promo: 'Promo',
-  intro: 'Intro',
-  outro: 'Outro',
-  bed: 'Bed',
-  spot: 'Spot',
+  music:     'Music',
+  jingle:    'Jingle',
+  showenv:    'Show Envelope',
+  spot:      'Spot',
+  promo:     'Promo',
+  bed:       'Bed',
   recording: 'Recording',
 };
 
 const TAB_CATEGORIES = {
   all:        null as null,
   music:      ['music'] as MediaCategory[],
-  imaging:    ['jingle', 'promo', 'intro', 'outro', 'bed', 'spot'] as MediaCategory[],
+  imaging:    ['jingle', 'showenv', 'spot', 'promo', 'bed'] as MediaCategory[],
   production: ['recording'] as MediaCategory[],
 };
 type LibraryTab = keyof typeof TAB_CATEGORIES;
@@ -426,11 +425,25 @@ export function LibraryBrowse() {
   );
 }
 
-const PLAYLIST_TYPES_SET = new Set<string>(PLAYLIST_TYPES);
-
-const PLAYLIST_TYPE_LABELS: Record<string, string> = {
-  music: 'Music', jingle: 'Jingle', bed: 'Bed', promo: 'Promo', spot: 'Spot',
+const PLAYLIST_CATEGORY_LABELS: Record<string, string> = {
+  music: 'Music', jingle: 'Jingle', showenv: 'Show Envelope',
+  spot: 'Spot', promo: 'Promo', bed: 'Bed', recording: 'Recording',
 };
+
+const JINGLE_SUBCATEGORY_LABELS: Record<string, string> = {
+  show:      'Show Jingle',
+  opener:    'Opener',
+  closer:    'Closer',
+  stationid: 'Station ID',
+};
+
+function mediaCategoryToPlaylistPayload(category: string, subcategory?: string | null): { type: string; subcategory: string | null } {
+  switch (category) {
+    case 'jingle': return { type: 'jingle', subcategory: subcategory ?? 'show' };
+    case 'music':  return { type: 'music',  subcategory: 'standard' };
+    default:       return { type: category, subcategory: null };
+  }
+}
 
 function AddToPlaylistModal({
   mediaIds,
@@ -445,8 +458,11 @@ function AddToPlaylistModal({
 }) {
   const [search, setSearch] = useState('');
   const [newName, setNewName] = useState('');
+  const [newSubcategory, setNewSubcategory] = useState<string>('show');
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
+
+  const isJingle = category === 'jingle';
 
   const { data: allPlaylists = [] } = useQuery<PlaylistSummary[]>({
     queryKey: ['playlists'],
@@ -455,7 +471,8 @@ function AddToPlaylistModal({
 
   const playlists = useMemo(
     () => allPlaylists.filter(
-      (p) => p.kind === 'static' && p.type === category &&
+      (p) => p.kind === 'static' &&
+        playlistMediaCategory(p.type as any, p.subcategory as any) === category &&
         p.name.toLowerCase().includes(search.toLowerCase()),
     ),
     [allPlaylists, category, search],
@@ -479,7 +496,8 @@ function AddToPlaylistModal({
     if (!name) return;
     setBusy(true);
     try {
-      const pl = await createPlaylist({ name, type: category, kind: 'static' });
+      const { type: plType, subcategory: plSub } = mediaCategoryToPlaylistPayload(category, isJingle ? newSubcategory : null);
+      const pl = await createPlaylist({ name, type: plType, subcategory: plSub, kind: 'static' });
       await addTracksToPlaylist(pl.id, mediaIds);
       showToast('success', `Created "${pl.name}" and added ${mediaIds.length} track${mediaIds.length !== 1 ? 's' : ''}`);
       onClose();
@@ -498,7 +516,7 @@ function AddToPlaylistModal({
           <div>
             <h2 className="text-sm font-semibold text-white">Add to playlist</h2>
             <p className="text-xs text-zinc-400 mt-0.5">
-              {mediaIds.length} track{mediaIds.length !== 1 ? 's' : ''} · {PLAYLIST_TYPE_LABELS[category] ?? category} playlists
+              {mediaIds.length} track{mediaIds.length !== 1 ? 's' : ''} · {PLAYLIST_CATEGORY_LABELS[category] ?? category} playlists
             </p>
           </div>
           <button onClick={onClose} className="p-1.5 text-zinc-400 hover:text-white rounded transition-colors">
@@ -524,7 +542,7 @@ function AddToPlaylistModal({
         <div className="flex-1 overflow-y-auto px-2 pb-2">
           {playlists.length === 0 && !creating && (
             <p className="px-3 py-4 text-sm text-zinc-500 text-center">
-              {search ? 'No playlists match your search.' : `No static ${PLAYLIST_TYPE_LABELS[category] ?? category} playlists yet.`}
+              {search ? 'No playlists match your search.' : `No static ${PLAYLIST_CATEGORY_LABELS[category] ?? category} playlists yet.`}
             </p>
           )}
           {playlists.map((pl) => (
@@ -536,6 +554,11 @@ function AddToPlaylistModal({
             >
               <ListPlus className="w-4 h-4 text-zinc-500 flex-shrink-0" />
               <span className="flex-1 text-sm text-zinc-200 truncate">{pl.name}</span>
+              {isJingle && pl.subcategory && (
+                <span className="text-xs text-zinc-500 flex-shrink-0">
+                  {JINGLE_SUBCATEGORY_LABELS[pl.subcategory] ?? pl.subcategory}
+                </span>
+              )}
               {busy && <Loader className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />}
             </button>
           ))}
@@ -544,26 +567,45 @@ function AddToPlaylistModal({
         {/* Create new */}
         <div className="border-t border-zinc-800 px-4 py-3">
           {creating ? (
-            <div className="flex items-center gap-2">
-              <input
-                value={newName}
-                onChange={(e) => setNewName(e.target.value)}
-                onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setCreating(false); }}
-                placeholder="New playlist name…"
-                className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
-                autoFocus
-              />
-              <button
-                onClick={handleCreate}
-                disabled={busy || !newName.trim()}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50"
-              >
-                {busy ? <Loader className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
-                Create &amp; add
-              </button>
-              <button onClick={() => setCreating(false)} className="p-1.5 text-zinc-500 hover:text-zinc-300 rounded transition-colors">
-                <X className="w-3.5 h-3.5" />
-              </button>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                <input
+                  value={newName}
+                  onChange={(e) => setNewName(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setCreating(false); }}
+                  placeholder="New playlist name…"
+                  className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
+                  autoFocus
+                />
+                <button
+                  onClick={handleCreate}
+                  disabled={busy || !newName.trim()}
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50"
+                >
+                  {busy ? <Loader className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
+                  Create &amp; add
+                </button>
+                <button onClick={() => setCreating(false)} className="p-1.5 text-zinc-500 hover:text-zinc-300 rounded transition-colors">
+                  <X className="w-3.5 h-3.5" />
+                </button>
+              </div>
+              {isJingle && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  {(PLAYLIST_SUBCATEGORIES.jingle as readonly string[]).map((sub) => (
+                    <button
+                      key={sub}
+                      onClick={() => setNewSubcategory(sub)}
+                      className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                        newSubcategory === sub
+                          ? 'bg-indigo-600 text-white'
+                          : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
+                      }`}
+                    >
+                      {JINGLE_SUBCATEGORY_LABELS[sub] ?? sub}
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
           ) : (
             <button
@@ -617,12 +659,8 @@ function BulkActionBar({
     return cats;
   }, [ids, items]);
   const commonCategory = selectedCategories.size === 1 ? Array.from(selectedCategories)[0] : null;
-  const canAddToPlaylist = commonCategory !== null && PLAYLIST_TYPES_SET.has(commonCategory);
-  const addToPlaylistTitle = !commonCategory
-    ? 'Selection contains mixed categories'
-    : !PLAYLIST_TYPES_SET.has(commonCategory)
-    ? `No playlist type for "${commonCategory}" tracks`
-    : undefined;
+  const canAddToPlaylist = commonCategory !== null && commonCategory !== 'showenv';
+  const addToPlaylistTitle = !commonCategory ? 'Selection contains mixed categories' : undefined;
 
   const wrap = async (label: string, fn: () => Promise<unknown>, summary: (r: any) => string) => {
     try {
@@ -891,6 +929,16 @@ function BulkActionBar({
   );
 }
 
+const CATEGORY_FILTER_GROUPS: { key: string; label: string; categories: MediaCategory[] }[] = [
+  { key: 'music',     label: 'Music',     categories: ['music'] },
+  { key: 'jingle',    label: 'Jingle',    categories: ['jingle'] },
+  { key: 'showenv',    label: 'Show Envelope',   categories: ['showenv'] },
+  { key: 'spot',      label: 'Spot',      categories: ['spot'] },
+  { key: 'promo',     label: 'Promo',     categories: ['promo'] },
+  { key: 'bed',       label: 'Bed',       categories: ['bed'] },
+  { key: 'recording', label: 'Recording', categories: ['recording'] },
+];
+
 function CategoryMultiSelect({
   categories,
   value,
@@ -912,19 +960,36 @@ function CategoryMultiSelect({
     return () => document.removeEventListener('mousedown', onDocClick);
   }, [open]);
 
-  const toggle = (c: MediaCategory) => {
+  // Only show groups that have at least one category available in this tab
+  const groups = CATEGORY_FILTER_GROUPS.filter(
+    (g) => g.categories.some((c) => categories.includes(c)),
+  );
+
+  const toggleGroup = (g: typeof groups[0]) => {
+    const available = g.categories.filter((c) => categories.includes(c));
+    const allActive = available.every((c) => value.has(c));
     const next = new Set(value);
-    if (next.has(c)) next.delete(c);
-    else next.add(c);
+    if (allActive) {
+      available.forEach((c) => next.delete(c));
+    } else {
+      available.forEach((c) => next.add(c));
+    }
     onChange(next);
   };
+
+  const activeGroups = groups.filter((g) => {
+    const available = g.categories.filter((c) => categories.includes(c));
+    return available.length > 0 && available.every((c) => value.has(c));
+  });
 
   const label =
     value.size === 0
       ? 'All'
-      : value.size === 1
-        ? CATEGORY_LABELS[Array.from(value)[0]]
-        : `${value.size} categories`;
+      : activeGroups.length === 1
+        ? activeGroups[0].label
+        : activeGroups.length > 1
+          ? `${activeGroups.length} types`
+          : 'Filtered';
 
   return (
     <div ref={ref} className="relative">
@@ -941,7 +1006,7 @@ function CategoryMultiSelect({
         <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
       </button>
       {open && (
-        <div className="absolute z-30 mt-1 w-48 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
+        <div className="absolute z-30 mt-1 w-44 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
           <button
             onClick={() => onChange(new Set())}
             className="w-full text-left px-3 py-1.5 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded"
@@ -949,12 +1014,13 @@ function CategoryMultiSelect({
             Clear all
           </button>
           <div className="border-t border-zinc-800 my-1" />
-          {categories.map((c) => {
-            const checked = value.has(c);
+          {groups.map((g) => {
+            const available = g.categories.filter((c) => categories.includes(c));
+            const checked = available.every((c) => value.has(c));
             return (
               <button
-                key={c}
-                onClick={() => toggle(c)}
+                key={g.key}
+                onClick={() => toggleGroup(g)}
                 className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
               >
                 <span
@@ -964,7 +1030,7 @@ function CategoryMultiSelect({
                 >
                   {checked && <Check className="w-3 h-3 text-white" />}
                 </span>
-                <span>{CATEGORY_LABELS[c]}</span>
+                <span>{g.label}</span>
               </button>
             );
           })}

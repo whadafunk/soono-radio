@@ -581,6 +581,7 @@ export interface PlaylistSummary {
   id: number;
   name: string;
   type: string;
+  subcategory?: string | null;
   kind: string;
   is_default?: boolean;
 }
@@ -591,7 +592,7 @@ export async function fetchPlaylists(): Promise<PlaylistSummary[]> {
   return res.json();
 }
 
-export async function createPlaylist(body: { name: string; type: string; kind: 'static' }): Promise<PlaylistSummary> {
+export async function createPlaylist(body: { name: string; type: string; subcategory?: string | null; kind: 'static' }): Promise<PlaylistSummary> {
   const res = await fetch(`${API_BASE}/playlists`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -643,11 +644,20 @@ export async function fetchIngestJob(jobId: string): Promise<IngestJob> {
   return IngestJobSchema.parse(data);
 }
 
+export async function clearIngestJobs(status: 'completed' | 'failed'): Promise<void> {
+  const res = await fetch(`${API_BASE}/library/ingest?status=${status}`, { method: 'DELETE' });
+  if (!res.ok && res.status !== 204) throw new Error(`Failed to clear ingest jobs: ${res.statusText}`);
+}
+
 export async function fetchIngestJobs(): Promise<IngestJob[]> {
   const res = await fetch(`${API_BASE}/library/ingest`);
   if (!res.ok) throw new Error(`Failed to fetch ingest jobs: ${res.statusText}`);
   const data = await res.json();
-  return data.jobs.map((j: unknown) => IngestJobSchema.parse(j));
+  // safeParse so a single row with a stale/unknown category doesn't crash the whole list
+  return (data.jobs as unknown[]).flatMap((j) => {
+    const result = IngestJobSchema.safeParse(j);
+    return result.success ? [result.data] : [];
+  });
 }
 
 export async function restartLiquidsoap(): Promise<{ success: boolean }> {

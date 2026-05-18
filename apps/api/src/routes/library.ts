@@ -637,6 +637,15 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     // we want to keep this query simple.
     return reply.send({ jobs: rows.reverse() });
   });
+
+  fastify.delete<{ Querystring: { status: string } }>('/library/ingest', async (request, reply) => {
+    const { status } = request.query;
+    if (status !== 'completed' && status !== 'failed') {
+      return reply.status(400).send({ error: 'status must be completed or failed' });
+    }
+    await db.delete(ingestJobs).where(eq(ingestJobs.status, status as 'completed' | 'failed'));
+    return reply.status(204).send();
+  });
 }
 
 async function runBulkLookupId(jobId: string, ids: number[]): Promise<void> {
