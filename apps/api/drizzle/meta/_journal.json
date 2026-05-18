@@ -246,6 +246,20 @@
       "when": 1779581000010,
       "tag": "0034_youthful_mephisto",
       "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "6",
+      "when": 1779581000011,
+      "tag": "0035_lyrical_leo",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "6",
+      "when": 1779581000012,
+      "tag": "0036_category_collapse",
+      "breakpoints": true
     }
   ]
 }

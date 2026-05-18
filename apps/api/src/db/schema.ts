@@ -6,11 +6,10 @@ import { sql } from 'drizzle-orm';
 export const MEDIA_CATEGORIES = [
   'music',
   'jingle',
-  'promo',
-  'intro',
-  'outro',
-  'bed',
+  'showenv',
   'spot',
+  'promo',
+  'bed',
   'recording',
 ] as const;
 export type MediaCategory = (typeof MEDIA_CATEGORIES)[number];
@@ -169,7 +168,7 @@ export type PlayHistoryInsert = typeof playHistory.$inferInsert;
 
 // ─── Playlists ────────────────────────────────────────────────────────────────
 
-export const PLAYLIST_TYPES = ['music', 'jingle', 'bed', 'promo', 'spot'] as const;
+export const PLAYLIST_TYPES = ['music', 'jingle', 'bed', 'spot', 'promo', 'recording'] as const;
 export type PlaylistType = (typeof PLAYLIST_TYPES)[number];
 
 export const PLAYLIST_KINDS = ['static', 'dynamic'] as const;
@@ -182,11 +181,12 @@ export const playlists = sqliteTable(
     name: text('name').notNull(),
     description: text('description'),
     type: text('type', { enum: PLAYLIST_TYPES }).notNull(),
+    subcategory: text('subcategory'),
     // 'static' = manual track list; 'dynamic' = rules-based query
     kind: text('kind', { enum: PLAYLIST_KINDS }).notNull().default('static'),
     // JSON rules for dynamic playlists: { match: 'all'|'any', conditions: [...] }
     rules: text('rules', { mode: 'json' }),
-    // One default per type (music/jingle/bed only — not promo/spot)
+    // One default per (type, subcategory) — eligible for music/jingle/bed only
     is_default: integer('is_default', { mode: 'boolean' }).notNull().default(false),
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()
