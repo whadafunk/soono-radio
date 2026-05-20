@@ -1187,7 +1187,7 @@ function SegmentDrawer({
 
   const flexPolicy = draft.start_policy.type === 'flexible'
     ? (draft.start_policy as Extract<StartPolicy, { type: 'flexible' }>)
-    : null;
+    : { type: 'flexible' as const, late_seconds: 0, early_seconds: 0 };
 
   return (
     <div className="border-t border-zinc-700/60 bg-zinc-800/40">
@@ -1391,29 +1391,19 @@ function SegmentDrawer({
         {/* ── Timing tab ── */}
         {tab === 'timing' && (
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Start policy">
-              <select
-                value={draft.start_policy.type}
-                onChange={(e) => {
-                  const t = e.target.value as StartPolicy['type'];
-                  update({ start_policy: t === 'hard' ? { type: 'hard' } : { type: 'flexible', late_seconds: null, early_seconds: 0 } });
-                }}
-                className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-              >
-                <option value="hard"     className="bg-zinc-900">Fixed — cut on schedule</option>
-                <option value="flexible" className="bg-zinc-900">Flexible — wait / fill gap</option>
-              </select>
-            </Field>
-
-            {flexPolicy && (
-              <div className="col-span-2 space-y-2">
+            <div className="col-span-2">
+              <p className="text-xs font-medium text-zinc-400 mb-2">Start policy</p>
+              <div className="space-y-2">
                 {/* Start late */}
                 <div className="flex items-center gap-3">
                   <label className="flex items-center gap-2 cursor-pointer select-none w-28 shrink-0">
                     <input
                       type="checkbox"
                       checked={flexPolicy.late_seconds !== 0}
-                      onChange={(e) => update({ start_policy: { ...flexPolicy, late_seconds: e.target.checked ? null : 0 } })}
+                      onChange={(e) => {
+                        const next = { ...flexPolicy, late_seconds: e.target.checked ? null : 0 };
+                        update({ start_policy: next.late_seconds === 0 && next.early_seconds === 0 ? { type: 'hard' } : next });
+                      }}
                       className="accent-indigo-500"
                     />
                     <span className="text-xs text-zinc-300">Start late</span>
@@ -1443,7 +1433,10 @@ function SegmentDrawer({
                     <input
                       type="checkbox"
                       checked={flexPolicy.early_seconds !== 0}
-                      onChange={(e) => update({ start_policy: { ...flexPolicy, early_seconds: e.target.checked ? null : 0 } })}
+                      onChange={(e) => {
+                        const next = { ...flexPolicy, early_seconds: e.target.checked ? null : 0 };
+                        update({ start_policy: next.late_seconds === 0 && next.early_seconds === 0 ? { type: 'hard' } : next });
+                      }}
                       className="accent-indigo-500"
                     />
                     <span className="text-xs text-zinc-300">Start early</span>
@@ -1468,7 +1461,7 @@ function SegmentDrawer({
                   )}
                 </div>
               </div>
-            )}
+            </div>
 
             {/* End policy */}
             <div className="col-span-2 space-y-3">
