@@ -606,7 +606,7 @@ function parseSources(raw: unknown): SegmentSourceEntry[] {
 function collectRotationIds(sources: SegmentSourceEntry[]): number[] {
   const ids = new Set<number>();
   for (const s of sources) {
-    if ((s.type === 'show_playlist' || s.type === 'playlist') && s.rotation_id != null) {
+    if (s.type === 'playlist' && s.rotation_id != null) {
       ids.add(s.rotation_id);
     }
   }
@@ -670,9 +670,7 @@ async function resolveShowPlaylist(
     const pool = await loadMediaForPlaylists(playlistIds);
 
     // The rotation document on any matching show_playlist row wins (in tier order).
-    // Per-segment rotation_id overrides if set.
-    const rotationId =
-      entry.rotation_id ?? tierRows.find((r) => r.rotation_id != null)?.rotation_id ?? null;
+    const rotationId = tierRows.find((r) => r.rotation_id != null)?.rotation_id ?? null;
     const rotation = pickRotation(rotationId, rotationById);
     const features = await loadRotationFeatures(rotationId, rotationById);
 
@@ -683,7 +681,7 @@ async function resolveShowPlaylist(
     return {
       index,
       type: 'show_playlist',
-      weight: entry.weight,
+      weight: 1,
       description: `show_playlist tier=${tierLabel} (show=${scheduled.show!.name})`,
       pool,
       rotation,
@@ -694,7 +692,7 @@ async function resolveShowPlaylist(
     };
   };
 
-  return buildForTier(entry.tier ?? null, new Set());
+  return buildForTier(null, new Set());
 }
 
 async function resolveShowJingles(

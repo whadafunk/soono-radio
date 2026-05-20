@@ -34,15 +34,38 @@ A clock is **used** when it appears in any `calendar_entries` or `template_entri
 
 ## 3. Source rules per segment type
 
-### Music segments
-- Multiple sources allowed. When picking a specific playlist, the dropdown excludes playlists already used by sibling rows.
-- Per-row `rotation_id` picker (music-kind only). Replaces the old `round_robin / random` enum at the source level.
-- `hot_play` / `heavy_rotation` fields remain in the schema (used by future rotation-document logic) but are not surfaced on the clock segment UI.
+### Music segments — two mutually exclusive modes
+
+Music segments operate in exactly one of two modes. Switching modes replaces all sources.
+
+#### Mode A: Show Playlist
+
+The segment draws from the playlists configured on the **assigned show**. The show's own rotation document governs playback order.
+
+- Source array contains a single implicit `{ type: 'show_playlist' }` entry — no weight, no rotation_id on the entry.
+- No segment-level rotation picker (the show's rotation applies, not a per-segment one).
+- **Save-time block**: if the clock is not assigned to any show at save time, the API returns 400. The UI also shows a pre-save warning badge.
+- The "Add source" button is disabled in this mode — there is only ever one implicit source.
+
+#### Mode B: Segment Playlist
+
+The segment owns its sources explicitly. The operator selects specific playlists and one rotation document for the segment.
+
+- Source array contains one or more `playlist` entries, each with `playlist_id` and `weight`. All entries share a single `rotation_id` field at the segment level (one rotation picker for the whole segment, not per-row).
+- The picker defaults to the station's default rotation when the first source is added.
+- **Save-time block**: if the segment has playlist sources but `rotation_id` is null, the API returns 400. The UI shows a red border on the picker and a pre-save error badge.
+- Multiple playlists can be added; the dropdown excludes playlists already used by sibling rows.
+- `hot_play` / `heavy_rotation` fields remain in the schema (used by future rotation-document logic) but are not surfaced on the clock UI.
+
+**Tier concept is dropped.** The old `tier` field on source entries is not used, not persisted, and not displayed anywhere.
+
+**Switching modes** replaces all existing sources with a single default source for the new mode.
 
 ### Live / Live audience segments
 - Default source is `live` (harbor). Additional sources are valid (beds playlist, etc.).
 - The simple rotation dropdown appears only on non-`live` source rows.
 - Bed source toggles between `show_beds` (assigned clock) and a specific `playlist` (unassigned clock).
+- "Allow DJ to go live during this segment" (`accept_live`) lives in the **Content tab** for `music`, `news`, and `bulletin` segment types only. It is not shown for stop-set, voice-track, or live/live-audience segments.
 
 ### Stop-set segments — two fixed slots
 Two independent slots, each storing one entry in the segment's `sources` array:
@@ -150,14 +173,19 @@ type SweepSourceEntry = {
   rotation_id: number | null;  // FK to a sweeper-kind rotation document
 };
 
-// Segment source — playlist variant gains rotation_id
+// Music segment sources — two mutually exclusive modes (see §3)
+
+// Mode A: Show Playlist — single implicit entry, no weight, no rotation_id
+type ShowPlaylistSource = { type: 'show_playlist' };
+
+// Mode B: Segment Playlist — one or more explicit playlists, one shared rotation
 type PlaylistSource = {
   type: 'playlist';
   playlist_id: number;
   weight: number;
-  hot_play: boolean;       // kept in schema; not surfaced on clock UI
-  heavy_rotation: boolean; // kept in schema; not surfaced on clock UI
-  rotation_id: number | null;  // FK to a music-kind rotation document
+  hot_play: boolean;        // kept in schema; not surfaced on clock UI
+  heavy_rotation: boolean;  // kept in schema; not surfaced on clock UI
+  rotation_id: number | null;  // shared across all playlist sources in the segment
 };
 
 // Campaign / Promo source — gain optional rotation
@@ -165,8 +193,35 @@ type CampaignsSource = { type: 'campaigns'; rotation?: SimpleRotationType };
 type PromosSource    = { type: 'promos'; weight: number; rotation?: SimpleRotationType };
 ```
 
+## 6. Silence detection
+
+Silence detection is configured in two places.
+
+### Mix Engine (global defaults)
+
+Configured in **Settings → Mix Engine → Silence Detection**. Stored in `liquidsoap_config.silence_detection`:
+
+```ts
+type SilenceDetectionConfig = {
+  threshold_seconds: number;  // 1–60; default 5
+  fallback: 'none' | 'playlist';
+  fallback_playlist_id: number | null;  // required when fallback === 'playlist'
+};
+```
+
+When `fallback` is `'playlist'`, Liquidsoap switches to the specified playlist when silence exceeds `threshold_seconds` on the harbor input.
+
+### Per-segment threshold override
+
+Live segments (and any other segment type where `silence_threshold_seconds` is non-null) can override the global threshold. Stored as `clock_segments.silence_threshold_seconds: integer | null`. Null means "use the global default". Surfaced in the **Content tab** of live/live-audience segments.
+
+The old `silence_detection_action` column remains in the DB (libsql cannot drop columns) but is not read or written by the application.
+
+---
+
 ## Migration notes
 
 - DB migration adds: `clocks.show_id`, `clocks.finish_policy`, `clocks.join_policy`, `clocks.overrun_policy`, `rotations.kind`, `rotations.song_position`.
+- DB migration adds: `clock_segments.silence_threshold_seconds` (replaces the old `silence_detection_action` enum column, which is now inert).
 - JSON columns (`sweep_config`, `sources`) absorb their new fields without migration. Old rows missing the new fields parse fine because the zod schema treats them as optional.
 - The segment-level `rotation_type` column (`SimpleRotationType` on the segment as a whole) is retained for live / live_audience segments where a per-source rotation is overkill; stop-set ceases to use it (rotation moves into per-slot source entries).

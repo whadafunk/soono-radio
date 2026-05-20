@@ -46,6 +46,11 @@ export const LiquidsoapConfigSchema = z.object({
     attack_ms: z.number().int().min(1).max(2000).default(100),
     release_ms: z.number().int().min(1).max(10000).default(1000),
   }).default({}),
+  silence_detection: z.object({
+    threshold_seconds: z.number().int().min(1).max(60).default(5),
+    fallback: z.enum(['none', 'playlist']).default('none'),
+    fallback_playlist_id: z.number().int().positive().nullable().default(null),
+  }).default({}),
 });
 
 export type LiquidsoapConfig = z.infer<typeof LiquidsoapConfigSchema>;

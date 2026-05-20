@@ -5,13 +5,16 @@ import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@
 import { db } from '../db/index.js';
 import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows } from '../db/schema.js';
 
-// `used` = clock is referenced by any calendar / template / template_clock entry.
-// Computed as a correlated subquery so it survives the GROUP BY on clock_segments.
+// slot_count = template entries without a show (each row = one appearance)
+//            + template entries with a show (distinct shows, so Mon/Wed/Fri of the same show = 1)
+//            + per-hour template grid slots (template_clock_entries, each row = one appearance)
+//            + individual calendar overrides
 const usedExpr = sql<number>`(
   SELECT
-    (SELECT COUNT(*) FROM ${calendarEntries} WHERE ${calendarEntries.clock_id} = ${clocks.id}) +
-    (SELECT COUNT(*) FROM ${templateEntries} WHERE ${templateEntries.clock_id} = ${clocks.id}) +
-    (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${clocks.id})
+    (SELECT COUNT(*) FROM ${templateEntries} WHERE ${templateEntries.clock_id} = ${clocks.id} AND ${templateEntries.show_id} IS NULL) +
+    (SELECT COUNT(DISTINCT ${templateEntries.show_id}) FROM ${templateEntries} WHERE ${templateEntries.clock_id} = ${clocks.id} AND ${templateEntries.show_id} IS NOT NULL) +
+    (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${clocks.id}) +
+    (SELECT COUNT(*) FROM ${calendarEntries} WHERE ${calendarEntries.clock_id} = ${clocks.id})
 )`;
 
 export async function clockRoutes(fastify: FastifyInstance) {

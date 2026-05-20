@@ -17,6 +17,7 @@ import { HarborSection } from './liquidsoap-sections/HarborSection';
 import { CrossfadeSection } from './liquidsoap-sections/CrossfadeSection';
 import { MasterBusSection } from './liquidsoap-sections/MasterBusSection';
 import { DuckingSection } from './liquidsoap-sections/DuckingSection';
+import { SilenceDetectionSection } from './liquidsoap-sections/SilenceDetectionSection';
 
 export function LiquidSoapSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -112,6 +113,7 @@ export function LiquidSoapSettings() {
         <CrossfadeSection register={register} errors={errors} />
         <MasterBusSection register={register} />
         <DuckingSection register={register} control={control} />
+        <SilenceDetectionSection register={register} control={control} />
 
         <div className="flex gap-4">
           <button

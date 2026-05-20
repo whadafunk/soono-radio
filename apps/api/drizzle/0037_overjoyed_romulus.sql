@@ -1,0 +1,1 @@
+ALTER TABLE `clock_segments` ADD `silence_threshold_seconds` integer;

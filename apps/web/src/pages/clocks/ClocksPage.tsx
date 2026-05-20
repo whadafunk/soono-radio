@@ -481,7 +481,7 @@ export function ClocksPage() {
     <div className="h-full flex flex-col gap-4">
       <div className="flex-1 min-h-0 flex gap-4">
         {/* Left: clock list */}
-        <div className="w-64 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+        <div className="w-72 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
           <div className="px-4 py-4 border-b border-zinc-700 bg-zinc-800/50 flex items-center justify-between">
             <span className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Clocks</span>
             <button onClick={() => setCreatingNew(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors">
@@ -533,15 +533,15 @@ export function ClocksPage() {
                       <Clock className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
                       <span className="text-sm font-medium text-white truncate">{clock.name}</span>
                     </div>
-                    <div className="flex flex-wrap gap-x-2 gap-y-0.5 mt-1 ml-5 items-center">
+                    <div className="flex gap-x-2 mt-1 ml-5 items-center">
                       <span
-                        className={`text-[10px] px-1 py-0.5 rounded cursor-default ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}
+                        className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap cursor-default ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'invisible'}`}
                         title={assignedShows.length > 0 ? assignedShows.map((s) => s.name).join(', ') : undefined}
                       >
-                        Used{assignedShows.length > 0 ? ` (${assignedShows.length})` : ''}
+                        Used ({assignedShows.length})
                       </span>
-                      <span className={`text-[10px] px-1 py-0.5 rounded ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                        Scheduled{clock.slot_count > 0 ? ` (${clock.slot_count})` : ''}
+                      <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'invisible'}`}>
+                        Scheduled ({clock.slot_count})
                       </span>
                       <span className="basis-full" />
                       <span className={`text-xs ${secs > 3600 ? 'text-red-400' : 'text-zinc-400'}`}>{fmtDuration(secs)}</span>
@@ -616,9 +616,11 @@ export function ClocksPage() {
                     onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
                     className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
                   />
-                  <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                    Scheduled{draftClock.slot_count > 0 ? ` (${draftClock.slot_count})` : ''}
-                  </span>
+                  {draftClock.slot_count > 0 && (
+                    <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-300">
+                      Scheduled ({draftClock.slot_count})
+                    </span>
+                  )}
                   <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
@@ -629,33 +631,42 @@ export function ClocksPage() {
                 </div>
               )}
 
-              {/* Expanded: two-panel */}
+              {/* Expanded */}
               {headerOpen && (
-                <div className="flex items-stretch">
-                  {/* Left: identity + handover */}
-                  <div className="flex-1 min-w-0 px-5 py-4 space-y-4">
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => setHeaderOpen(false)} className="flex-shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors">
-                          <ChevronDown className="w-3.5 h-3.5" />
-                        </button>
-                        <input
-                          value={draftClock.name}
-                          onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
-                          className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
-                        />
-                      </div>
+                <div>
+                  {/* Header row */}
+                  <div className="flex items-start gap-3 px-4 py-3 border-b border-zinc-800">
+                    <button type="button" onClick={() => setHeaderOpen(false)} className="flex-shrink-0 text-zinc-500 hover:text-zinc-300 transition-colors mt-1">
+                      <ChevronDown className="w-3.5 h-3.5" />
+                    </button>
+                    <div className="flex-1 min-w-0">
+                      <input
+                        value={draftClock.name}
+                        onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
+                        className="w-full text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
+                      />
                       <input
                         value={draftClock.description ?? ''}
                         onChange={(e) => updateDraftClock((c) => ({ ...c, description: e.target.value || null }))}
                         placeholder="Add a description…"
-                        className="mt-2 ml-5 text-sm text-zinc-400 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-[calc(100%-1.25rem)] transition-colors pb-0.5 placeholder:text-zinc-600"
+                        className="mt-1 text-sm text-zinc-400 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-full transition-colors pb-0.5 placeholder:text-zinc-600"
                       />
                     </div>
+                    <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
+                      <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
+                      <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
+                        assignedShows={draftClock.assigned_shows}
+                        onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
+                        onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
+                        onDeleteCancel={() => setConfirmDelete(false)} row
+                      />
+                    </div>
+                  </div>
 
-                    {/* Handover */}
-                    <div className="space-y-3">
-                      <p className="text-xs font-medium text-zinc-400">Handover</p>
+                  {/* Body */}
+                  <div className="flex items-stretch">
+                    {/* Left: fields (~2/3) */}
+                    <div className="flex-[2] min-w-0 px-5 py-4 space-y-3">
                       <div>
                         <p className="text-xs text-zinc-400 mb-1 flex items-center gap-1">
                           Join policy
@@ -672,54 +683,17 @@ export function ClocksPage() {
                           ))}
                         </select>
                       </div>
-                    </div>
-                  </div>
-
-                  {/* Divider */}
-                  <div className="w-px bg-zinc-800 flex-shrink-0" />
-
-                  {/* Right: used by + playlists */}
-                  <div className="flex-shrink-0 w-56 px-5 py-4 space-y-4">
-                    {/* Used by */}
-                    <div className="rounded-lg bg-zinc-800/60 px-3 py-2.5 space-y-2">
-                      <p className="text-xs font-medium text-zinc-400">Used by</p>
-                      {draftClock.assigned_shows.length === 0 ? (
-                        <p className="text-xs text-zinc-500 italic">No shows assigned</p>
-                      ) : (
-                        <div className="flex flex-col gap-1">
-                          {draftClock.assigned_shows.slice(0, 3).map((s) => (
-                            <span key={s.id} className="text-xs text-zinc-300 truncate">{s.name}</span>
-                          ))}
-                          {draftClock.assigned_shows.length > 3 && (
-                            <span
-                              className="text-xs text-zinc-500 cursor-default"
-                              title={draftClock.assigned_shows.slice(3).map((s) => s.name).join(', ')}
-                            >
-                              +{draftClock.assigned_shows.length - 3} more
-                            </span>
-                          )}
-                        </div>
-                      )}
-                      <div className="flex flex-wrap gap-1.5 pt-0.5">
-                        <span className={`text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-700 text-zinc-500'}`}>
-                          Scheduled{draftClock.slot_count > 0 ? ` (${draftClock.slot_count})` : ''}
-                        </span>
-                        {draftClock.assigned_shows.length === 0 && draftSegs.some(
-                          (s) =>
-                            s.type === 'music' &&
-                            s.sources.some((src) => src.type === 'playlist') &&
-                            !s.sources.some((src) => src.type === 'playlist' && (src as Extract<SegmentSourceEntry, { type: 'playlist' }>).rotation_id),
-                        ) && (
-                          <span className="text-xs text-amber-400">Segment Playlist requires a rotation</span>
-                        )}
-                      </div>
-                    </div>
-
-                    {/* Playlists */}
-                    <div className="space-y-3">
-                      <p className="text-xs font-medium text-zinc-400">Playlists</p>
                       <div>
-                        <p className="text-xs text-zinc-400 mb-1">Station ID</p>
+                        <p className="text-xs text-zinc-400 mb-1">Jingles Playlist</p>
+                        <PlaylistDropdown
+                          value={draftClock.jingle_playlist_id ?? null}
+                          onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
+                          playlists={allPlaylists}
+                          categories={['jingle']}
+                        />
+                      </div>
+                      <div>
+                        <p className="text-xs text-zinc-400 mb-1">Station ID Playlist</p>
                         <PlaylistDropdown
                           value={draftClock.station_id_playlist_id ?? null}
                           onChange={(id) => updateDraftClock((c) => ({ ...c, station_id_playlist_id: id }))}
@@ -728,29 +702,31 @@ export function ClocksPage() {
                           filter={(p) => p.subcategory === 'stationid'}
                         />
                       </div>
+                    </div>
+
+                    {/* Divider */}
+                    <div className="w-px bg-zinc-800 flex-shrink-0" />
+
+                    {/* Right: used by shows (~1/3) */}
+                    <div className="flex-[1] min-w-0 px-5 py-4 space-y-3">
+                      {draftClock.slot_count > 0 && (
+                        <span className="inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-300">
+                          Scheduled ({draftClock.slot_count})
+                        </span>
+                      )}
                       <div>
-                        <p className="text-xs text-zinc-400 mb-1">Jingle</p>
-                        <PlaylistDropdown
-                          value={draftClock.jingle_playlist_id ?? null}
-                          onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
-                          playlists={allPlaylists}
-                          categories={['jingle']}
-                        />
+                        <p className="text-xs font-medium text-zinc-400 mb-2">Used by shows</p>
+                        {draftClock.assigned_shows.length === 0 ? (
+                          <p className="text-xs text-zinc-500 italic">No shows assigned</p>
+                        ) : (
+                          <div className="flex flex-col gap-1.5">
+                            {draftClock.assigned_shows.map((s) => (
+                              <span key={s.id} className="text-xs text-zinc-300 truncate">{s.name}</span>
+                            ))}
+                          </div>
+                        )}
                       </div>
                     </div>
-                  </div>
-
-                  {/* Divider */}
-                  <div className="w-px bg-zinc-800 flex-shrink-0" />
-
-                  {/* Actions */}
-                  <div className="flex-shrink-0 px-3 py-4 flex flex-col items-center justify-center gap-2">
-                    <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
-                      assignedShows={draftClock.assigned_shows}
-                      onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
-                      onDeleteRequest={() => setConfirmDelete(true)} onDeleteConfirm={() => deleteMutation.mutate(draftClock.id)}
-                      onDeleteCancel={() => setConfirmDelete(false)}
-                    />
                   </div>
                 </div>
               )}
@@ -2471,48 +2447,52 @@ function ClockActions({ dirty, isPending, confirmDelete, slotCount, assignedShow
   onSave: () => void; onDiscard: () => void;
   onDeleteRequest: () => void; onDeleteConfirm: () => void; onDeleteCancel: () => void;
 }) {
-  if (dirty) return (
+  const blocked = (assignedShows?.length ?? 0) > 0;
+  return (
     <div className={`flex ${row ? 'flex-row' : 'flex-col'} items-center gap-2`}>
-      <button onClick={onSave} disabled={isPending} className="px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-50">
+      <button
+        onClick={onSave}
+        disabled={!dirty || isPending}
+        className="px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-default"
+      >
         {isPending ? 'Saving…' : 'Save'}
       </button>
-      <button onClick={onDiscard} className="px-3 py-1.5 text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors">Discard</button>
-    </div>
-  );
-  if (confirmDelete) {
-    const blocked = (assignedShows?.length ?? 0) > 0;
-    return (
-      <div className={`flex ${row ? 'flex-row' : 'flex-col'} items-end gap-1.5`}>
-        {blocked ? (
-          <>
-            <span className="text-[11px] text-red-400 leading-tight text-right">
-              Assigned to {assignedShows!.slice(0, 3).map((s) => s.name).join(', ')}
-              {assignedShows!.length > 3 ? ` +${assignedShows!.length - 3} more` : ''}.
-              Remove from shows first.
+      <button
+        onClick={onDiscard}
+        disabled={!dirty}
+        className="px-3 py-1.5 text-xs text-zinc-300 bg-zinc-800 hover:bg-zinc-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-default"
+      >
+        Discard
+      </button>
+      {confirmDelete ? (
+        blocked ? (
+          <div className="flex items-center gap-1.5">
+            <span className="text-[11px] text-red-400 leading-tight">
+              Assigned to {assignedShows!.slice(0, 2).map((s) => s.name).join(', ')}
+              {assignedShows!.length > 2 ? ` +${assignedShows!.length - 2} more` : ''}.
+              Remove first.
             </span>
             <button onClick={onDeleteCancel} className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">OK</button>
-          </>
+          </div>
         ) : (
-          <>
+          <div className="flex items-center gap-1.5">
             {!!slotCount && (
-              <span className="text-[11px] text-amber-400 leading-tight text-right">
-                Scheduled in {slotCount} slot{slotCount !== 1 ? 's' : ''}. Slots will be orphaned.
+              <span className="text-[11px] text-amber-400 leading-tight">
+                {slotCount} slot{slotCount !== 1 ? 's' : ''} orphaned.
               </span>
             )}
-            <div className="flex items-center gap-1.5">
-              <span className="text-xs text-zinc-400">Delete?</span>
-              <button onClick={onDeleteConfirm} className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Yes</button>
-              <button onClick={onDeleteCancel} className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
-            </div>
-          </>
-        )}
-      </div>
-    );
-  }
-  return (
-    <button onClick={onDeleteRequest} className="p-1.5 text-zinc-600 hover:text-red-400 hover:bg-red-900/20 rounded transition-colors" title="Delete clock">
-      <Trash2 className="w-3.5 h-3.5" />
-    </button>
+            <span className="text-xs text-zinc-400">Delete?</span>
+            <button onClick={onDeleteConfirm} className="px-2.5 py-1 text-xs bg-red-600 hover:bg-red-700 text-white rounded transition-colors">Yes</button>
+            <button onClick={onDeleteCancel} className="px-2.5 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors">Cancel</button>
+          </div>
+        )
+      ) : (
+        <button onClick={onDeleteRequest} className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-zinc-400 hover:text-red-400 hover:bg-red-900/20 rounded-lg transition-colors">
+          <Trash2 className="w-3.5 h-3.5" />
+          Delete
+        </button>
+      )}
+    </div>
   );
 }
 
