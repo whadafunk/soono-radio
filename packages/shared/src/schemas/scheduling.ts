@@ -18,7 +18,7 @@ export type StartPolicy = z.infer<typeof StartPolicySchema>;
 
 // Event types that can be skipped (Catching Up) or added (Coasting) to manage drift.
 // Which types are applicable depends on the segment type and is enforced in the UI.
-export const DRIFT_EVENT_TYPES = ['songs', 'jingles', 'station_ids', 'spots', 'promos'] as const;
+export const DRIFT_EVENT_TYPES = ['songs', 'jingles', 'station_ids', 'spots', 'promos', 'fade_cut'] as const;
 export type DriftEventType = (typeof DRIFT_EVENT_TYPES)[number];
 
 // ============ SWEEPER CONFIG ============
