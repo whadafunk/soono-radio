@@ -535,9 +535,9 @@ export function ClocksPage() {
                     </div>
                     <div className="flex gap-x-2 mt-1 ml-5 items-center">
                       <span
-                        className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap cursor-default ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'invisible'}`}
+                        className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap cursor-default ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}
                       >
-                        Used ({assignedShows[0]?.name ?? ''})
+                        {assignedShows.length > 0 ? `Assigned (${assignedShows[0].name})` : 'Unassigned'}
                       </span>
                       <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'invisible'}`}>
                         Scheduled
