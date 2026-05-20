@@ -61,7 +61,6 @@ export async function pickNext(now: Date = new Date()): Promise<PickResult | nul
       return pickFromSegment(scheduled, now);
 
     case 'live':
-    case 'live_audience':
       // Harbor input drives this segment; the auto-source stays quiet.
       return null;
 

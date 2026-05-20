@@ -3,7 +3,7 @@ import { eq, asc, sql, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@radio/shared';
 import { db } from '../db/index.js';
-import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows } from '../db/schema.js';
+import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows, playHistory } from '../db/schema.js';
 
 // slot_count = all template weekly entries + per-hour grid slots + individual calendar overrides
 const usedExpr = sql<number>`(
@@ -193,6 +193,13 @@ export async function clockRoutes(fastify: FastifyInstance) {
       }
     }
 
+    // Null out play_history references before deleting — FK lacks ON DELETE SET NULL in actual DDL
+    const segIds = await db.select({ id: clockSegments.id }).from(clockSegments).where(eq(clockSegments.clock_id, id));
+    if (segIds.length > 0) {
+      await db.update(playHistory)
+        .set({ clock_segment_id: null })
+        .where(inArray(playHistory.clock_segment_id, segIds.map((r) => r.id)));
+    }
     await db.delete(clockSegments).where(eq(clockSegments.clock_id, id));
     if (parsed.data.length > 0) {
       await db.insert(clockSegments).values(

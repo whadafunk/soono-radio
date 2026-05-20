@@ -333,7 +333,6 @@ export type ClockInsert = typeof clocks.$inferInsert;
 export const CLOCK_SEGMENT_TYPES = [
   'music',
   'live',
-  'live_audience',
   'stop_set',
   'news',
   'voice_track',

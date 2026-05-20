@@ -59,13 +59,13 @@ export async function simulate(from: Date, to: Date): Promise<SimulatedPlay[]> {
 
     const segType = scheduled.segment.type;
 
-    // ── Live / live_audience / stop_set: emit one placeholder per segment ──
+    // ── Live / stop_set: emit one placeholder per segment ──
     // Phase E v1 doesn't simulate the internals of these — for live it's a
     // harbor input we can't predict; for stop_set the campaign-attribution
     // and advertiser-separation logic depends on synthetic history with full
     // fidelity that isn't worth the complexity for a preview tool. We mark
     // the segment as a block and advance to its end.
-    if (segType === 'live' || segType === 'live_audience' || segType === 'stop_set') {
+    if (segType === 'live' || segType === 'stop_set') {
       const segEnd = new Date(
         scheduled.segment_started_at.getTime() +
           scheduled.segment.duration_seconds * 1000,

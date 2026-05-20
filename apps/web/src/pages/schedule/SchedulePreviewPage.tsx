@@ -47,7 +47,6 @@ const SEGMENT_TYPE_ICONS: Record<string, typeof Music> = {
   bulletin: Radio,
   voice_track: Mic,
   live: Mic,
-  live_audience: Mic,
   stop_set: Megaphone,
 };
 
@@ -57,7 +56,6 @@ const SEGMENT_TYPE_COLORS: Record<string, string> = {
   bulletin: 'text-amber-300',
   voice_track: 'text-emerald-300',
   live: 'text-rose-300',
-  live_audience: 'text-rose-300',
   stop_set: 'text-violet-300',
 };
 

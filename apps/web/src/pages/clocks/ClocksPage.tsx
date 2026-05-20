@@ -91,7 +91,6 @@ const SWEEP_SOURCE_LABELS: Record<typeof SWEEP_SOURCES[number], string> = {
 const SEGMENT_META: Record<ClockSegmentType, { label: string; color: string; bg: string; border: string; text: string }> = {
   music:         { label: 'Music',          color: '#6366f1', bg: 'bg-indigo-500/15',  border: 'border-indigo-500/40',  text: 'text-indigo-300'  },
   live:          { label: 'Live',           color: '#10b981', bg: 'bg-emerald-500/15', border: 'border-emerald-500/40', text: 'text-emerald-300' },
-  live_audience: { label: 'Live Audience',  color: '#06b6d4', bg: 'bg-cyan-500/15',    border: 'border-cyan-500/40',    text: 'text-cyan-300'    },
   stop_set:      { label: 'Stop Set',       color: '#f59e0b', bg: 'bg-amber-500/15',   border: 'border-amber-500/40',   text: 'text-amber-300'   },
   news:          { label: 'News',           color: '#f43f5e', bg: 'bg-rose-500/15',    border: 'border-rose-500/40',    text: 'text-rose-300'    },
   voice_track:   { label: 'Tracking',       color: '#fb923c', bg: 'bg-orange-500/15',  border: 'border-orange-500/40',  text: 'text-orange-300'  },
@@ -114,7 +113,6 @@ const SOURCE_LABELS: Record<SegmentSourceEntry['type'], string> = {
 const VALID_SOURCE_TYPES: Record<ClockSegmentType, SegmentSourceEntry['type'][]> = {
   music:         ['show_playlist', 'playlist'],
   live:          ['live', 'show_beds', 'playlist'],
-  live_audience: ['live', 'show_beds', 'playlist'],
   stop_set:      ['campaigns', 'promos', 'playlist'],
   news:          ['live', 'recording'],
   voice_track:   ['playlist'],
@@ -135,7 +133,6 @@ const CATCHUP_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
   stop_set:      ['jingles', 'promos', 'spots'],
   news:          [],
   live:          [],
-  live_audience: [],
   voice_track:   [],
   bulletin:      [],
 };
@@ -146,7 +143,6 @@ const COASTING_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
   stop_set:      ['jingles', 'promos', 'spots'],
   news:          [],
   live:          [],
-  live_audience: [],
   voice_track:   ['jingles', 'station_ids', 'promos'],
   bulletin:      ['jingles', 'station_ids', 'promos'],
 };
@@ -154,7 +150,6 @@ const COASTING_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
 const DURATION_DEFAULT: Record<ClockSegmentType, number> = {
   music:          480,
   live:           600,
-  live_audience:  300,
   stop_set:       180,
   news:           120,
   voice_track:     60,
@@ -164,7 +159,6 @@ const DURATION_DEFAULT: Record<ClockSegmentType, number> = {
 const DURATION_STEP: Record<ClockSegmentType, number> = {
   music:          30,
   live:           60,
-  live_audience:  30,
   stop_set:       30,
   news:           30,
   voice_track:    15,
@@ -206,7 +200,6 @@ const TYPE_DEFAULTS: Record<ClockSegmentType, {
 }> = {
   music:         { sources: [{ type: 'show_playlist' }],                start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
   live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
-  live_audience: { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
   stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
   news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: null                         },
   voice_track:   { sources: [],                                                      start_policy: { type: 'hard' },                                    can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: false, sweeper_config: null                         },
@@ -1151,13 +1144,13 @@ function SegmentDrawer({
   }, [draft]);
 
   const meta = SEGMENT_META[draft.type];
-  const isLive = draft.type === 'live' || draft.type === 'live_audience';
+  const isLive = draft.type === 'live';
 
   const TABS: { id: DrawerTab; label: string }[] = [
     { id: 'content', label: 'Content' },
     { id: 'timing', label: 'Timing' },
     { id: 'transitions', label: 'Branding' },
-    { id: 'live', label: 'Sweepers & Live' },
+    ...(draft.type !== 'stop_set' ? [{ id: 'live' as DrawerTab, label: 'Sweepers & Live' }] : []),
   ];
 
   const flexPolicy = draft.start_policy.type === 'flexible'
@@ -1252,9 +1245,11 @@ function SegmentDrawer({
             <div className="col-span-2">
               <label className="block text-xs font-medium text-zinc-400 mb-2">
                 Source{' '}
-                <span className={`ml-1 text-[10px] font-normal px-1 py-0.5 rounded ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-400' : 'bg-indigo-900/30 text-indigo-400'}`}>
-                  {assignedShows.length > 0 ? 'Show' : 'Segment'}
-                </span>
+                {draft.type === 'music' && (
+                  <span className={`ml-1 text-[10px] font-normal px-1 py-0.5 rounded ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-400' : 'bg-indigo-900/30 text-indigo-400'}`}>
+                    {assignedShows.length > 0 ? 'Show' : 'Segment'}
+                  </span>
+                )}
               </label>
               <SourcesEditor
                 sources={draft.sources}
@@ -1308,26 +1303,7 @@ function SegmentDrawer({
               );
             })()}
 
-            {/* Live segments: bed rotation visible when at least one bed source (show_beds or playlist) is
-                present. This rotates across ALL bed sources collectively — it is not per-playlist.
-                Stop-set rotation lives per slot inside SourcesEditor; no segment-level rotation here. */}
-            {(draft.type === 'live' || draft.type === 'live_audience') &&
-              draft.sources.some((s) => s.type !== 'live') && (
-                <Field label="Bed rotation">
-                  <select
-                    value={draft.rotation_type ?? ''}
-                    onChange={(e) => update({ rotation_type: e.target.value === '' ? null : e.target.value as SimpleRotationType })}
-                    className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-                  >
-                    <option value="" className="bg-zinc-900">Default</option>
-                    {SIMPLE_ROTATION_TYPES.map((t) => (
-                      <option key={t} value={t} className="bg-zinc-900">{t === 'round_robin' ? 'Round robin' : 'Random'}</option>
-                    ))}
-                  </select>
-                </Field>
-              )}
-
-            {(draft.type === 'live' || draft.type === 'live_audience') && (
+{(draft.type === 'live') && (
               <Field label="Silence threshold" hint="Override the global silence detection threshold for this segment. Leave blank to use the Mix Engine default.">
                 <div className="flex items-center gap-2">
                   <input
@@ -1487,11 +1463,6 @@ function SegmentDrawer({
             <Field label="End clip playlist" hint="Plays after segment content">
               <PlaylistDropdown value={draft.end_clip_playlist_id} onChange={(v) => update({ end_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
             </Field>
-            {isLive && (
-              <Field label="Bed playlist" hint="Background audio under harbor input">
-                <PlaylistDropdown value={draft.bed_playlist_id} onChange={(v) => update({ bed_playlist_id: v })} playlists={playlists} categories={['bed']} />
-              </Field>
-            )}
             {draft.type === 'music' && (
               <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1 space-y-4">
                 {/* Between-track jingles */}
@@ -1595,7 +1566,7 @@ type PlaylistSource = Extract<SegmentSourceEntry, { type: 'playlist' }>;
 
 function playlistCategoriesForSegType(segType: ClockSegmentType): string[] {
   if (segType === 'music') return ['music'];
-  if (segType === 'live' || segType === 'live_audience') return ['bed'];
+  if (segType === 'live') return ['bed'];
   if (segType === 'stop_set') return ['promo'];
   return [];
 }
@@ -1790,7 +1761,40 @@ function SourcesEditor({
     );
   }
 
-  // Live types — harbor is implicit, nothing to configure
+  // Live — harbor always on, optional single beds playlist
+  if (segType === 'live') {
+    const bedPlaylists = playlists.filter(
+      (p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'bed',
+    );
+    const currentBedId = (sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined)?.playlist_id ?? null;
+    return (
+      <div className="space-y-3">
+        <div className="flex items-center gap-2 py-1">
+          <span className="w-2 h-2 rounded-full bg-emerald-500 flex-shrink-0" />
+          <span className="text-sm text-zinc-400">Harbor (live input)</span>
+        </div>
+        <div className="flex items-center gap-3">
+          <span className="text-xs text-zinc-400 w-10 flex-shrink-0">Beds</span>
+          <select
+            value={currentBedId ?? ''}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (!v) onChange([{ type: 'live' }]);
+              else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
+            }}
+            className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+          >
+            <option value="" className="bg-zinc-900">None</option>
+            {bedPlaylists.map((p) => (
+              <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
+            ))}
+          </select>
+        </div>
+      </div>
+    );
+  }
+
+  // Other live types — harbor is implicit, nothing to configure
   if (IMPLICIT_LIVE_TYPES.includes(segType)) {
     return (
       <div className="flex items-center gap-2 py-1">
@@ -1831,8 +1835,8 @@ function SourcesEditor({
     return <StopSetSourcesEditor sources={sources} onChange={onChange} playlists={playlists} />;
   }
 
-  // Live, live_audience — multi-source list
-  const validTypes = VALID_SOURCE_TYPES[segType];
+  // Fallback multi-source list (all segment types are currently handled above)
+  const validTypes = VALID_SOURCE_TYPES[segType as ClockSegmentType];
   const showWeight = false;
 
   // 'playlist' can appear multiple times; all other types are single-use
@@ -1872,7 +1876,7 @@ function SourcesEditor({
 
   const usedSingles = new Set(sources.filter((s) => !REPEATABLE.has(s.type)).map((s) => s.type));
   // Live segments allow only one bed playlist (show_beds counts separately as a single-use type).
-  const bedPlaylistCapped = (segType === 'live' || segType === 'live_audience') &&
+  const bedPlaylistCapped = (segType === 'live') &&
     sources.filter((s) => s.type === 'playlist').length >= 1;
   const cats = playlistCategoriesForSegType(segType);
   const eligiblePlaylists = cats.length ? playlists.filter((p) => cats.includes(playlistMediaCategory(p.type as any, p.subcategory as any))) : playlists;
@@ -1922,73 +1926,37 @@ function SourcesEditor({
 // determine which campaigns or promos are eligible to play in this segment; that
 // eligibility is resolved by the campaign scheduler based on booking rules.
 
-type StopSetCampaignsMode = 'none' | 'campaigns' | 'playlist';
-type StopSetPromosMode    = 'none' | 'promos' | 'playlist';
-
-function classifyStopSetSources(sources: SegmentSourceEntry[], playlists: PlaylistSummary[]) {
-  let campaignsMode: StopSetCampaignsMode = 'none';
+function classifyStopSetSources(sources: SegmentSourceEntry[]) {
+  let campaignsEnabled = false;
   let campaignsRotation: SimpleRotationType | undefined;
-  let campaignsPlaylistId: number | null = null;
-
-  let promosMode: StopSetPromosMode = 'none';
+  let promosEnabled = false;
   let promosRotation: SimpleRotationType | undefined;
-  let promosPlaylistId: number | null = null;
 
   for (const s of sources) {
     if (s.type === 'campaigns') {
-      campaignsMode = 'campaigns';
+      campaignsEnabled = true;
       campaignsRotation = s.rotation;
     } else if (s.type === 'promos') {
-      promosMode = 'promos';
+      promosEnabled = true;
       promosRotation = s.rotation;
-    } else if (s.type === 'playlist') {
-      const pl = playlists.find((p) => p.id === s.playlist_id);
-      if (playlistMediaCategory(pl?.type as any, (pl as any)?.subcategory) === 'spot') {
-        campaignsMode = 'playlist';
-        campaignsPlaylistId = s.playlist_id;
-        campaignsRotation = s.rotation;
-      } else {
-        promosMode = 'playlist';
-        promosPlaylistId = s.playlist_id;
-        promosRotation = s.rotation;
-      }
     }
   }
-  return {
-    campaignsMode, campaignsRotation, campaignsPlaylistId,
-    promosMode,    promosRotation,    promosPlaylistId,
-  };
+  return { campaignsEnabled, campaignsRotation, promosEnabled, promosRotation };
 }
 
 function StopSetSourcesEditor({
-  sources, onChange, playlists,
+  sources, onChange,
 }: {
   sources: SegmentSourceEntry[];
   onChange: (sources: SegmentSourceEntry[]) => void;
   playlists: PlaylistSummary[];
 }) {
-  const state = classifyStopSetSources(sources, playlists);
+  const state = classifyStopSetSources(sources);
 
   const buildSources = (next: typeof state): SegmentSourceEntry[] => {
     const out: SegmentSourceEntry[] = [];
-    // Campaigns slot
-    if (next.campaignsMode === 'campaigns') {
-      out.push({ type: 'campaigns', rotation: next.campaignsRotation });
-    } else if (next.campaignsMode === 'playlist' && next.campaignsPlaylistId !== null) {
-      out.push({
-        type: 'playlist', playlist_id: next.campaignsPlaylistId, weight: 1,
-        hot_play: false, heavy_rotation: false, rotation: next.campaignsRotation, rotation_id: null,
-      });
-    }
-    // Promos slot
-    if (next.promosMode === 'promos') {
-      out.push({ type: 'promos', weight: 1, rotation: next.promosRotation });
-    } else if (next.promosMode === 'playlist' && next.promosPlaylistId !== null) {
-      out.push({
-        type: 'playlist', playlist_id: next.promosPlaylistId, weight: 1,
-        hot_play: false, heavy_rotation: false, rotation: next.promosRotation, rotation_id: null,
-      });
-    }
+    if (next.campaignsEnabled) out.push({ type: 'campaigns', rotation: next.campaignsRotation });
+    if (next.promosEnabled)    out.push({ type: 'promos', weight: 1, rotation: next.promosRotation });
     return out;
   };
 
@@ -1996,53 +1964,18 @@ function StopSetSourcesEditor({
 
   return (
     <div className="space-y-3">
-      {/* Campaigns slot */}
       <StopSetSlot
         title="Campaigns"
-        mode={state.campaignsMode}
-        modeOptions={[
-          { value: 'none', label: 'None' },
-          { value: 'campaigns', label: 'Campaigns' },
-          { value: 'playlist', label: 'Campaigns playlist' },
-        ]}
-        playlistCategory="spot"
-        playlistId={state.campaignsPlaylistId}
+        enabled={state.campaignsEnabled}
         rotation={state.campaignsRotation}
-        playlists={playlists}
-        onModeChange={(mode) => {
-          const m = mode as StopSetCampaignsMode;
-          const firstSpot = playlists.find((p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'spot');
-          updateState({
-            campaignsMode: m,
-            campaignsPlaylistId: m === 'playlist' ? (state.campaignsPlaylistId ?? firstSpot?.id ?? null) : null,
-          });
-        }}
-        onPlaylistChange={(id) => updateState({ campaignsPlaylistId: id })}
+        onToggle={(v) => updateState({ campaignsEnabled: v })}
         onRotationChange={(r) => updateState({ campaignsRotation: r })}
       />
-
-      {/* Promos slot */}
       <StopSetSlot
         title="Promos"
-        mode={state.promosMode}
-        modeOptions={[
-          { value: 'none', label: 'None' },
-          { value: 'promos', label: 'Promos' },
-          { value: 'playlist', label: 'Promos playlist' },
-        ]}
-        playlistCategory="promo"
-        playlistId={state.promosPlaylistId}
+        enabled={state.promosEnabled}
         rotation={state.promosRotation}
-        playlists={playlists}
-        onModeChange={(mode) => {
-          const m = mode as StopSetPromosMode;
-          const firstPromo = playlists.find((p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'promo');
-          updateState({
-            promosMode: m,
-            promosPlaylistId: m === 'playlist' ? (state.promosPlaylistId ?? firstPromo?.id ?? null) : null,
-          });
-        }}
-        onPlaylistChange={(id) => updateState({ promosPlaylistId: id })}
+        onToggle={(v) => updateState({ promosEnabled: v })}
         onRotationChange={(r) => updateState({ promosRotation: r })}
       />
     </div>
@@ -2050,49 +1983,30 @@ function StopSetSourcesEditor({
 }
 
 function StopSetSlot({
-  title, mode, modeOptions, playlistCategory, playlistId, rotation, playlists,
-  onModeChange, onPlaylistChange, onRotationChange,
+  title, enabled, rotation,
+  onToggle, onRotationChange,
 }: {
   title: string;
-  mode: string;
-  modeOptions: { value: string; label: string }[];
-  playlistCategory: 'spot' | 'promo';
-  playlistId: number | null;
+  enabled: boolean;
   rotation: SimpleRotationType | undefined;
-  playlists: PlaylistSummary[];
-  onModeChange: (v: string) => void;
-  onPlaylistChange: (id: number | null) => void;
+  onToggle: (v: boolean) => void;
   onRotationChange: (r: SimpleRotationType | undefined) => void;
 }) {
-  const isNone = mode === 'none';
   return (
     <div className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
-      <div className="flex items-center gap-2 px-2 py-1.5 border-b border-zinc-800/60">
-        <span className="text-xs font-medium text-zinc-300 w-24">{title}</span>
-        <select
-          value={mode}
-          onChange={(e) => onModeChange(e.target.value)}
-          className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-        >
-          {modeOptions.map((o) => (
-            <option key={o.value} value={o.value} className="bg-zinc-900">{o.label}</option>
-          ))}
-        </select>
-      </div>
-      {!isNone && (
-        <div className="flex items-center gap-3 px-3 py-2">
-          {mode === 'playlist' && (
-            <div className="flex-1 min-w-0">
-              <PlaylistDropdown
-                value={playlistId}
-                onChange={onPlaylistChange}
-                playlists={playlists}
-                categories={[playlistCategory]}
-              />
-            </div>
-          )}
-          <div className="flex items-center gap-1.5 ml-auto">
-            <span className="text-xs text-zinc-500">Creative rotation</span>
+      <div className="flex items-center gap-2 px-3 py-2">
+        <label className="flex items-center gap-2 cursor-pointer select-none flex-1">
+          <input
+            type="checkbox"
+            checked={enabled}
+            onChange={(e) => onToggle(e.target.checked)}
+            className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer"
+          />
+          <span className="text-xs font-medium text-zinc-300">{title}</span>
+        </label>
+        {enabled && (
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-zinc-500">Rotation</span>
             <select
               value={rotation ?? ''}
               onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
@@ -2103,14 +2017,14 @@ function StopSetSlot({
               <option value="random" className="bg-zinc-900">Random</option>
             </select>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
 
 function getSourceLabel(type: SegmentSourceEntry['type'], segType: ClockSegmentType): string {
-  if (type === 'playlist' && (segType === 'live' || segType === 'live_audience')) return 'Beds playlist';
+  if (type === 'playlist' && (segType === 'live')) return 'Beds playlist';
   return SOURCE_LABELS[type];
 }
 
@@ -2154,7 +2068,7 @@ function SourceRow({
   // Playlist category filter for the dropdown
   const playlistCategories: string[] = (() => {
     if (segType === 'music') return ['music'];
-    if (segType === 'live' || segType === 'live_audience') return ['bed'];
+    if (segType === 'live') return ['bed'];
     if (segType === 'stop_set') return stopSetVariant === 'playlist_spot' ? ['spot'] : ['promo'];
     return [];
   })();

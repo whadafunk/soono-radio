@@ -89,7 +89,6 @@ export type SweeperType = (typeof SWEEPER_TYPES)[number];
 export const CLOCK_SEGMENT_TYPES = [
   'music',
   'live',
-  'live_audience',
   'stop_set',
   'news',
   'voice_track',
