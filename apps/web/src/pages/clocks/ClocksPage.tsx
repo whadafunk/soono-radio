@@ -1466,65 +1466,40 @@ function SegmentDrawer({
             {/* End policy */}
             <div className="col-span-2 space-y-3">
               <p className="text-xs font-medium text-zinc-400">End policy</p>
-              <div className="space-y-2">
-                {CATCHUP_TYPES[draft.type].length > 0 && (
-                  <label className="flex items-center gap-2.5 cursor-pointer">
-                    <input type="checkbox" checked={draft.can_skip} onChange={(e) => update({ can_skip: e.target.checked })}
-                      className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
-                    <div>
-                      <span className="text-xs font-medium text-zinc-200">Catching Up</span>
-                      <p className="text-xs text-zinc-500">Skip lower-priority events to recover time when running late.</p>
-                    </div>
-                  </label>
-                )}
-                {COASTING_TYPES[draft.type].length > 0 && (
-                  <label className="flex items-center gap-2.5 cursor-pointer">
-                    <input type="checkbox" checked={draft.can_fill} onChange={(e) => update({ can_fill: e.target.checked })}
-                      className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
-                    <div>
-                      <span className="text-xs font-medium text-zinc-200">Coasting</span>
-                      <p className="text-xs text-zinc-500">Fill dead air with short content when the segment ends early.</p>
-                    </div>
-                  </label>
-                )}
-                {(draft.type === 'voice_track' || draft.type === 'bulletin') && (
-                  <label className="flex items-center gap-2.5 cursor-pointer">
-                    <input type="checkbox" checked={draft.can_reschedule} onChange={(e) => update({ can_reschedule: e.target.checked })}
-                      className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
-                    <div>
-                      <span className="text-xs font-medium text-zinc-200">Reschedule if late</span>
-                      <p className="text-xs text-zinc-500">Defer the whole segment to the next available slot rather than playing it late.</p>
-                    </div>
-                  </label>
-                )}
-              </div>
+
+              {CATCHUP_TYPES[draft.type].length > 0 && (
+                <div>
+                  <p className="text-xs text-zinc-400 mb-1.5">Catching up — skip order <HelpTooltip text="Event types to skip when running late, in priority order. Check to enable, drag to reorder." /></p>
+                  <DriftOrderList
+                    allTypes={CATCHUP_TYPES[draft.type]}
+                    order={draft.catching_up_order}
+                    onChange={(next) => update({ catching_up_order: next, can_skip: next.length > 0 })}
+                  />
+                </div>
+              )}
+
+              {COASTING_TYPES[draft.type].length > 0 && (
+                <div>
+                  <p className="text-xs text-zinc-400 mb-1.5">Coasting — fill order <HelpTooltip text="Event types to fill with when the segment ends early, in preference order. Check to enable, drag to reorder." /></p>
+                  <DriftOrderList
+                    allTypes={COASTING_TYPES[draft.type]}
+                    order={draft.coasting_order}
+                    onChange={(next) => update({ coasting_order: next, can_fill: next.length > 0 })}
+                  />
+                </div>
+              )}
+
+              {(draft.type === 'voice_track' || draft.type === 'bulletin') && (
+                <label className="flex items-center gap-2.5 cursor-pointer">
+                  <input type="checkbox" checked={draft.can_reschedule} onChange={(e) => update({ can_reschedule: e.target.checked })}
+                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
+                  <div>
+                    <span className="text-xs font-medium text-zinc-200">Reschedule if late</span>
+                    <p className="text-xs text-zinc-500">Defer the whole segment to the next available slot rather than playing it late.</p>
+                  </div>
+                </label>
+              )}
             </div>
-
-            {/* Catching Up order */}
-            {draft.can_skip && CATCHUP_TYPES[draft.type].length > 0 && (
-              <div className="col-span-2">
-                <p className="text-xs font-medium text-zinc-400 mb-2">Catching Up — skip order</p>
-                <p className="text-xs text-zinc-500 mb-2.5">Event types to skip when running late, in priority order. Drag to reorder.</p>
-                <DriftOrderList
-                  allTypes={CATCHUP_TYPES[draft.type]}
-                  order={draft.catching_up_order}
-                  onChange={(next) => update({ catching_up_order: next })}
-                />
-              </div>
-            )}
-
-            {/* Coasting order */}
-            {draft.can_fill && COASTING_TYPES[draft.type].length > 0 && (
-              <div className="col-span-2">
-                <p className="text-xs font-medium text-zinc-400 mb-2">Coasting — fill order</p>
-                <p className="text-xs text-zinc-500 mb-2.5">Event types to fill with when the segment ends early, in preference order. Drag to reorder.</p>
-                <DriftOrderList
-                  allTypes={COASTING_TYPES[draft.type]}
-                  order={draft.coasting_order}
-                  onChange={(next) => update({ coasting_order: next })}
-                />
-              </div>
-            )}
           </div>
         )}
 
