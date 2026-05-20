@@ -5,14 +5,10 @@ import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@
 import { db } from '../db/index.js';
 import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows } from '../db/schema.js';
 
-// slot_count = template entries without a show (each row = one appearance)
-//            + template entries with a show (distinct shows, so Mon/Wed/Fri of the same show = 1)
-//            + per-hour template grid slots (template_clock_entries, each row = one appearance)
-//            + individual calendar overrides
+// slot_count = all template weekly entries + per-hour grid slots + individual calendar overrides
 const usedExpr = sql<number>`(
   SELECT
-    (SELECT COUNT(*) FROM ${templateEntries} WHERE ${templateEntries.clock_id} = ${clocks.id} AND ${templateEntries.show_id} IS NULL) +
-    (SELECT COUNT(DISTINCT ${templateEntries.show_id}) FROM ${templateEntries} WHERE ${templateEntries.clock_id} = ${clocks.id} AND ${templateEntries.show_id} IS NOT NULL) +
+    (SELECT COUNT(*) FROM ${templateEntries} WHERE ${templateEntries.clock_id} = ${clocks.id}) +
     (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${clocks.id}) +
     (SELECT COUNT(*) FROM ${calendarEntries} WHERE ${calendarEntries.clock_id} = ${clocks.id})
 )`;

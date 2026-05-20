@@ -536,16 +536,12 @@ export function ClocksPage() {
                     <div className="flex gap-x-2 mt-1 ml-5 items-center">
                       <span
                         className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap cursor-default ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'invisible'}`}
-                        title={assignedShows.length > 0 ? assignedShows.map((s) => s.name).join(', ') : undefined}
                       >
-                        Used ({assignedShows.length})
+                        Used ({assignedShows[0]?.name ?? ''})
                       </span>
                       <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'invisible'}`}>
-                        Scheduled ({clock.slot_count})
+                        Scheduled
                       </span>
-                      <span className="basis-full" />
-                      <span className={`text-xs ${secs > 3600 ? 'text-red-400' : 'text-zinc-400'}`}>{fmtDuration(secs)}</span>
-                      <span className="text-xs text-zinc-400">· {segs.length} seg</span>
                     </div>
                   </button>
                   {confirmingDelete ? (
@@ -723,7 +719,7 @@ export function ClocksPage() {
                         </span>
                       )}
                       <div>
-                        <p className="text-xs font-medium text-zinc-400 mb-2">Used by shows</p>
+                        <p className="text-xs font-medium text-zinc-400 mb-2">Assigned by</p>
                         {draftClock.assigned_shows.length === 0 ? (
                           <p className="text-xs text-zinc-500 italic">No shows assigned</p>
                         ) : (
