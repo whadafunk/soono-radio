@@ -31,8 +31,6 @@ import {
   StartPolicy,
   SweeperType,
   SWEEPER_TYPES,
-  SilenceDetectionAction,
-  SILENCE_DETECTION_ACTIONS,
   DRIFT_EVENT_TYPES,
   DriftEventType,
   SegmentSweeperConfig,
@@ -47,6 +45,7 @@ import {
   Rotation,
   playlistMediaCategory,
   type Playlist,
+  type ShowPlaylist,
 } from '@radio/shared';
 import {
   fetchClocks,
@@ -58,6 +57,7 @@ import {
   fetchPlaylists,
   fetchRotations,
   fetchSupervisorConfig,
+  fetchShowPlaylists,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
@@ -90,17 +90,17 @@ const SEGMENT_META: Record<ClockSegmentType, { label: string; color: string; bg:
   live_audience: { label: 'Live Audience',  color: '#06b6d4', bg: 'bg-cyan-500/15',    border: 'border-cyan-500/40',    text: 'text-cyan-300'    },
   stop_set:      { label: 'Stop Set',       color: '#f59e0b', bg: 'bg-amber-500/15',   border: 'border-amber-500/40',   text: 'text-amber-300'   },
   news:          { label: 'News',           color: '#f43f5e', bg: 'bg-rose-500/15',    border: 'border-rose-500/40',    text: 'text-rose-300'    },
-  voice_track:   { label: 'Voice Tracking', color: '#fb923c', bg: 'bg-orange-500/15',  border: 'border-orange-500/40',  text: 'text-orange-300'  },
+  voice_track:   { label: 'Tracking',       color: '#fb923c', bg: 'bg-orange-500/15',  border: 'border-orange-500/40',  text: 'text-orange-300'  },
   bulletin:      { label: 'Bulletin',       color: '#a78bfa', bg: 'bg-violet-500/15',  border: 'border-violet-500/40',  text: 'text-violet-300'  },
 };
 
 // Source type labels (for SegmentSourceEntry['type'])
 const SOURCE_LABELS: Record<SegmentSourceEntry['type'], string> = {
-  show_playlist: 'Show playlist',
+  show_playlist: 'Show Playlist',
   show_jingles:  'Show jingles',
   show_beds:     'Show beds',
   promos:        'Promos',
-  playlist:      'Specific playlist',
+  playlist:      'Segment Playlist',
   campaigns:     'Campaigns',
   live:          'Harbor (live)',
   recording:     'Recording',
@@ -114,7 +114,7 @@ const VALID_SOURCE_TYPES: Record<ClockSegmentType, SegmentSourceEntry['type'][]>
   stop_set:      ['campaigns', 'promos', 'playlist'],
   news:          ['live', 'recording'],
   voice_track:   ['playlist'],
-  bulletin:      ['live'],
+  bulletin:      ['live', 'recording'],
 };
 
 const DRIFT_EVENT_LABELS: Record<DriftEventType, string> = {
@@ -200,13 +200,13 @@ const TYPE_DEFAULTS: Record<ClockSegmentType, {
   accept_live: boolean;
   sweeper_config: SegmentSweeperConfig | null;
 }> = {
-  music:         { sources: [{ type: 'show_playlist', weight: 1 }],                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
+  music:         { sources: [{ type: 'show_playlist' }],                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
   live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
   live_audience: { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
   stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
   news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: null                         },
   voice_track:   { sources: [],                                                      start_policy: { type: 'hard' },                                    can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: false, sweeper_config: null                         },
-  bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: true,  sweeper_config: null                         },
+  bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: true,  sweeper_config: null                         },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -224,7 +224,7 @@ function totalSeconds(segments: SegmentDraft[]): number {
 
 function makeDefaultSource(type: SegmentSourceEntry['type']): SegmentSourceEntry {
   switch (type) {
-    case 'show_playlist': return { type, weight: 1 };
+    case 'show_playlist': return { type };
     case 'show_jingles':  return { type, weight: 1 };
     case 'show_beds':     return { type, weight: 1 };
     case 'promos':        return { type, weight: 1 };
@@ -265,7 +265,7 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
     accept_live: d.accept_live,
     accept_sweepers: [],
     sweeper_config: d.sweeper_config,
-    silence_detection_action: null,
+    silence_threshold_seconds: null,
     rotation_type: null,
   };
 }
@@ -293,7 +293,8 @@ export function ClocksPage() {
 
   const showSaveStatus = (type: 'success' | 'error', message: string) => {
     setSaveStatus({ type, message });
-    setTimeout(() => setSaveStatus(null), 3000);
+    if (type === 'success') setTimeout(() => setSaveStatus(null), 3000);
+    // errors stay until dismissed so the message can be read
   };
 
   const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
@@ -312,22 +313,6 @@ export function ClocksPage() {
 
   const saveMutation = useMutation({
     mutationFn: async () => {
-      // Save-time validation: unassigned clocks need a playlist source on every music segment.
-      // Backend enforces the same rule; we surface it here for a faster, clearer UX.
-      if (draftClock && draftClock.assigned_shows.length === 0) {
-        const offending = draftSegs
-          .map((s, i) => ({ s, i }))
-          .filter(({ s }) => s.type === 'music' && !s.sources.some(
-            (src) => src.type === 'playlist' && (src as Extract<typeof src, { type: 'playlist' }>).playlist_id > 0,
-          ));
-        if (offending.length > 0) {
-          throw new Error(
-            `Unassigned clock requires a specific playlist source (with a playlist selected) on every music segment (segment${
-              offending.length > 1 ? 's' : ''
-            } #${offending.map(({ i }) => i + 1).join(', #')})`,
-          );
-        }
-      }
       const promises: Promise<unknown>[] = [];
       if (clockDirty && draftClock)
         promises.push(updateClock(draftClock.id, {
@@ -349,7 +334,10 @@ export function ClocksPage() {
       setSegsDirty(false);
       showSaveStatus('success', 'Clock saved');
     },
-    onError: (e) => showSaveStatus('error', (e as Error).message),
+    onError: (e) => {
+      console.error('[clock save]', e);
+      showSaveStatus('error', (e as Error).message);
+    },
   });
 
   const createMutation = useMutation({
@@ -482,8 +470,9 @@ export function ClocksPage() {
 
   const total = totalSeconds(draftSegs);
   const overflow = total > 3600;
-  // Clock is structurally locked once it is referenced by any scheduled slot or assigned show.
-  const structureLocked = draftClock !== null && (draftClock.used || draftClock.assigned_shows.length > 0);
+  // Clock is structurally locked only when actually scheduled (calendar / template slots).
+  // Show assignment alone does NOT lock — it is a design-time hint.
+  const structureLocked = draftClock !== null && draftClock.used;
 
   return (
     <div className="h-full flex flex-col gap-4">
@@ -627,7 +616,7 @@ export function ClocksPage() {
                   <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
                     Scheduled{draftClock.slot_count > 0 ? ` (${draftClock.slot_count})` : ''}
                   </span>
-                  <SaveStatus status={saveStatus} />
+                  <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
                     onSave={() => saveMutation.mutate()} onDiscard={handleDiscard}
@@ -736,8 +725,13 @@ export function ClocksPage() {
                         <span className={`text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-700 text-zinc-500'}`}>
                           Scheduled{draftClock.slot_count > 0 ? ` (${draftClock.slot_count})` : ''}
                         </span>
-                        {draftClock.assigned_shows.length === 0 && (
-                          <span className="text-xs text-amber-400">Segments need explicit playlist sources</span>
+                        {draftClock.assigned_shows.length === 0 && draftSegs.some(
+                          (s) =>
+                            s.type === 'music' &&
+                            s.sources.some((src) => src.type === 'playlist') &&
+                            !s.sources.some((src) => src.type === 'playlist' && (src as Extract<SegmentSourceEntry, { type: 'playlist' }>).rotation_id),
+                        ) && (
+                          <span className="text-xs text-amber-400">Segment Playlist requires a rotation</span>
                         )}
                       </div>
                     </div>
@@ -824,7 +818,7 @@ export function ClocksPage() {
                 <div className="px-5 py-2.5 bg-amber-500/8 border-b border-amber-500/20 flex items-center gap-2 flex-shrink-0">
                   <Lock className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
                   <p className="text-xs text-amber-400/80">
-                    Structure locked — scheduled in {draftClock!.slot_count} slot{draftClock!.slot_count !== 1 ? 's' : ''}{draftClock!.assigned_shows.length > 0 ? ` and assigned to ${draftClock!.assigned_shows.length} show${draftClock!.assigned_shows.length !== 1 ? 's' : ''}` : ''}. Segment count, order, types, and durations cannot change.
+                    Structure locked — clock is scheduled in {draftClock!.slot_count} slot{draftClock!.slot_count !== 1 ? 's' : ''}. Segment count, order, types, and durations cannot change.
                   </p>
                 </div>
               )}
@@ -843,6 +837,7 @@ export function ClocksPage() {
                   playlists={allPlaylists}
                   musicRotations={musicRotations}
                   sweeperRotations={sweeperRotations}
+                  assignedShows={draftClock!.assigned_shows}
                 />
                 {draftSegs.length === 0 && (
                   <div className="px-5 py-10 text-center text-zinc-400 text-sm">
@@ -933,9 +928,20 @@ function ClockTimeline({
 
   return (
     <div className="flex-shrink-0 bg-zinc-900 border border-zinc-800 rounded-lg px-5 py-4">
-      <div className="flex items-center justify-between mb-3">
+      <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Hour overview</span>
-        <span className="text-xs text-zinc-400 font-mono">60 min</span>
+      </div>
+      <div className="relative h-4 mb-1">
+        {[15, 30, 45].map((min) => (
+          <span
+            key={min}
+            className="absolute bottom-0 text-xs text-zinc-400 font-mono -translate-x-1/2"
+            style={{ left: `${(min / 60) * 100}%` }}
+          >
+            {min}m
+          </span>
+        ))}
+        <span className="absolute bottom-0 right-0 text-xs text-zinc-400 font-mono">60m</span>
       </div>
       <DndContext
         sensors={sensors}
@@ -965,6 +971,15 @@ function ClockTimeline({
                 <span className="text-xs text-zinc-400">{fmtDuration(3600 - total)} free</span>
               </div>
             )}
+            {[15, 30, 45].map((min) => (
+              <div
+                key={min}
+                className="absolute top-0 bottom-0 pointer-events-none"
+                style={{ left: `${(min / 60) * 100}%` }}
+              >
+                <div className="w-px h-full bg-zinc-600/60" />
+              </div>
+            ))}
           </div>
         </SortableContext>
       </DndContext>
@@ -980,6 +995,12 @@ function ClockTimeline({
             </div>
           );
         })}
+        {segments.length > 0 && (
+          <div className="flex items-center gap-1.5 pl-2 border-l border-zinc-700">
+            <span className="text-xs text-zinc-300">Total</span>
+            <span className={`text-xs font-mono ${total > 3600 ? 'text-red-400' : 'text-zinc-400'}`}>{fmtDuration(total)}</span>
+          </div>
+        )}
       </div>
     </div>
   );
@@ -988,7 +1009,7 @@ function ClockTimeline({
 // ─── Segment list (accordion) ─────────────────────────────────────────────────
 
 function SegmentList({
-  segments, expandedId, locked, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
+  segments, expandedId, locked, onExpandToggle, onDragStart, onReorder, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations, assignedShows,
 }: {
   segments: SegmentDraft[];
   expandedId: number | null;
@@ -1002,6 +1023,7 @@ function SegmentList({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
+  assignedShows: { id: number; name: string }[];
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -1032,6 +1054,7 @@ function SegmentList({
               playlists={playlists}
               musicRotations={musicRotations}
               sweeperRotations={sweeperRotations}
+              assignedShows={assignedShows}
             />
           ))}
         </div>
@@ -1043,7 +1066,7 @@ function SegmentList({
 // ─── Sortable segment item ────────────────────────────────────────────────────
 
 function SortableSegmentItem({
-  segment, isExpanded, locked, onExpand, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations,
+  segment, isExpanded, locked, onExpand, onUpdate, onDelete, onChangeType, playlists, musicRotations, sweeperRotations, assignedShows,
 }: {
   segment: SegmentDraft;
   isExpanded: boolean;
@@ -1055,6 +1078,7 @@ function SortableSegmentItem({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
+  assignedShows: { id: number; name: string }[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: segment.id, disabled: locked });
   const meta = SEGMENT_META[segment.type];
@@ -1132,6 +1156,7 @@ function SortableSegmentItem({
             playlists={playlists}
             musicRotations={musicRotations}
             sweeperRotations={sweeperRotations}
+            assignedShows={assignedShows}
           />
         )}
       </div>
@@ -1144,7 +1169,7 @@ function SortableSegmentItem({
 type DrawerTab = 'content' | 'timing' | 'transitions' | 'live';
 
 function SegmentDrawer({
-  segment, locked, onApply, onChangeType, playlists, musicRotations, sweeperRotations,
+  segment, locked, onApply, onChangeType, playlists, musicRotations, sweeperRotations, assignedShows,
 }: {
   segment: SegmentDraft;
   locked: boolean;
@@ -1153,23 +1178,26 @@ function SegmentDrawer({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
+  assignedShows: { id: number; name: string }[];
 }) {
   const [tab, setTab] = useState<DrawerTab>('content');
   const [draft, setDraft] = useState<SegmentDraft>({ ...segment });
-  const [applied, setApplied] = useState(false);
-
-  const drawerDirty = JSON.stringify(draft) !== JSON.stringify(segment);
 
   const update = (patch: Partial<SegmentDraft>) => setDraft((d) => ({ ...d, ...patch }));
 
-  const handleApply = () => {
-    onApply(draft);
-    setApplied(true);
-    setTimeout(() => setApplied(false), 1500);
-  };
+  // Auto-apply: propagate every draft change to the parent immediately so the
+  // clock-level Save always sees current state without a manual Apply step.
+  const prevJson = useRef(JSON.stringify(segment));
+  useEffect(() => {
+    const current = JSON.stringify(draft);
+    if (current !== prevJson.current) {
+      prevJson.current = current;
+      onApply(draft);
+    }
+  }, [draft]);
 
   const meta = SEGMENT_META[draft.type];
-  const isLive = draft.type === 'live' || draft.type === 'live_audience' || draft.type === 'bulletin';
+  const isLive = draft.type === 'live' || draft.type === 'live_audience';
 
   const TABS: { id: DrawerTab; label: string }[] = [
     { id: 'content', label: 'Content' },
@@ -1268,50 +1296,63 @@ function SegmentDrawer({
             </Field>
 
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-zinc-400 mb-2">Sources</label>
+              <label className="block text-xs font-medium text-zinc-400 mb-2">
+                Source{' '}
+                <span className={`ml-1 text-[10px] font-normal px-1 py-0.5 rounded ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-400' : 'bg-indigo-900/30 text-indigo-400'}`}>
+                  {assignedShows.length > 0 ? 'Show' : 'Segment'}
+                </span>
+              </label>
               <SourcesEditor
                 sources={draft.sources}
                 segType={draft.type}
                 onChange={(sources) => update({ sources })}
                 playlists={playlists}
+                musicRotations={musicRotations}
+                assignedShows={assignedShows}
               />
             </div>
 
-            {/* Music rotation — one rotation document for ALL playlists in this segment collectively.
-                Shown at segment level; the rotation_id is written to every playlist source on change. */}
-            {draft.type === 'music' && draft.sources.some((s) => s.type === 'playlist') && (
-              musicRotations.length > 0 ? (
-                <Field label="Music rotation">
-                  <select
-                    value={(() => {
-                      const pl = draft.sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined;
-                      return pl?.rotation_id ?? musicRotations[0]?.id ?? '';
-                    })()}
-                    onChange={(e) => {
-                      const rid = e.target.value === '' ? null : Number(e.target.value);
-                      update({
-                        sources: draft.sources.map((s) =>
-                          s.type === 'playlist' ? { ...s, rotation_id: rid } : s
-                        ),
-                      });
-                    }}
-                    className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-                  >
-                    {musicRotations.map((r) => (
-                      <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}{r.is_default ? ' (default)' : ''}</option>
-                    ))}
-                  </select>
-                </Field>
-              ) : (
-                <p className="text-xs text-zinc-500">
-                  No rotation documents —{' '}
-                  <Link to="/rotations" className="text-indigo-400 hover:text-indigo-300 underline-offset-2 hover:underline">
-                    create one in Rotations
-                  </Link>{' '}
-                  to control play order.
-                </p>
-              )
-            )}
+            {draft.type === 'music' && assignedShows.length === 0 && draft.sources.some((s) => s.type === 'playlist') && (() => {
+              const currentRotationId = (draft.sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined)?.rotation_id ?? null;
+              const hasNoRotation = !currentRotationId;
+              if (musicRotations.length === 0) {
+                return (
+                  <p className="text-xs text-zinc-500 col-span-2">
+                    No rotation documents —{' '}
+                    <Link to="/rotations" className="text-indigo-400 hover:text-indigo-300 underline-offset-2 hover:underline">
+                      create one in Rotations
+                    </Link>{' '}
+                    to control play order for Segment Playlist mode.
+                  </p>
+                );
+              }
+              return (
+                <div className="col-span-2 space-y-1">
+                  <Field label="Music rotation">
+                    <select
+                      value={currentRotationId ?? ''}
+                      onChange={(e) => {
+                        const rid = e.target.value === '' ? null : Number(e.target.value);
+                        update({
+                          sources: draft.sources.map((s) =>
+                            s.type === 'playlist' ? { ...s, rotation_id: rid } : s
+                          ),
+                        });
+                      }}
+                      className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${hasNoRotation ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-indigo-500'}`}
+                    >
+                      <option value="" disabled className="bg-zinc-900">— select a rotation —</option>
+                      {musicRotations.map((r) => (
+                        <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}{r.is_default ? ' (default)' : ''}</option>
+                      ))}
+                    </select>
+                  </Field>
+                  {hasNoRotation && (
+                    <p className="text-xs text-red-400">A rotation is required for Segment Playlist mode.</p>
+                  )}
+                </div>
+              );
+            })()}
 
             {/* Live segments: bed rotation visible when at least one bed source (show_beds or playlist) is
                 present. This rotates across ALL bed sources collectively — it is not per-playlist.
@@ -1331,6 +1372,40 @@ function SegmentDrawer({
                   </select>
                 </Field>
               )}
+
+            {(draft.type === 'live' || draft.type === 'live_audience') && (
+              <Field label="Silence threshold" hint="Override the global silence detection threshold for this segment. Leave blank to use the Mix Engine default.">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="number"
+                    min={1}
+                    max={60}
+                    placeholder="Global default"
+                    value={draft.silence_threshold_seconds ?? ''}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      update({ silence_threshold_seconds: !isNaN(v) && v >= 1 ? v : null });
+                    }}
+                    className="w-28 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+                  />
+                  <span className="text-sm text-zinc-500">s</span>
+                </div>
+              </Field>
+            )}
+
+            {(draft.type === 'music' || draft.type === 'news' || draft.type === 'bulletin') && (
+              <Field label="Accept live" hint="Allow the DJ to take over this segment via the harbor input">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={draft.accept_live}
+                    onChange={(e) => update({ accept_live: e.target.checked })}
+                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                  />
+                  <span className="text-sm text-zinc-300">Allow DJ to go live during this segment</span>
+                </label>
+              </Field>
+            )}
           </div>
         )}
 
@@ -1541,20 +1616,6 @@ function SegmentDrawer({
         {/* ── Sweepers & Live tab ── */}
         {tab === 'live' && (
           <div className="grid grid-cols-2 gap-4">
-            {!isLive && (
-              <Field label="Accept live (harbor)" className="col-span-2">
-                <label className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={draft.accept_live}
-                    onChange={(e) => update({ accept_live: e.target.checked })}
-                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
-                  />
-                  <span className="text-sm text-zinc-300">Allow DJ to go live during this segment</span>
-                </label>
-              </Field>
-            )}
-
             {draft.type !== 'stop_set' && (
               <div className="col-span-2">
                 <SegmentSweeperEditor
@@ -1565,49 +1626,17 @@ function SegmentDrawer({
               </div>
             )}
 
-            {isLive && (
-              <Field label="Silence detection action" hint="Triggered when silence is detected on the harbor input">
-                <select
-                  value={draft.silence_detection_action ?? 'none'}
-                  onChange={(e) => update({ silence_detection_action: e.target.value === 'none' ? null : e.target.value as SilenceDetectionAction })}
-                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-                >
-                  <option value="none" className="bg-zinc-900">None</option>
-                  {SILENCE_DETECTION_ACTIONS.filter((a) => a !== 'none').map((a) => (
-                    <option key={a} value={a} className="bg-zinc-900">{a.replace(/_/g, ' ')}</option>
-                  ))}
-                </select>
-              </Field>
-            )}
           </div>
         )}
       </div>
 
-      <div className="flex justify-end items-center gap-3 px-5 pb-4">
-        {drawerDirty && !applied && (
-          <span className="text-xs text-amber-400">Unapplied changes</span>
-        )}
-        <button
-          onClick={handleApply}
-          disabled={!drawerDirty}
-          className={`px-4 py-1.5 text-xs rounded-lg transition-all duration-200 ${
-            applied
-              ? 'bg-green-600 text-white'
-              : drawerDirty
-              ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
-              : 'bg-zinc-800 text-zinc-500 cursor-default'
-          }`}
-        >
-          {applied ? '✓ Applied' : 'Apply'}
-        </button>
-      </div>
     </div>
   );
 }
 
 // ─── Sources editor ───────────────────────────────────────────────────────────
 
-const IMPLICIT_LIVE_TYPES: ClockSegmentType[] = ['bulletin'];
+const IMPLICIT_LIVE_TYPES: ClockSegmentType[] = [];
 
 type PlaylistSource = Extract<SegmentSourceEntry, { type: 'playlist' }>;
 
@@ -1618,14 +1647,196 @@ function playlistCategoriesForSegType(segType: ClockSegmentType): string[] {
   return [];
 }
 
+function MusicSourceEditor({
+  sources, onChange, playlists, musicRotations, assignedShows,
+}: {
+  sources: SegmentSourceEntry[];
+  onChange: (sources: SegmentSourceEntry[]) => void;
+  playlists: PlaylistSummary[];
+  musicRotations: Rotation[];
+  assignedShows: { id: number; name: string }[];
+}) {
+  const isAssigned = assignedShows.length > 0;
+  const playlistSources = sources.filter(
+    (s): s is Extract<SegmentSourceEntry, { type: 'playlist' }> => s.type === 'playlist',
+  );
+  const musicPlaylists = playlists.filter((p) => p.type === 'music');
+  const defaultRotationId = musicRotations.find((r) => r.is_default)?.id ?? musicRotations[0]?.id ?? null;
+
+  const singleShowId = isAssigned && assignedShows.length === 1 ? assignedShows[0].id : null;
+  const { data: showPlaylists = [] } = useQuery<ShowPlaylist[]>({
+    queryKey: ['show-playlists', singleShowId],
+    queryFn: () => fetchShowPlaylists(singleShowId!),
+    enabled: singleShowId !== null,
+  });
+
+  // Normalize sources to match assignment state
+  useEffect(() => {
+    if (isAssigned && !sources.some((s) => s.type === 'show_playlist')) {
+      onChange([{ type: 'show_playlist' }]);
+    } else if (!isAssigned && sources.length > 0 && sources.every((s) => s.type === 'show_playlist')) {
+      onChange([]);
+    }
+  }, [isAssigned]);
+
+  const addPlaylist = () => {
+    const usedIds = new Set(playlistSources.map((s) => s.playlist_id));
+    const first = musicPlaylists.find((p) => !usedIds.has(p.id));
+    const rotationId = playlistSources[0]?.rotation_id ?? defaultRotationId ?? null;
+    onChange([...sources.filter((s) => s.type !== 'show_playlist'), {
+      type: 'playlist',
+      playlist_id: first?.id ?? 0,
+      weight: 1,
+      hot_play: false,
+      heavy_rotation: false,
+      rotation_id: rotationId,
+    }]);
+  };
+
+  const updateSource = (srcIdx: number, patch: Partial<Extract<SegmentSourceEntry, { type: 'playlist' }>>) => {
+    onChange(sources.map((s, i) => (i === srcIdx ? { ...s, ...patch } as SegmentSourceEntry : s)));
+  };
+
+  const removeSource = (srcIdx: number) => {
+    onChange(sources.filter((_, i) => i !== srcIdx));
+  };
+
+  // ── Show-assigned: read-only view of the show's music library ────────────────
+  if (isAssigned) {
+    if (assignedShows.length > 1) {
+      return (
+        <div className="text-sm text-zinc-400 bg-zinc-900 rounded border border-zinc-800 px-3 py-2">
+          Multiple shows assigned — playlists are configured per show.
+        </div>
+      );
+    }
+    const show = assignedShows[0];
+    if (showPlaylists.length === 0) {
+      return (
+        <div className="space-y-1.5">
+          <div className="flex items-center gap-2 bg-zinc-900 rounded px-3 py-2 border border-zinc-800">
+            <span className="text-sm text-zinc-500">
+              No music playlists on <span className="text-zinc-300">{show.name}</span> yet
+            </span>
+          </div>
+          <p className="text-xs text-zinc-600">Add playlists on the show's Music tab.</p>
+        </div>
+      );
+    }
+    const sharedRotation = musicRotations.find((r) => r.id === showPlaylists[0]?.rotation_id);
+    return (
+      <div className="space-y-2">
+        {showPlaylists.map((sp) => (
+          <div key={sp.id} className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden opacity-80">
+            <div className="flex items-center gap-4 px-3 py-2">
+              <span className="flex-1 text-sm text-zinc-300 truncate">{sp.playlist_name}</span>
+              <span className="text-xs text-zinc-500 flex-shrink-0">
+                wt <span className="text-zinc-300">{sp.weight}</span>
+              </span>
+            </div>
+          </div>
+        ))}
+        <div className="flex items-center gap-2 px-1">
+          <span className="text-xs text-zinc-400">Music rotation</span>
+          <span className="text-xs text-zinc-300">
+            {sharedRotation ? sharedRotation.name : <span className="text-zinc-400">Default</span>}
+          </span>
+          <Lock className="w-3 h-3 text-zinc-500 ml-auto" />
+        </div>
+        <p className="text-xs text-zinc-400">Configured on {show.name}'s Music tab — read only here.</p>
+      </div>
+    );
+  }
+
+  // ── Standalone: editable segment playlists ───────────────────────────────────
+  return (
+    <div className="space-y-2">
+      {sources.map((src, srcIdx) => {
+        if (src.type !== 'playlist') return null;
+        const ps = src as Extract<SegmentSourceEntry, { type: 'playlist' }>;
+        const usedIds = new Set(
+          sources
+            .filter((s, i): s is Extract<SegmentSourceEntry, { type: 'playlist' }> => s.type === 'playlist' && i !== srcIdx)
+            .map((s) => s.playlist_id),
+        );
+        const available = musicPlaylists.filter((p) => !usedIds.has(p.id) || p.id === ps.playlist_id);
+        return (
+          <div key={srcIdx} className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
+            <div className="flex items-center gap-4 px-3 py-2">
+              {playlistSources.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => removeSource(srcIdx)}
+                  className="p-1.5 -ml-1 text-zinc-400 hover:text-red-400 transition-colors rounded hover:bg-red-900/20 order-last"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
+              <div className="flex-1 min-w-0 space-y-1">
+                <PlaylistDropdown
+                  value={ps.playlist_id || null}
+                  onChange={(v) => updateSource(srcIdx, { playlist_id: v ?? 0 })}
+                  playlists={available}
+                  categories={['music']}
+                  allowNone={false}
+                  invalid={!ps.playlist_id}
+                />
+                {!ps.playlist_id && <p className="text-xs text-red-400">A playlist must be selected.</p>}
+              </div>
+              <div className="flex items-center gap-1.5 flex-shrink-0">
+                <span className="text-xs text-zinc-500">Weight</span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  value={ps.weight}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value, 10);
+                    if (!isNaN(v) && v >= 1) updateSource(srcIdx, { weight: v });
+                  }}
+                  className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                />
+              </div>
+            </div>
+          </div>
+        );
+      })}
+      {musicPlaylists.length === 0 ? (
+        <p className="text-xs text-zinc-500">
+          No music playlists —{' '}
+          <Link to="/playlists" className="text-indigo-400 hover:text-indigo-300">create one first</Link>
+        </p>
+      ) : musicPlaylists.length > playlistSources.length && (
+        <button type="button" onClick={addPlaylist} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+          + Add playlist
+        </button>
+      )}
+    </div>
+  );
+}
+
 function SourcesEditor({
-  sources, segType, onChange, playlists,
+  sources, segType, onChange, playlists, musicRotations = [], assignedShows = [],
 }: {
   sources: SegmentSourceEntry[];
   segType: ClockSegmentType;
   onChange: (sources: SegmentSourceEntry[]) => void;
   playlists: PlaylistSummary[];
+  musicRotations?: Rotation[];
+  assignedShows?: { id: number; name: string }[];
 }) {
+  if (segType === 'music') {
+    return (
+      <MusicSourceEditor
+        sources={sources}
+        onChange={onChange}
+        playlists={playlists}
+        musicRotations={musicRotations}
+        assignedShows={assignedShows}
+      />
+    );
+  }
+
   // Live types — harbor is implicit, nothing to configure
   if (IMPLICIT_LIVE_TYPES.includes(segType)) {
     return (
@@ -1636,8 +1847,8 @@ function SourcesEditor({
     );
   }
 
-  // News — single source, either harbor or recordings (mutually exclusive)
-  if (segType === 'news') {
+  // News / Bulletin — single source, either harbor or recording (mutually exclusive)
+  if (segType === 'news' || segType === 'bulletin') {
     const currentType = (sources[0]?.type ?? 'live') as 'live' | 'recording';
     return (
       <select
@@ -1646,7 +1857,7 @@ function SourcesEditor({
         className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
       >
         <option value="live" className="bg-zinc-900">Harbor (live)</option>
-        <option value="recording" className="bg-zinc-900">Recordings</option>
+        <option value="recording" className="bg-zinc-900">Recording</option>
       </select>
     );
   }
@@ -1667,9 +1878,9 @@ function SourcesEditor({
     return <StopSetSourcesEditor sources={sources} onChange={onChange} playlists={playlists} />;
   }
 
-  // Music, live, live_audience — multi-source list
+  // Live, live_audience — multi-source list
   const validTypes = VALID_SOURCE_TYPES[segType];
-  const showWeight = segType === 'music';
+  const showWeight = false;
 
   // 'playlist' can appear multiple times; all other types are single-use
   const REPEATABLE = new Set<SegmentSourceEntry['type']>(['playlist']);
@@ -1964,7 +2175,6 @@ function SourceRow({
   segType: ClockSegmentType;
 }) {
   const availableTypes = validTypes.filter((t) => t === source.type || !usedTypes.has(t));
-  const hasTier = source.type === 'show_playlist';
   const isPlaylist = source.type === 'playlist';
   const hasWeight = showWeight && 'weight' in source;
   const playlistSrc = isPlaylist ? (source as PlaylistSource) : null;
@@ -2006,6 +2216,13 @@ function SourceRow({
     } else if (val === 'playlist_spot') {
       setStopSetVariant('playlist_spot');
       const first = playlists.find(p => playlistMediaCategory(p.type as any, p.subcategory as any) === 'spot');
+      onChange({ type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false });
+    } else if (val === 'playlist') {
+      const cats = playlistCategoriesForSegType(segType);
+      const candidates = cats.length
+        ? playlists.filter(p => cats.includes(playlistMediaCategory(p.type as any, p.subcategory as any)))
+        : playlists;
+      const first = candidates[0];
       onChange({ type: 'playlist', playlist_id: first?.id ?? 0, weight: 1, hot_play: false, heavy_rotation: false });
     } else {
       onChange(makeDefaultSource(val as SegmentSourceEntry['type']));
@@ -2094,19 +2311,6 @@ function SourceRow({
       >
         {typeOptions(availableTypes)}
       </select>
-
-      {hasTier && (
-        <input
-          type="text"
-          placeholder="tier"
-          value={(source as Extract<SegmentSourceEntry, { type: 'show_playlist' }>).tier ?? ''}
-          onChange={(e) => {
-            const s = source as Extract<SegmentSourceEntry, { type: 'show_playlist' }>;
-            onChange({ ...s, tier: e.target.value || undefined });
-          }}
-          className="w-20 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
-        />
-      )}
 
       {hasWeight && (
         <div className="flex items-center gap-1.5">

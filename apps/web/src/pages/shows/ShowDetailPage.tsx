@@ -4,7 +4,7 @@ import { useForm, Controller } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useRef, useState } from 'react';
 import {
-  ChevronLeft, ChevronRight, BarChart2, Megaphone, Music2, Bell, Lock,
+  ChevronLeft, BarChart2, Megaphone, Music2, Bell, Lock,
   Trash2, Plus, Upload, X, Loader2,
 } from 'lucide-react';
 import {
@@ -58,6 +58,30 @@ function getWeekStart(date: Date): Date {
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
+type LocalShowPlaylist = {
+  tempId: string;
+  id?: number;
+  playlist_id: number;
+  playlist_name: string;
+  weight: number;
+  rotation_id: number | null;
+  rotation_tier: string | null;
+  fallback_tier: string | null;
+};
+
+function toLocal(sp: ShowPlaylist): LocalShowPlaylist {
+  return {
+    tempId: String(sp.id),
+    id: sp.id,
+    playlist_id: sp.playlist_id,
+    playlist_name: sp.playlist_name,
+    weight: sp.weight,
+    rotation_id: sp.rotation_id,
+    rotation_tier: sp.rotation_tier,
+    fallback_tier: sp.fallback_tier,
+  };
+}
+
 export function ShowDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
@@ -94,12 +118,43 @@ export function ShowDetailPage() {
 
   const [activeTab, setActiveTab] = useState<'configuration' | 'media-content'>('configuration');
 
+  // ── Local playlist draft (music playlists are saved as part of the main Save) ──
+  const [localPlaylists, setLocalPlaylists] = useState<LocalShowPlaylist[]>([]);
+  const [playlistsDirty, setPlaylistsDirty] = useState(false);
+  const tempIdCounter = useRef(0);
+
+  // Sync from server when not dirty (initial load or after discard/save)
+  useEffect(() => {
+    if (!playlistsDirty) {
+      setLocalPlaylists(showMusicPlaylists.map(toLocal));
+    }
+  }, [showMusicPlaylists]);
+
   const updateMutation = useMutation({
     mutationFn: (patch: ShowPatch) => updateShow(showId, patch),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ['shows'] });
       qc.invalidateQueries({ queryKey: ['shows', showId] });
-      reset(undefined, { keepValues: true });
+    },
+  });
+
+  const playlistSyncMutation = useMutation({
+    mutationFn: async (playlists: LocalShowPlaylist[]) => {
+      const toDelete = showMusicPlaylists.filter((sp) => !playlists.some((p) => p.id === sp.id));
+      const toAdd    = playlists.filter((p) => p.id === undefined);
+      const toUpdate = playlists.filter((p) => p.id !== undefined).filter((p) => {
+        const sv = showMusicPlaylists.find((sp) => sp.id === p.id);
+        return sv && (sv.weight !== p.weight || sv.rotation_id !== p.rotation_id || sv.rotation_tier !== p.rotation_tier || sv.fallback_tier !== p.fallback_tier);
+      });
+      await Promise.all([
+        ...toDelete.map((sp) => removeShowPlaylist(showId, sp.id)),
+        ...toAdd.map((p) => addShowPlaylist(showId, { playlist_id: p.playlist_id, weight: p.weight, rotation_id: p.rotation_id })),
+        ...toUpdate.map((p) => updateShowPlaylist(showId, p.id!, { weight: p.weight, rotation_id: p.rotation_id, rotation_tier: p.rotation_tier, fallback_tier: p.fallback_tier })),
+      ]);
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['show-playlists', showId] });
+      setPlaylistsDirty(false);
     },
   });
 
@@ -137,13 +192,23 @@ export function ShowDetailPage() {
   const selectedColor    = watch('color') ?? show?.color;
   const selectedDuration = watch('duration_minutes') ?? show?.duration_minutes ?? 60;
 
-  const onSubmit = (data: ShowPatch) => {
-    updateMutation.mutate({
+  const onSubmit = async (data: ShowPatch) => {
+    await updateMutation.mutateAsync({
       ...data,
       host:     data.host?.trim()     || null,
       producer: data.producer?.trim() || null,
       notes:    data.notes?.trim()    || null,
     });
+    if (playlistsDirty) {
+      await playlistSyncMutation.mutateAsync(localPlaylists);
+    }
+    reset(undefined, { keepValues: true });
+  };
+
+  const handleDiscard = () => {
+    reset();
+    setLocalPlaylists(showMusicPlaylists.map(toLocal));
+    setPlaylistsDirty(false);
   };
 
   const showEntries = templateEntries
@@ -184,7 +249,6 @@ export function ShowDetailPage() {
   const jinglePlaylists = allPlaylists.filter((p) => p.type === 'jingle');
   const bedPlaylists    = allPlaylists.filter((p) => p.type === 'bed');
   const musicPlaylists  = allPlaylists.filter((p) => p.type === 'music');
-  const usedPlaylistIds = new Set(showMusicPlaylists.map((sp) => sp.playlist_id));
 
   return (
     <div className="pb-10 flex gap-6 items-start">
@@ -230,8 +294,8 @@ export function ShowDetailPage() {
             <div className="w-px h-5 bg-zinc-700 mx-1" />
             <button
               type="button"
-              onClick={() => reset()}
-              disabled={!isDirty}
+              onClick={handleDiscard}
+              disabled={!isDirty && !playlistsDirty}
               className={BTN_SECONDARY_SM}
             >
               Discard
@@ -239,10 +303,10 @@ export function ShowDetailPage() {
             <button
               form="show-detail-form"
               type="submit"
-              disabled={!isDirty || updateMutation.isPending}
+              disabled={(!isDirty && !playlistsDirty) || updateMutation.isPending || playlistSyncMutation.isPending}
               className={BTN_PRIMARY_SM}
             >
-              {updateMutation.isPending ? 'Saving…' : 'Save'}
+              {(updateMutation.isPending || playlistSyncMutation.isPending) ? 'Saving…' : 'Save'}
             </button>
           </div>
         </div>
@@ -448,10 +512,9 @@ export function ShowDetailPage() {
                 </section>
 
                 <MusicPlaylistsSection
-                  showId={showId}
-                  showMusicPlaylists={showMusicPlaylists}
-                  availablePlaylists={musicPlaylists}
-                  usedPlaylistIds={usedPlaylistIds}
+                  localPlaylists={localPlaylists}
+                  onChange={(playlists) => { setLocalPlaylists(playlists); setPlaylistsDirty(true); }}
+                  allMusicPlaylists={musicPlaylists}
                 />
               </>
             )}
@@ -525,209 +588,147 @@ export function ShowDetailPage() {
 // ─── Music Playlists Section ──────────────────────────────────────────────────
 
 function MusicPlaylistsSection({
-  showId, showMusicPlaylists, availablePlaylists, usedPlaylistIds,
+  localPlaylists, onChange, allMusicPlaylists,
 }: {
-  showId: number;
-  showMusicPlaylists: ShowPlaylist[];
-  availablePlaylists: PlaylistSummary[];
-  usedPlaylistIds: Set<number>;
+  localPlaylists: LocalShowPlaylist[];
+  onChange: (playlists: LocalShowPlaylist[]) => void;
+  allMusicPlaylists: PlaylistSummary[];
 }) {
-  const qc = useQueryClient();
-  const [addingId, setAddingId] = useState<number | ''>('');
-  const [expandedIds, setExpandedIds] = useState<Set<number>>(new Set());
-  const toggleExpanded = (id: number) =>
-    setExpandedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id); else next.add(id);
-      return next;
-    });
-
   const { data: rotations = [] } = useQuery<Rotation[]>({
     queryKey: ['rotations'],
     queryFn: fetchRotations,
   });
 
-  const addMutation = useMutation({
-    mutationFn: (playlistId: number) =>
-      addShowPlaylist(showId, { playlist_id: playlistId, weight: 1 }),
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ['show-playlists', showId] });
-      setAddingId('');
-    },
-  });
+  const usedIds = new Set(localPlaylists.map((p) => p.playlist_id));
+  const available = allMusicPlaylists.filter((p) => !usedIds.has(p.id));
+  const sharedRotationId = localPlaylists[0]?.rotation_id ?? null;
 
-  const removeMutation = useMutation({
-    mutationFn: (spid: number) => removeShowPlaylist(showId, spid),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
-  });
+  const addPlaylist = () => {
+    const first = available[0];
+    if (!first) return;
+    onChange([...localPlaylists, {
+      tempId: `new-${Date.now()}`,
+      playlist_id: first.id,
+      playlist_name: first.name,
+      weight: 1,
+      rotation_id: sharedRotationId,
+      rotation_tier: null,
+      fallback_tier: null,
+    }]);
+  };
 
-  const weightMutation = useMutation({
-    mutationFn: ({ spid, weight }: { spid: number; weight: number }) =>
-      updateShowPlaylist(showId, spid, { weight }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
-  });
+  const update = (tempId: string, patch: Partial<LocalShowPlaylist>) =>
+    onChange(localPlaylists.map((p) => p.tempId === tempId ? { ...p, ...patch } : p));
 
-  const rotationMutation = useMutation({
-    mutationFn: ({ spid, rotation_id }: { spid: number; rotation_id: number | null }) =>
-      updateShowPlaylist(showId, spid, { rotation_id }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
-  });
+  const remove = (tempId: string) =>
+    onChange(localPlaylists.filter((p) => p.tempId !== tempId));
 
-  const tierMutation = useMutation({
-    mutationFn: ({ spid, rotation_tier }: { spid: number; rotation_tier: string | null }) =>
-      updateShowPlaylist(showId, spid, { rotation_tier }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
-  });
-
-  const fallbackTierMutation = useMutation({
-    mutationFn: ({ spid, fallback_tier }: { spid: number; fallback_tier: string | null }) =>
-      updateShowPlaylist(showId, spid, { fallback_tier }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['show-playlists', showId] }),
-  });
-
-  const unassigned = availablePlaylists.filter((p) => !usedPlaylistIds.has(p.id));
-
-  // Unique tier names already in use on this show — drives the fallback_tier datalist
-  // so operators pick an existing tier rather than mistyping one that doesn't exist.
-  const tiersInUse = Array.from(
-    new Set(
-      showMusicPlaylists
-        .map((sp) => sp.rotation_tier)
-        .filter((t): t is string => !!t && t.trim() !== ''),
-    ),
-  ).sort();
+  const setRotation = (rotation_id: number | null) =>
+    onChange(localPlaylists.map((p) => ({ ...p, rotation_id })));
 
   return (
     <section className="border-t border-zinc-800 pt-5">
-      <div className="flex items-center justify-between mb-3">
-        <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400">Show Music <HelpTooltip text="Music playlists assigned to this show. Weight controls relative pick probability — a playlist with weight 2 is picked twice as often as one with weight 1." /></h2>
-      </div>
+      <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">
+        Show Music <HelpTooltip text="Music playlists for this show. Weight controls relative pick probability across playlists." />
+      </h2>
 
-      {showMusicPlaylists.length === 0 && unassigned.length === 0 && (
-        <p className="text-xs text-zinc-500 italic mb-3">No music playlists in library yet.</p>
+      {allMusicPlaylists.length === 0 && (
+        <p className="text-xs text-zinc-500 italic mb-3">
+          No music playlists in library —{' '}
+          <Link to="/playlists" className="text-indigo-400 hover:text-indigo-300">create one first</Link>
+        </p>
       )}
 
-      {showMusicPlaylists.length > 0 && (
-        <ul className="space-y-1.5 mb-3">
-          {showMusicPlaylists.map((sp) => {
-            const expanded = expandedIds.has(sp.id);
-            return (
-              <li key={sp.id} className="bg-zinc-800/50 rounded-lg border border-zinc-700/50">
-                {/* Summary row — click to expand */}
-                <div
-                  className="flex items-center gap-2 px-3 py-2 cursor-pointer hover:bg-zinc-800 rounded-lg transition-colors"
-                  onClick={() => toggleExpanded(sp.id)}
-                >
-                  <ChevronRight className={`w-3.5 h-3.5 text-zinc-500 flex-shrink-0 transition-transform ${expanded ? 'rotate-90' : ''}`} />
-                  <span className="flex-1 text-sm text-zinc-200 truncate">{sp.playlist_name}</span>
-                  <div className="flex items-center gap-1 shrink-0" onClick={(e) => e.stopPropagation()}>
-                    <span className="flex items-center gap-0.5 text-xs text-zinc-500">wt <HelpTooltip text="Relative pick weight. A playlist with weight 2 is chosen twice as often as one with weight 1." /></span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={99}
-                      defaultValue={sp.weight}
-                      onBlur={(e) => {
-                        const v = Number(e.target.value);
-                        if (v >= 1 && v !== sp.weight) weightMutation.mutate({ spid: sp.id, weight: v });
-                      }}
-                      className="w-12 bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 text-xs text-white text-center focus:outline-none focus:border-indigo-500"
-                    />
-                  </div>
+      <div className="space-y-2 mb-2">
+        {localPlaylists.map((lp) => {
+          const availableForCard = allMusicPlaylists.filter(
+            (p) => !usedIds.has(p.id) || p.id === lp.playlist_id,
+          );
+          return (
+            <div key={lp.tempId} className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
+              <div className="flex items-center gap-4 px-3 py-2">
+                {localPlaylists.length > 1 && (
                   <button
                     type="button"
-                    onClick={(e) => { e.stopPropagation(); removeMutation.mutate(sp.id); }}
-                    className="p-0.5 text-zinc-600 hover:text-red-400 transition"
+                    onClick={() => remove(lp.tempId)}
+                    className="p-1.5 -ml-1 text-zinc-400 hover:text-red-400 transition-colors rounded hover:bg-red-900/20 order-last"
                   >
-                    <Trash2 className="w-3.5 h-3.5" />
+                    <X className="w-4 h-4" />
                   </button>
-                </div>
-
-                {/* Expanded: rotation / tier controls */}
-                {expanded && (
-                  <div className="px-3 pb-3 pt-1 space-y-2 border-t border-zinc-700/50">
-                    {rotations.length > 0 && (
-                      <div className="flex items-center gap-2">
-                        <span className="flex items-center gap-0.5 text-xs text-zinc-500 w-16 shrink-0">Rotation <HelpTooltip text={<>Override the rotation rules applied when picking from this playlist. Leave as <span className="font-semibold text-white">Default</span> to use the station's global rotation settings.</>} /></span>
-                        <select
-                          value={sp.rotation_id ?? ''}
-                          onChange={(e) => {
-                            const v = e.target.value === '' ? null : Number(e.target.value);
-                            rotationMutation.mutate({ spid: sp.id, rotation_id: v });
-                          }}
-                          className="flex-1 bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-                        >
-                          <option value="">Default</option>
-                          {rotations.map((r) => (
-                            <option key={r.id} value={r.id}>{r.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    <div className="flex items-center gap-2">
-                      <span className="text-xs text-zinc-500 w-16 shrink-0">Tier</span>
-                      <input
-                        type="text"
-                        defaultValue={sp.rotation_tier ?? ''}
-                        placeholder="e.g. hot"
-                        list="show-tiers-in-use"
-                        onBlur={(e) => {
-                          const next = e.target.value.trim();
-                          const cur = sp.rotation_tier ?? '';
-                          if (next === cur) return;
-                          tierMutation.mutate({ spid: sp.id, rotation_tier: next === '' ? null : next });
-                        }}
-                        className="w-24 bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-                      />
-                      <span className="text-xs text-zinc-500">fallback</span>
-                      <input
-                        type="text"
-                        defaultValue={sp.fallback_tier ?? ''}
-                        placeholder="(none)"
-                        list="show-tiers-in-use"
-                        onBlur={(e) => {
-                          const next = e.target.value.trim();
-                          const cur = sp.fallback_tier ?? '';
-                          if (next === cur) return;
-                          fallbackTierMutation.mutate({ spid: sp.id, fallback_tier: next === '' ? null : next });
-                        }}
-                        className="w-24 bg-zinc-800 border border-zinc-700/60 rounded px-2 py-1 text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-                      />
-                      <HelpTooltip text="When this playlist's pool is exhausted (all tracks in separation or empty), the picker tries the tier you name here. Leave blank for no fallback. Tier names are free-form labels — keep them consistent across the show." />
-                    </div>
-                  </div>
                 )}
-              </li>
-            );
-          })}
-          <datalist id="show-tiers-in-use">
-            {tiersInUse.map((t) => (
-              <option key={t} value={t} />
-            ))}
-          </datalist>
-        </ul>
+                <div className="flex-1 min-w-0">
+                  <select
+                    value={lp.playlist_id}
+                    onChange={(e) => {
+                      const newId = Number(e.target.value);
+                      const pl = allMusicPlaylists.find((p) => p.id === newId);
+                      if (pl) update(lp.tempId, { playlist_id: newId, playlist_name: pl.name });
+                    }}
+                    className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-indigo-500"
+                  >
+                    {availableForCard.map((p) => (
+                      <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  <span className="text-xs text-zinc-500">Weight</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={lp.weight}
+                    onChange={(e) => {
+                      const v = parseInt(e.target.value, 10);
+                      if (!isNaN(v) && v >= 1) update(lp.tempId, { weight: v });
+                    }}
+                    className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                  />
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {allMusicPlaylists.length > localPlaylists.length && (
+        <button
+          type="button"
+          onClick={addPlaylist}
+          className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors mb-3"
+        >
+          + Add playlist
+        </button>
       )}
 
-      {unassigned.length > 0 && (
-        <div className="flex items-center gap-2">
-          <select
-            value={addingId}
-            onChange={(e) => setAddingId(e.target.value === '' ? '' : Number(e.target.value))}
-            className={`flex-1 ${SELECT}`}
-          >
-            <option value="">Add a music playlist…</option>
-            {unassigned.map((p) => (
-              <option key={p.id} value={p.id}>{p.name}</option>
-            ))}
-          </select>
-          <button
-            type="button"
-            disabled={addingId === '' || addMutation.isPending}
-            onClick={() => { if (addingId !== '') addMutation.mutate(Number(addingId)); }}
-            className={BTN_PRIMARY_SM}
-          >
-            <Plus className="w-3.5 h-3.5" /> Add
-          </button>
+      {localPlaylists.length > 0 && (
+        <div className="space-y-1">
+          {rotations.length === 0 ? (
+            <p className="text-xs text-zinc-500">
+              No rotation documents —{' '}
+              <Link to="/rotations" className="text-indigo-400 hover:text-indigo-300 underline-offset-2 hover:underline">
+                create one in Rotations
+              </Link>{' '}
+              to control play order.
+            </p>
+          ) : (
+            <>
+              <label className="block text-xs font-medium text-zinc-400">Music rotation</label>
+              <select
+                value={sharedRotationId ?? ''}
+                onChange={(e) => setRotation(e.target.value === '' ? null : Number(e.target.value))}
+                className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${!sharedRotationId ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-indigo-500'}`}
+              >
+                <option value="" disabled className="bg-zinc-900">— select a rotation —</option>
+                {rotations.map((r) => (
+                  <option key={r.id} value={r.id} className="bg-zinc-900">{r.name}{r.is_default ? ' (default)' : ''}</option>
+                ))}
+              </select>
+              {!sharedRotationId && (
+                <p className="text-xs text-red-400">A rotation is required.</p>
+              )}
+            </>
+          )}
         </div>
       )}
     </section>

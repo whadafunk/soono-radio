@@ -140,6 +140,17 @@ If you're unsure whether a change is additive or destructive, treat it as destru
 - **pnpm-lock.yaml** is checked in; dependency changes are tracked
 - Keep `.gitignore` updated; no `node_modules`, `dist`, `.env` files in git
 
+### UI Contrast & Visibility Standards
+
+Text and interactive elements must be readable against the dark background. These classes are too dark for anything the user needs to read or click:
+
+- **Never use for body text or labels:** `text-zinc-600`, `text-zinc-700` — these are near-invisible on dark backgrounds. Use `text-zinc-400` as the minimum for secondary/helper text, `text-zinc-300` for normal text.
+- **Never use for interactive icons (X, chevrons, etc.):** `text-zinc-600` or `text-zinc-700`. Use `text-zinc-400` as the default state for clickable icons.
+- **Explanation / hint text:** use `text-zinc-400` minimum, not `text-zinc-500` or darker.
+- **Read-only / locked state:** `opacity-80` on a card is fine, but text inside must still use `text-zinc-300`+ for content and `text-zinc-400`+ for labels.
+
+When in doubt: if you'd squint to read it, it's too dark.
+
 ### Code Quality Standards
 
 **Type Safety**
