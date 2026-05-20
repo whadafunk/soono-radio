@@ -127,18 +127,17 @@ const DRIFT_EVENT_LABELS: Record<DriftEventType, string> = {
   station_ids: 'Station IDs',
   spots:       'Spots',
   promos:      'Promos',
-  fade_cut:    'Fade-cut',
 };
 
 // Which event types are applicable for catching-up (skip) per segment type
 const CATCHUP_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
-  music:         ['jingles', 'station_ids', 'songs', 'fade_cut'],
-  stop_set:      ['jingles', 'promos', 'spots', 'fade_cut'],
+  music:         ['jingles', 'station_ids', 'songs'],
+  stop_set:      ['jingles', 'promos', 'spots'],
   news:          [],
   live:          [],
   live_audience: [],
-  voice_track:   ['fade_cut'],
-  bulletin:      ['fade_cut'],
+  voice_track:   [],
+  bulletin:      [],
 };
 
 // Which event types are applicable for coasting (fill) per segment type
@@ -1445,7 +1444,7 @@ function SegmentDrawer({
 
               {CATCHUP_TYPES[draft.type].length > 0 && (
                 <div>
-                  <p className="text-xs text-zinc-400 mb-1.5">Catching up methods <HelpTooltip text="How to recover when running late, in priority order. Check to enable, drag to reorder." /></p>
+                  <p className="text-xs text-zinc-400 mb-1.5">Catching up — skip order <HelpTooltip text="Event types to skip when running late, in priority order. Check to enable, drag to reorder." /></p>
                   <DriftOrderList
                     allTypes={CATCHUP_TYPES[draft.type]}
                     order={draft.catching_up_order}
