@@ -124,6 +124,12 @@ export async function clockRoutes(fastify: FastifyInstance) {
       await db.update(templateEntries).set({ orphaned_clock_name: clock.name }).where(eq(templateEntries.clock_id, id));
       await db.update(calendarEntries).set({ orphaned_clock_name: clock.name }).where(eq(calendarEntries.clock_id, id));
     }
+    const segIds = await db.select({ id: clockSegments.id }).from(clockSegments).where(eq(clockSegments.clock_id, id));
+    if (segIds.length > 0) {
+      await db.update(playHistory)
+        .set({ clock_segment_id: null })
+        .where(inArray(playHistory.clock_segment_id, segIds.map((r) => r.id)));
+    }
     await db.delete(clockSegments).where(eq(clockSegments.clock_id, id));
     await db.delete(clocks).where(eq(clocks.id, id));
     return reply.status(204).send();
@@ -228,6 +234,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
           sweeper_config: s.sweeper_config ?? null,
           silence_threshold_seconds: s.silence_threshold_seconds ?? null,
           rotation_type: s.rotation_type ?? null,
+          fallback_playlist_id: s.fallback_playlist_id ?? null,
         })),
       );
     }

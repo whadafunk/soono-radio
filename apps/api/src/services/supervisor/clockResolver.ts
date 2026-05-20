@@ -4,6 +4,7 @@ import {
   calendarEntries,
   clocks,
   clockSegments,
+  rundownDurationOverrides,
   shows,
   templateClockEntries,
   templateEntries,
@@ -186,15 +187,30 @@ async function materialize(
   if (elapsedInSlot < 0) return null;
 
   // Tile: how many full clock instances have run, where in the current one we are.
+  // Tiling uses template durations (overrides are per-instance and aren't known in advance).
   const instanceIndex = Math.floor(elapsedInSlot / clockSeconds);
   const elapsedInInstance = elapsedInSlot - instanceIndex * clockSeconds;
   const instanceStart = new Date(slotStart.getTime() + instanceIndex * clockSeconds * 1000);
 
-  // Find the segment containing elapsedInInstance.
+  // Load any per-instance duration overrides for this clock instance.
+  const instanceDate = formatDate(instanceStart);
+  const instanceTimeStr = formatTime(instanceStart);
+  const overrideRows = await db
+    .select({ segment_index: rundownDurationOverrides.segment_index, duration_seconds: rundownDurationOverrides.duration_seconds })
+    .from(rundownDurationOverrides)
+    .where(and(
+      eq(rundownDurationOverrides.date, instanceDate),
+      eq(rundownDurationOverrides.time_start, instanceTimeStr),
+      eq(rundownDurationOverrides.clock_id, clock.id),
+    ));
+  const overrideMap = new Map(overrideRows.map((o) => [o.segment_index, o.duration_seconds]));
+
+  // Find the segment containing elapsedInInstance, applying override durations.
   let acc = 0;
   for (let i = 0; i < segRows.length; i++) {
     const seg = segRows[i];
-    const segEnd = acc + seg.duration_seconds;
+    const effectiveDur = overrideMap.get(i) ?? seg.duration_seconds;
+    const segEnd = acc + effectiveDur;
     if (elapsedInInstance < segEnd) {
       const segmentStart = new Date(instanceStart.getTime() + acc * 1000);
       const segmentElapsed = elapsedInInstance - acc;
@@ -207,7 +223,7 @@ async function materialize(
         clock_instance_started_at: instanceStart,
         segment_started_at: segmentStart,
         segment_elapsed_seconds: Math.max(0, Math.round(segmentElapsed)),
-        segment_remaining_seconds: Math.max(0, Math.round(seg.duration_seconds - segmentElapsed)),
+        segment_remaining_seconds: Math.max(0, Math.round(effectiveDur - segmentElapsed)),
         // Drift + hard-cut warning are populated by the supervisor refresh —
         // resolver alone doesn't know about play_history or sibling segments.
         drift_seconds: 0,

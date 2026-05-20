@@ -282,7 +282,7 @@ export function ClocksPage() {
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
-  const [headerOpen, setHeaderOpen] = useState(true);
+  const [headerOpen, setHeaderOpen] = useState(false);
   const [listConfirmDeleteId, setListConfirmDeleteId] = useState<number | null>(null);
 
   const dirty = clockDirty || segsDirty;
@@ -1334,6 +1334,16 @@ function SegmentDrawer({
                   />
                   <span className="text-sm text-zinc-300">Allow DJ to go live during this segment</span>
                 </label>
+              </Field>
+            )}
+
+            {(draft.type === 'news' || draft.type === 'bulletin' || draft.type === 'voice_track') && (
+              <Field label="Fallback playlist" hint="Played when no rundown content is assigned. Leave blank to fall back to the segment's source config.">
+                <PlaylistDropdown
+                  value={draft.fallback_playlist_id ?? null}
+                  onChange={(v) => update({ fallback_playlist_id: v })}
+                  playlists={playlists}
+                />
               </Field>
             )}
           </div>

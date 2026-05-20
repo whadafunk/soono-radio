@@ -1,6 +1,6 @@
-import { eq, gte } from 'drizzle-orm';
+import { and, eq, gte } from 'drizzle-orm';
 import { db } from '../../db/index.js';
-import { media, playHistory } from '../../db/schema.js';
+import { media, playHistory, playlistMedia, rundownAssignments } from '../../db/schema.js';
 import { resolveCurrentSegment, type ResolvedSegment } from './clockResolver.js';
 import { loadMusicPickSnapshot } from './snapshot.js';
 import { predictSegmentPick } from './predictor.js';
@@ -55,10 +55,12 @@ export async function pickNext(now: Date = new Date()): Promise<PickResult | nul
 
   switch (scheduled.segment.type) {
     case 'music':
+      return pickFromSegment(scheduled, now);
+
     case 'news':
     case 'bulletin':
     case 'voice_track':
-      return pickFromSegment(scheduled, now);
+      return pickFromRundownSegment(scheduled, now);
 
     case 'live':
       // Harbor input drives this segment; the auto-source stays quiet.
@@ -94,6 +96,78 @@ async function pickStopSetSlot(
     promo_id: pick.promo_id,
     stop_set_position: pick.stop_set_position,
   };
+}
+
+function pad2(n: number): string { return n < 10 ? `0${n}` : `${n}`; }
+
+function fmtDate(d: Date): string {
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+function fmtTime(d: Date): string {
+  return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+/** For news/bulletin/voice_track: rundown assignment → fallback_playlist → segment sources. */
+async function pickFromRundownSegment(
+  scheduled: ResolvedSegment,
+  now: Date,
+): Promise<PickResult | null> {
+  const date = fmtDate(scheduled.clock_instance_started_at);
+  const timeStart = fmtTime(scheduled.clock_instance_started_at);
+
+  const [assignment] = await db
+    .select({ media_id: rundownAssignments.media_id })
+    .from(rundownAssignments)
+    .where(and(
+      eq(rundownAssignments.date, date),
+      eq(rundownAssignments.time_start, timeStart),
+      eq(rundownAssignments.clock_id, scheduled.clock.id),
+      eq(rundownAssignments.segment_index, scheduled.segment_index),
+    ))
+    .limit(1);
+
+  if (assignment?.media_id) {
+    const [m] = await db.select().from(media).where(eq(media.id, assignment.media_id)).limit(1);
+    if (m) {
+      return {
+        media: m,
+        reason: `[rundown ${scheduled.segment.type} seg=${scheduled.segment.name}] assigned`,
+        clock_segment_id: scheduled.segment.id,
+        music_campaign_id: null,
+        campaign_id: null,
+        promo_id: null,
+        stop_set_position: null,
+      };
+    }
+  }
+
+  // Fallback playlist on the segment template.
+  const fallbackId = scheduled.segment.fallback_playlist_id;
+  if (fallbackId) {
+    const items = await db
+      .select({ media_id: playlistMedia.media_id })
+      .from(playlistMedia)
+      .where(eq(playlistMedia.playlist_id, fallbackId));
+    if (items.length > 0) {
+      const chosen = items[Math.floor(Math.random() * items.length)];
+      const [m] = await db.select().from(media).where(eq(media.id, chosen.media_id)).limit(1);
+      if (m) {
+        return {
+          media: m,
+          reason: `[rundown ${scheduled.segment.type} seg=${scheduled.segment.name}] fallback_playlist=${fallbackId}`,
+          clock_segment_id: scheduled.segment.id,
+          music_campaign_id: null,
+          campaign_id: null,
+          promo_id: null,
+          stop_set_position: null,
+        };
+      }
+    }
+  }
+
+  // Final fallback: segment's own source config (same as music segments).
+  return pickFromSegment(scheduled, now);
 }
 
 async function pickFromSegment(

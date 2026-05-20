@@ -24,6 +24,7 @@ import { RotationsPage } from './pages/rotations/RotationsPage';
 import { PlaylistsPage } from './pages/playlists/PlaylistsPage';
 import { ActivityPage } from './pages/activity/ActivityPage';
 import { PromoPage } from './pages/promo/PromoPage';
+import { RundownPage } from './pages/rundown/RundownPage';
 
 const queryClient = new QueryClient();
 
@@ -60,6 +61,7 @@ export function App() {
             <Route path="/promo" element={<PromoPage />} />
             <Route path="/playlists" element={<PlaylistsPage />} />
             <Route path="/rotations" element={<RotationsPage />} />
+            <Route path="/rundown" element={<RundownPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

@@ -432,8 +432,10 @@ export const clockSegments = sqliteTable(
     silence_detection_action: text('silence_detection_action'),
     // Only for live / live_audience: threshold override (null = use global Mix Engine setting)
     silence_threshold_seconds: integer('silence_threshold_seconds'),
-    // Simple rotation algorithm for stop_set/live/live_audience segments
+    // Simple rotation algorithm for stop_set/live segments
     rotation_type: text('rotation_type'),
+    // Fallback playlist for news/bulletin/voice_track when no rundown assignment exists
+    fallback_playlist_id: integer('fallback_playlist_id').references(() => playlists.id, { onDelete: 'set null' }),
   },
   (t) => ({
     clockIdx: index('clock_segments_clock_idx').on(t.clock_id),
@@ -959,3 +961,51 @@ export const recordings = sqliteTable(
 
 export type Recording = typeof recordings.$inferSelect;
 export type RecordingInsert = typeof recordings.$inferInsert;
+
+// ─── Rundown ──────────────────────────────────────────────────────────────────
+// Per-instance content assignments and duration overrides for news/bulletin/
+// voice_track segments. Keyed by (date, time_start, clock_id, segment_index)
+// to avoid pre-materialising calendar entries for template-derived slots.
+
+export const rundownAssignments = sqliteTable(
+  'rundown_assignments',
+  {
+    id:            integer('id').primaryKey({ autoIncrement: true }),
+    date:          text('date').notNull(),           // "2026-05-20"
+    time_start:    text('time_start').notNull(),     // "08:00"
+    clock_id:      integer('clock_id').notNull().references(() => clocks.id, { onDelete: 'cascade' }),
+    segment_index: integer('segment_index').notNull(),
+    media_id:      integer('media_id').references(() => media.id, { onDelete: 'set null' }),
+    notes:         text('notes'),
+    assigned_at:   integer('assigned_at', { mode: 'timestamp' }),
+    created_at:    integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updated_at:    integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    slotUniq: unique('rundown_assignments_slot_uniq').on(t.date, t.time_start, t.clock_id, t.segment_index),
+    dateIdx:  index('rundown_assignments_date_idx').on(t.date),
+  }),
+);
+
+export type RundownAssignment = typeof rundownAssignments.$inferSelect;
+export type RundownAssignmentInsert = typeof rundownAssignments.$inferInsert;
+
+export const rundownDurationOverrides = sqliteTable(
+  'rundown_duration_overrides',
+  {
+    id:               integer('id').primaryKey({ autoIncrement: true }),
+    date:             text('date').notNull(),
+    time_start:       text('time_start').notNull(),
+    clock_id:         integer('clock_id').notNull().references(() => clocks.id, { onDelete: 'cascade' }),
+    segment_index:    integer('segment_index').notNull(),
+    duration_seconds: integer('duration_seconds').notNull(),
+    created_at:       integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updated_at:       integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    slotUniq: unique('rundown_duration_overrides_slot_uniq').on(t.date, t.time_start, t.clock_id, t.segment_index),
+  }),
+);
+
+export type RundownDurationOverride = typeof rundownDurationOverrides.$inferSelect;
+export type RundownDurationOverrideInsert = typeof rundownDurationOverrides.$inferInsert;

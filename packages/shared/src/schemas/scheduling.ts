@@ -131,6 +131,7 @@ export const ClockSegmentSchema = z.object({
   sweeper_config: SegmentSweeperConfigSchema.nullable().default(null),
   silence_threshold_seconds: z.number().int().min(1).max(60).nullable(),
   rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable(),
+  fallback_playlist_id: z.number().int().nullable().optional(),
 });
 export type ClockSegment = z.infer<typeof ClockSegmentSchema>;
 
@@ -162,11 +163,36 @@ export const ClockSegmentCreateSchema = z.object({
   sweeper_config: SegmentSweeperConfigSchema.nullable().optional(),
   silence_threshold_seconds: z.number().int().min(1).max(60).nullable().optional(),
   rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable().optional(),
+  fallback_playlist_id: z.number().int().positive().nullable().optional(),
 });
 export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
 
 export const ClockSegmentPatchSchema = ClockSegmentCreateSchema.partial().omit({ sort_order: true });
 export type ClockSegmentPatch = z.infer<typeof ClockSegmentPatchSchema>;
+
+// ============ RUNDOWN ============
+
+export const RUNDOWN_SEGMENT_TYPES = ['news', 'bulletin', 'voice_track'] as const;
+export type RundownSegmentType = (typeof RUNDOWN_SEGMENT_TYPES)[number];
+
+export const RundownAssignmentUpsertSchema = z.object({
+  date:          z.string().min(1),
+  time_start:    z.string().min(1),
+  clock_id:      z.number().int().positive(),
+  segment_index: z.number().int().nonnegative(),
+  media_id:      z.number().int().positive().nullable(),
+  notes:         z.string().nullable().optional(),
+});
+export type RundownAssignmentUpsert = z.infer<typeof RundownAssignmentUpsertSchema>;
+
+export const RundownDurationOverrideUpsertSchema = z.object({
+  date:             z.string().min(1),
+  time_start:       z.string().min(1),
+  clock_id:         z.number().int().positive(),
+  segment_index:    z.number().int().nonnegative(),
+  duration_seconds: z.number().int().positive(),
+});
+export type RundownDurationOverrideUpsert = z.infer<typeof RundownDurationOverrideUpsertSchema>;
 
 // join_top: always start clock at segment 0; join_mid: skip ahead to the segment
 // that matches the current wall-clock minute (preserves break-time alignment).
