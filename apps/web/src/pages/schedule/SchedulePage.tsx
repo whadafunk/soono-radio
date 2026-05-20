@@ -1,8 +1,9 @@
-import { useState, useEffect, useMemo, Fragment, useRef } from 'react';
+import { useState, useEffect, useLayoutEffect, useMemo, Fragment, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye } from 'lucide-react';
-import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@radio/shared';
+import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
   createTemplateEntry, updateTemplateEntry, deleteTemplateEntry,
@@ -29,6 +30,109 @@ const COLOR_HEX: Record<ShowColor, string> = {
   orange:  '#fb923c',
   teal:    '#2dd4bf',
 };
+
+const SEGMENT_BAND_COLOR: Record<string, string> = {
+  music:       'rgba(99,102,241,0.45)',
+  live:        'rgba(59,130,246,0.45)',
+  stop_set:    'rgba(245,158,11,0.45)',
+  news:        'rgba(244,63,94,0.45)',
+  voice_track: 'rgba(251,146,60,0.45)',
+  bulletin:    'rgba(168,85,247,0.45)',
+};
+
+/** Thin horizontal lines inside the block wherever the clock cycle repeats. */
+function SegmentTileSeps({ segments, slotMinutes }: {
+  segments: ClockSegmentSummary[];
+  slotMinutes: number;
+}) {
+  if (!segments.length) return null;
+  const clockSeconds = segments.reduce((s, seg) => s + seg.duration_seconds, 0);
+  if (clockSeconds <= 0 || slotMinutes <= 0) return null;
+  const slotSeconds = slotMinutes * 60;
+  const seps: number[] = [];
+  for (let t = 1; t * clockSeconds < slotSeconds; t++) {
+    seps.push((t * clockSeconds / slotSeconds) * 100);
+  }
+  if (!seps.length) return null;
+  return (
+    <div className="absolute inset-0 pointer-events-none">
+      {seps.map((pct, i) => (
+        <div key={i} className="absolute left-0 right-0" style={{ top: `${pct}%`, height: 1, backgroundColor: 'rgba(255,255,255,0.3)' }} />
+      ))}
+    </div>
+  );
+}
+
+const BAR_WIDTH = 560;
+const BAR_H     = 52;
+
+/**
+ * Portal bar shown during a resize-end drag on a clock entry. Rendered from
+ * the column level (not the block) so it can track the ghost's bottom edge
+ * precisely. Uses useLayoutEffect with no deps to reposition after every
+ * render — zero lag, updates every frame during the drag.
+ */
+function DragSegmentBar({
+  segments, liveSlotMinutes, columnRef, liveEndMin,
+}: {
+  segments: ClockSegmentSummary[];
+  liveSlotMinutes: number;
+  columnRef: React.RefObject<HTMLDivElement>;
+  liveEndMin: number;
+}) {
+  const barRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!barRef.current || !columnRef.current) return;
+    const col  = columnRef.current.getBoundingClientRect();
+    const top  = col.top + (liveEndMin / 60) * HOUR_HEIGHT + 6;
+    const left = Math.max(8, Math.min(
+      window.innerWidth - BAR_WIDTH - 8,
+      col.left + col.width / 2 - BAR_WIDTH / 2,
+    ));
+    barRef.current.style.top  = `${top}px`;
+    barRef.current.style.left = `${left}px`;
+  });
+
+  if (!segments.length) return null;
+  const clockSeconds = segments.reduce((s, seg) => s + seg.duration_seconds, 0);
+  if (clockSeconds <= 0 || liveSlotMinutes <= 0) return null;
+
+  const remainder = (liveSlotMinutes * 60) % clockSeconds;
+  const cutSec    = remainder === 0 ? clockSeconds : remainder;
+
+  let cum = 0;
+  const barSegs = segments.map((seg) => {
+    const segStart = cum;
+    const left  = (segStart / clockSeconds) * 100;
+    const width = (seg.duration_seconds / clockSeconds) * 100;
+    cum += seg.duration_seconds;
+    return { seg, left, width, past: segStart >= cutSec };
+  });
+
+  return createPortal(
+    <div
+      ref={barRef}
+      className="rounded overflow-hidden pointer-events-none"
+      style={{ position: 'fixed', top: 0, left: 0, width: BAR_WIDTH, height: BAR_H, backgroundColor: 'rgba(9,9,11,0.92)', zIndex: 9999 }}
+    >
+      {barSegs.map(({ seg, left, width, past }) => (
+        <div
+          key={seg.id}
+          className="absolute top-0 bottom-0 overflow-hidden"
+          style={{ left: `${left}%`, width: `${width}%`, backgroundColor: SEGMENT_BAND_COLOR[seg.type] ?? 'rgba(113,113,122,0.55)', opacity: past ? 0.15 : 1 }}
+        >
+          {width > 5 && !past && (
+            <span className="absolute inset-0 flex items-center justify-center text-[11px] font-semibold px-1 truncate" style={{ color: SEGMENT_BAND_COLOR[seg.type]?.replace(/,[\d.]+\)$/, ',1)') ?? 'rgba(255,255,255,0.9)' }}>
+              {seg.name}
+            </span>
+          )}
+        </div>
+      ))}
+    </div>,
+    document.body,
+  );
+}
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -234,6 +338,35 @@ export function SchedulePage() {
       for (const sib of current.siblings) {
         if (Math.abs(raw - sib.startMin) <= SNAP_THRESHOLD) return sib.startMin;
         if (Math.abs(raw - sib.endMin)   <= SNAP_THRESHOLD) return sib.endMin;
+      }
+      if (current.op === 'resize-end') {
+        const clockId = current.entry.clock_id
+          ?? (current.entry.show_id ? showMap.get(current.entry.show_id)?.default_clock_id : null)
+          ?? null;
+        const segs = clockId != null ? clockMap.get(clockId)?.segments : null;
+        if (segs?.length) {
+          const clockDurSec = segs.reduce((sum, s) => sum + s.duration_seconds, 0);
+          if (clockDurSec > 0) {
+            const clockDurMin = clockDurSec / 60;
+            const slotStart   = current.startMin;
+            let best: number | null = null;
+            let bestDist = Infinity;
+            for (let tile = 0; ; tile++) {
+              const tileStart = slotStart + tile * clockDurMin;
+              if (tileStart > raw + clockDurMin) break;
+              let cumMin = 0;
+              for (const seg of segs) {
+                cumMin += seg.duration_seconds / 60;
+                const boundary = tileStart + cumMin;
+                if (boundary <= slotStart) continue;
+                if (boundary > 24 * 60) break;
+                const dist = Math.abs(raw - boundary);
+                if (dist < bestDist) { bestDist = dist; best = boundary; }
+              }
+            }
+            if (best !== null) return best;
+          }
+        }
       }
       return Math.round(raw / 15) * 15;
     };
@@ -711,9 +844,10 @@ function DayColumn({
             wrap && <ClockOnlyBlock key={`w${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onEntryClick(entry, x, y)} />,
           ].filter(Boolean) as React.ReactElement[];
         }
+        const showClockSegs = (show?.default_clock_id ? clockMap.get(show.default_clock_id)?.segments : undefined) ?? [];
         return [
-          <EntryBlock key={entry.id}          entry={entry} show={show} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onEntryClick(entry, x, y)} />,
-          wrap && <EntryBlock key={`w${entry.id}`} entry={wrap}  show={show} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onEntryClick(entry, x, y)} />,
+          <EntryBlock key={entry.id}          entry={entry} show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onEntryClick(entry, x, y)} />,
+          wrap && <EntryBlock key={`w${entry.id}`} entry={wrap}  show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onEntryClick(entry, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
       {activeDrag?.targetDayOfWeek === dayOfWeek && <DragGhost activeDrag={activeDrag} />}
@@ -723,6 +857,19 @@ function DayColumn({
           <div className="flex-1 h-px bg-rose-400/50" />
         </div>
       )}
+      {(() => {
+        if (activeDrag?.op !== 'resize-end' || activeDrag.entryKind !== 'template' || activeDrag.isCopy) return null;
+        if (activeDrag.dayOfWeek !== dayOfWeek) return null;
+        const entry = activeDrag.entry;
+        const clockId = entry.clock_id ?? (entry.show_id ? showMap.get(entry.show_id)?.default_clock_id : null) ?? null;
+        if (!clockId) return null;
+        const segs = clockMap.get(clockId)?.segments ?? [];
+        if (!segs.length) return null;
+        const startMin = timeToMinutes(entry.time_start);
+        const liveEnd  = activeDrag.endMin;
+        const liveSlot = liveEnd > startMin ? liveEnd - startMin : 24 * 60 - startMin;
+        return <DragSegmentBar key="drag-bar" segments={segs} liveSlotMinutes={liveSlot} columnRef={containerRef} liveEndMin={liveEnd} />;
+      })()}
     </div>
   );
 }
@@ -832,9 +979,10 @@ function CalendarDayColumn({
             wrap && <ClockOnlyBlock key={`tw${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
           ].filter(Boolean) as React.ReactElement[];
         }
+        const showClockSegs = (show?.default_clock_id ? clockMap.get(show.default_clock_id)?.segments : undefined) ?? [];
         return [
-          <EntryBlock key={`t${entry.id}`}    entry={entry} show={show} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
-          wrap && <EntryBlock key={`tw${entry.id}`} entry={wrap}  show={show} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
+          <EntryBlock key={`t${entry.id}`}    entry={entry} show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
+          wrap && <EntryBlock key={`tw${entry.id}`} entry={wrap}  show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
 
@@ -852,9 +1000,10 @@ function CalendarDayColumn({
             wrap && <CalendarClockOnlyBlock key={`cw${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
           ].filter(Boolean) as React.ReactElement[];
         }
+        const showClockSegs = (show?.default_clock_id ? clockMap.get(show.default_clock_id)?.segments : undefined) ?? [];
         return [
-          <CalendarEntryBlock key={`c${entry.id}`}    entry={entry} show={show} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
-          wrap && <CalendarEntryBlock key={`cw${entry.id}`} entry={wrap}  show={show} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+          <CalendarEntryBlock key={`c${entry.id}`}    entry={entry} show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+          wrap && <CalendarEntryBlock key={`cw${entry.id}`} entry={wrap}  show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
 
@@ -865,6 +1014,19 @@ function CalendarDayColumn({
           <div className="flex-1 h-px bg-rose-400/50" />
         </div>
       )}
+      {(() => {
+        if (activeDrag?.op !== 'resize-end' || activeDrag.isCopy) return null;
+        if (activeDrag.date !== date) return null;
+        const entry = activeDrag.entry;
+        const clockId = entry.clock_id ?? (entry.show_id ? showMap.get(entry.show_id)?.default_clock_id : null) ?? null;
+        if (!clockId) return null;
+        const segs = clockMap.get(clockId)?.segments ?? [];
+        if (!segs.length) return null;
+        const startMin = timeToMinutes(entry.time_start);
+        const liveEnd  = activeDrag.endMin;
+        const liveSlot = liveEnd > startMin ? liveEnd - startMin : 24 * 60 - startMin;
+        return <DragSegmentBar key="drag-bar" segments={segs} liveSlotMinutes={liveSlot} columnRef={containerRef} liveEndMin={liveEnd} />;
+      })()}
     </div>
   );
 }
@@ -919,9 +1081,10 @@ function DragGhost({ activeDrag }: { activeDrag: DragState }) {
 
 // ─── Entry Block (show slot) ──────────────────────────────────────────────────
 
-function EntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
+function EntryBlock({ entry, show, segments = [], onClick, onDragStart, isDragging }: {
   entry: TemplateEntry;
   show: Show | undefined;
+  segments?: ClockSegmentSummary[];
   onClick: (x: number, y: number) => void;
   onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
@@ -929,6 +1092,9 @@ function EntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
   const isOrphaned = !show && !!entry.show_id;
   const hex = show ? COLOR_HEX[show.color] : isOrphaned ? '#f59e0b' : '#71717a';
+  const startMin   = timeToMinutes(entry.time_start);
+  const endMin     = timeToMinutes(entry.time_end);
+  const slotMinutes = endMin > startMin ? endMin - startMin : 24 * 60 - startMin;
 
   function handleMouseDown(e: React.MouseEvent, op: DragOp) {
     if (e.button !== 0) return;
@@ -961,6 +1127,7 @@ function EntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
       onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The show assigned to this slot was deleted' : undefined}
     >
+      <SegmentTileSeps segments={segments} slotMinutes={slotMinutes} />
       <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
       <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
       {height >= 22 && (
@@ -1001,6 +1168,9 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
   const isOrphaned = !clock && !!entry.clock_id;
   const borderColor = isOrphaned ? '#f59e0b' : '#ffffff';
   const bgColor = isOrphaned ? '#f59e0b0a' : '#ffffff0a';
+  const startMin = timeToMinutes(entry.time_start);
+  const endMin   = timeToMinutes(entry.time_end);
+  const slotMinutes = endMin > startMin ? endMin - startMin : 24 * 60 - startMin;
 
   function handleMouseDown(e: React.MouseEvent, op: DragOp) {
     if (e.button !== 0) return;
@@ -1027,41 +1197,49 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
 
   return (
     <div
-      className="absolute right-1 rounded-r-[3px] overflow-hidden transition-all hover:brightness-110"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}`, opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
+      className="absolute right-1"
+      style={{ top: top + 1, height, left: '3px', opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The clock assigned to this slot was deleted' : undefined}
     >
-      <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
-      <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
-      {height >= 22 && (
-        <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden pb-[7px]">
-          <div className="flex items-center gap-1.5 min-w-0">
-            {isOrphaned
-              ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
-              : <Clock className="w-5 h-5 text-white flex-shrink-0" />
-            }
-            <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
-              {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
-            </span>
+      {/* Inner visual block — clipped to block bounds */}
+      <div
+        className="absolute inset-0 rounded-r-[3px] overflow-hidden hover:brightness-110 transition-all"
+        style={{ backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}` }}
+      >
+        <SegmentTileSeps segments={clock?.segments ?? []} slotMinutes={slotMinutes} />
+        <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
+        <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
+        {height >= 22 && (
+          <div className="relative z-[1] px-2 pt-1.5 h-full flex flex-col overflow-hidden pb-[7px]">
+            <div className="flex items-center gap-1.5 min-w-0">
+              {isOrphaned
+                ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
+                : <Clock className="w-5 h-5 text-white flex-shrink-0" />
+              }
+              <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
+                {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
+              </span>
+            </div>
+            {height >= 44 && (
+              <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
+                {entry.time_start}–{entry.time_end}
+              </span>
+            )}
           </div>
-          {height >= 44 && (
-            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
-              {entry.time_start}–{entry.time_end}
-            </span>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
 
 // ─── Calendar Entry Block (show slot) ────────────────────────────────────────
 
-function CalendarEntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
+function CalendarEntryBlock({ entry, show, segments = [], onClick, onDragStart, isDragging }: {
   entry: CalendarEntry;
   show: Show | undefined;
+  segments?: ClockSegmentSummary[];
   onClick: (x: number, y: number) => void;
   onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
@@ -1069,6 +1247,9 @@ function CalendarEntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
   const { top, height } = entryGeometry(entry.time_start, entry.time_end);
   const isOrphaned = !show && !!entry.show_id;
   const hex = show ? COLOR_HEX[show.color] : isOrphaned ? '#f59e0b' : '#71717a';
+  const startMin    = timeToMinutes(entry.time_start);
+  const endMin      = timeToMinutes(entry.time_end);
+  const slotMinutes = endMin > startMin ? endMin - startMin : 24 * 60 - startMin;
 
   function handleMouseDown(e: React.MouseEvent, op: DragOp) {
     if (e.button !== 0) return;
@@ -1101,6 +1282,7 @@ function CalendarEntryBlock({ entry, show, onClick, onDragStart, isDragging }: {
       onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The show assigned to this slot was deleted' : undefined}
     >
+      <SegmentTileSeps segments={segments} slotMinutes={slotMinutes} />
       <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
       <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
       {height >= 22 && (
@@ -1144,6 +1326,9 @@ function CalendarClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging
   const isOrphaned = !clock && !!entry.clock_id;
   const borderColor = isOrphaned ? '#f59e0b' : '#ffffff';
   const bgColor = isOrphaned ? '#f59e0b0a' : '#ffffff0a';
+  const startMin = timeToMinutes(entry.time_start);
+  const endMin   = timeToMinutes(entry.time_end);
+  const slotMinutes = endMin > startMin ? endMin - startMin : 24 * 60 - startMin;
 
   function handleMouseDown(e: React.MouseEvent, op: DragOp) {
     if (e.button !== 0) return;
@@ -1170,35 +1355,42 @@ function CalendarClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging
 
   return (
     <div
-      className="absolute right-1 rounded-r-[3px] overflow-hidden transition-all hover:brightness-110 z-[1]"
-      style={{ top: top + 1, height, left: '3px', backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}`, opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
+      className="absolute right-1 z-[1]"
+      style={{ top: top + 1, height, left: '3px', opacity: isDragging ? 0.3 : undefined, cursor: isDragging ? 'grabbing' : 'grab' }}
       onClick={(e) => e.stopPropagation()}
       onMouseDown={(e) => handleMouseDown(e, 'move')}
       title={isOrphaned ? 'The clock assigned to this slot was deleted' : undefined}
     >
-      <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
-      <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
-      {height >= 22 && (
-        <div className="px-2 pt-1.5 h-full flex flex-col overflow-hidden relative pb-[7px]">
-          {entry.is_override && (
-            <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
-          )}
-          <div className="flex items-center gap-1.5 min-w-0 pr-3">
-            {isOrphaned
-              ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
-              : <Clock className="w-5 h-5 text-white flex-shrink-0" />
-            }
-            <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
-              {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
-            </span>
+      {/* Inner visual block — clipped to block bounds */}
+      <div
+        className="absolute inset-0 rounded-r-[3px] overflow-hidden hover:brightness-110 transition-all"
+        style={{ backgroundColor: bgColor, borderLeft: `3px solid ${borderColor}` }}
+      >
+        <SegmentTileSeps segments={clock?.segments ?? []} slotMinutes={slotMinutes} />
+        <div className="absolute top-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-start'); }} />
+        <div className="absolute bottom-0 left-0 right-0 h-2 z-10 cursor-ns-resize" onMouseDown={(e) => { e.stopPropagation(); handleMouseDown(e, 'resize-end'); }} />
+        {height >= 22 && (
+          <div className="relative z-[1] px-2 pt-1.5 h-full flex flex-col overflow-hidden pb-[7px]">
+            {entry.is_override && (
+              <div className="absolute top-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-amber-400" />
+            )}
+            <div className="flex items-center gap-1.5 min-w-0 pr-3">
+              {isOrphaned
+                ? <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
+                : <Clock className="w-5 h-5 text-white flex-shrink-0" />
+              }
+              <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
+                {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
+              </span>
+            </div>
+            {height >= 44 && (
+              <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
+                {entry.time_start}–{entry.time_end}
+              </span>
+            )}
           </div>
-          {height >= 44 && (
-            <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
-              {entry.time_start}–{entry.time_end}
-            </span>
-          )}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }
@@ -1224,7 +1416,7 @@ function SlotPicker({
   const fitsGap = (durationMin: number) =>
     maxDurationMinutes === null || durationMin <= maxDurationMinutes;
 
-  const visibleShows  = shows.filter((s) => fitsGap(s.duration_minutes));
+  const visibleShows  = shows.filter((s) => s.default_clock_id != null && fitsGap(s.duration_minutes));
   const visibleClocks = clocks.filter((c) => c.duration_seconds > 0 && fitsGap(Math.round(c.duration_seconds / 60)));
 
   return (

@@ -199,6 +199,15 @@ export type RundownDurationOverrideUpsert = z.infer<typeof RundownDurationOverri
 export const JOIN_POLICIES = ['join_top', 'join_mid'] as const;
 export type JoinPolicy = (typeof JOIN_POLICIES)[number];
 
+export const ClockSegmentSummarySchema = z.object({
+  id: z.number().int(),
+  sort_order: z.number().int().nonnegative(),
+  name: z.string(),
+  type: z.enum(CLOCK_SEGMENT_TYPES),
+  duration_seconds: z.number().int().positive(),
+});
+export type ClockSegmentSummary = z.infer<typeof ClockSegmentSummarySchema>;
+
 export const ClockSchema = z.object({
   id: z.number().int(),
   name: z.string(),
@@ -214,6 +223,8 @@ export const ClockSchema = z.object({
   slot_count: z.number().int().nonnegative().default(0),
   // Shows that have this clock set as their default_clock_id
   assigned_shows: z.array(z.object({ id: z.number().int(), name: z.string(), jingle_playlist_id: z.number().int().nullable() })).default([]),
+  // Lightweight segment list for calendar/template visualization (type + duration only).
+  segments: z.array(ClockSegmentSummarySchema).default([]),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });
