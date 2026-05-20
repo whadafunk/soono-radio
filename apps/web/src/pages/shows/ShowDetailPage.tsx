@@ -221,6 +221,7 @@ export function ShowDetailPage() {
     reset();
     setLocalPlaylists(showMusicPlaylists.map(toLocal));
     setPlaylistsDirty(false);
+    setClockConflictError(null);
   };
 
   const showEntries = templateEntries
