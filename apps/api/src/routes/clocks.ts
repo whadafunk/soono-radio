@@ -203,7 +203,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
           type: s.type,
           duration_seconds: s.duration_seconds,
           sources: s.sources ?? [],
-          filler_playlist_id: s.filler_playlist_id ?? null,
           start_clip_playlist_id: s.start_clip_playlist_id ?? null,
           end_clip_playlist_id: s.end_clip_playlist_id ?? null,
           bed_playlist_id: s.bed_playlist_id ?? null,

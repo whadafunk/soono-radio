@@ -120,33 +120,6 @@ function applyLookAhead(
     return candidate;
   }
 
-  // Candidate would overrun this fixed-end segment. Try filler.
-  if (snap.filler_pool && snap.filler_pool.length > 0) {
-    const fittingFiller = snap.filler_pool.filter(
-      (m) => m.duration_seconds <= remaining + FIT_TOLERANCE_SECONDS,
-    );
-    if (fittingFiller.length > 0) {
-      const ctx: RotationContext = {
-        pool: fittingFiller,
-        history: snap.recentHistory,
-        rotation: { id: null, type: 'round_robin', params: { order_by: 'manual' } },
-        seed: composeSeed(Math.floor(now.getTime() / 60_000), seg.id, 0xf17e2),
-        now,
-      };
-      const fillerPick = runRotation(ctx);
-      if (fillerPick) {
-        return {
-          media: fillerPick.media,
-          reason: `look-ahead: original pick would overrun fixed-end segment; filler ${fillerPick.reason}`,
-          music_campaign_id: null,
-          campaign_id: null,
-          promo_id: null,
-          stop_set_position: null,
-        };
-      }
-    }
-  }
-
   // Nothing fits. Returning null lets the scheduler leave a gap rather than
   // crash through the segment boundary.
   return null;

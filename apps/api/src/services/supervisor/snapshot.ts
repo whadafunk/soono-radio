@@ -59,13 +59,6 @@ export interface MusicPickSnapshot {
    * positions one slot per tick.
    */
   stop_set: StopSetSnapshot | null;
-  /**
-   * Filler pool — short content (jingles, station IDs, promos) used by the
-   * look-ahead protection in fixed-end segments. When the primary pick would
-   * overrun the segment boundary, the predictor draws from here instead.
-   * Null when the segment has no filler_playlist_id configured.
-   */
-  filler_pool: PoolMedia[] | null;
 }
 
 export interface StopSetSnapshot {
@@ -227,11 +220,6 @@ export async function loadMusicPickSnapshot(
   const stop_set =
     segment.type === 'stop_set' ? await loadStopSetSnapshot(scheduled, now) : null;
 
-  // Filler pool — used by look-ahead when a fixed-end segment would overrun.
-  const filler_pool = segment.filler_playlist_id
-    ? await loadPlaylistPool(segment.filler_playlist_id)
-    : null;
-
   return {
     scheduled,
     sources: resolved,
@@ -242,7 +230,6 @@ export async function loadMusicPickSnapshot(
     interstitial_station_id_pool,
     music_campaigns,
     stop_set,
-    filler_pool: filler_pool && filler_pool.length > 0 ? filler_pool : null,
   };
 }
 

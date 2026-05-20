@@ -252,7 +252,6 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
     type,
     duration_seconds: DURATION_DEFAULT[type],
     sources: d.sources,
-    filler_playlist_id: null,
     start_clip_playlist_id: null,
     end_clip_playlist_id: null,
     bed_playlist_id: null,
@@ -1493,10 +1492,6 @@ function SegmentDrawer({
                 <PlaylistDropdown value={draft.bed_playlist_id} onChange={(v) => update({ bed_playlist_id: v })} playlists={playlists} categories={['bed']} />
               </Field>
             )}
-            <Field label="Filler playlist" hint="Short content to fill gaps from look-ahead scheduling">
-              <PlaylistDropdown value={draft.filler_playlist_id} onChange={(v) => update({ filler_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
-            </Field>
-
             {draft.type === 'music' && (
               <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1 space-y-4">
                 {/* Between-track jingles */}

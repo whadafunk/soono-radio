@@ -381,12 +381,6 @@ export const clockSegments = sqliteTable(
     // Music: weighted draw across sources. Stop set: combined pool.
     sources: text('sources', { mode: 'json' }).notNull().default('[]'),
 
-    // ── Filler ───────────────────────────────────────────────────────────────
-    // Short content to fill gaps created by the look-ahead algorithm.
-    filler_playlist_id: integer('filler_playlist_id').references(
-      () => playlists.id,
-      { onDelete: 'set null' },
-    ),
 
     // ── Transition clips ─────────────────────────────────────────────────────
     start_clip_playlist_id: integer('start_clip_playlist_id').references(

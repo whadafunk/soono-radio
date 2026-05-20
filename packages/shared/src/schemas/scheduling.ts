@@ -107,8 +107,6 @@ export const ClockSegmentSchema = z.object({
 
   sources: z.array(SegmentSourceEntrySchema).default([]),
 
-  filler_playlist_id: z.number().int().nullable(),
-
   start_clip_playlist_id: z.number().int().nullable(),
   end_clip_playlist_id: z.number().int().nullable(),
   bed_playlist_id: z.number().int().nullable(),
@@ -144,8 +142,6 @@ export const ClockSegmentCreateSchema = z.object({
   sort_order: z.number().int().nonnegative().default(0),
 
   sources: z.array(SegmentSourceEntrySchema).default([]),
-
-  filler_playlist_id: z.number().int().positive().nullable().optional(),
 
   start_clip_playlist_id: z.number().int().positive().nullable().optional(),
   end_clip_playlist_id: z.number().int().positive().nullable().optional(),
