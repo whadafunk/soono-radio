@@ -539,8 +539,8 @@ export function ClocksPage() {
                       >
                         {assignedShows.length > 0 ? `Assigned (${assignedShows[0].name})` : 'Unassigned'}
                       </span>
-                      <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'invisible'}`}>
-                        Scheduled
+                      <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                        {clock.slot_count > 0 ? 'Scheduled' : 'Unscheduled'}
                       </span>
                     </div>
                   </button>
@@ -612,11 +612,9 @@ export function ClocksPage() {
                     onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
                     className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
                   />
-                  {draftClock.slot_count > 0 && (
-                    <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-300">
-                      Scheduled ({draftClock.slot_count})
-                    </span>
-                  )}
+                  <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                    {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
+                  </span>
                   <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
@@ -713,11 +711,9 @@ export function ClocksPage() {
 
                     {/* Right: used by shows (~1/3) */}
                     <div className="flex-[1] min-w-0 px-5 py-4 space-y-3">
-                      {draftClock.slot_count > 0 && (
-                        <span className="inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded bg-amber-900/30 text-amber-300">
-                          Scheduled ({draftClock.slot_count})
-                        </span>
-                      )}
+                      <span className={`inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                        {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
+                      </span>
                       <div>
                         <p className="text-xs font-medium text-zinc-400 mb-2">Assigned by</p>
                         {draftClock.assigned_shows.length === 0 ? (
