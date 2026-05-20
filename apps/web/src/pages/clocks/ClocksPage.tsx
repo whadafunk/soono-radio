@@ -38,9 +38,7 @@ import {
   SWEEP_SOURCES,
   SIMPLE_ROTATION_TYPES,
   SimpleRotationType,
-  FINISH_POLICIES,
   JOIN_POLICIES,
-  FinishPolicy,
   JoinPolicy,
   Rotation,
   playlistMediaCategory,
@@ -65,10 +63,6 @@ import { SaveStatus } from '../../components/SaveStatus';
 
 // ─── Handover / sweep labels ──────────────────────────────────────────────────
 
-const FINISH_POLICY_LABELS: Record<FinishPolicy, { label: string; desc: string }> = {
-  hard_cut:        { label: 'Hard cut',        desc: 'Cut the active segment immediately when a hard-start successor arrives.' },
-  finish_segment:  { label: 'Finish segment',  desc: 'Let the active segment finish naturally before handing over (may overrun by minutes).' },
-};
 
 const JOIN_POLICY_LABELS: Record<JoinPolicy, { label: string; desc: string }> = {
   join_top:  { label: 'Join at top',  desc: 'Always start the clock at segment 1, regardless of when the slot begins.' },
@@ -320,7 +314,6 @@ export function ClocksPage() {
           description: draftClock.description,
           station_id_playlist_id: draftClock.station_id_playlist_id,
           jingle_playlist_id: draftClock.jingle_playlist_id,
-          finish_policy: draftClock.finish_policy,
           join_policy: draftClock.join_policy,
         }));
       if (segsDirty && draftClock)
@@ -653,46 +646,22 @@ export function ClocksPage() {
                     {/* Handover */}
                     <div className="space-y-3">
                       <p className="text-xs font-medium text-zinc-400">Handover</p>
-                      {(
-                        [
-                          {
-                            key: 'finish_policy',
-                            label: 'Finish policy',
-                            hint: 'What to do when a hard-start segment arrives while another is still playing. Hard cut stops immediately; Finish segment lets it complete naturally (may overrun by minutes).',
-                            options: FINISH_POLICIES,
-                            def: supervisorConfig?.finish_policy ?? 'finish_segment',
-                            labelsMap: FINISH_POLICY_LABELS,
-                          },
-                          {
-                            key: 'join_policy',
-                            label: 'Join policy',
-                            hint: 'How to enter this clock when the slot starts mid-way through its design length. Join at top always starts at segment 1; Join mid skips ahead to the segment that would be playing now, preserving wall-clock break alignment.',
-                            options: JOIN_POLICIES,
-                            def: supervisorConfig?.join_policy ?? 'join_top',
-                            labelsMap: JOIN_POLICY_LABELS,
-                          },
-                        ] as const
-                      ).map(({ key, label, hint, options, def, labelsMap }) => {
-                        const lm = labelsMap as Record<string, { label: string; desc: string }>;
-                        return (
-                          <div key={key}>
-                            <p className="text-xs text-zinc-400 mb-1 flex items-center gap-1">
-                              {label}
-                              <HelpTooltip text={hint} />
-                            </p>
-                            <select
-                              value={(draftClock[key as keyof ClockType] as string | null) ?? ''}
-                              onChange={(e) => updateDraftClock((c) => ({ ...c, [key]: e.target.value === '' ? null : e.target.value }))}
-                              className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-indigo-500"
-                            >
-                              <option value="" className="bg-zinc-900 text-zinc-400">Station default — {lm[def].label}</option>
-                              {options.map((o) => (
-                                <option key={o} value={o} className="bg-zinc-900">{lm[o].label}</option>
-                              ))}
-                            </select>
-                          </div>
-                        );
-                      })}
+                      <div>
+                        <p className="text-xs text-zinc-400 mb-1 flex items-center gap-1">
+                          Join policy
+                          <HelpTooltip text="How to enter this clock when the slot starts mid-way through its design length. Join at top always starts at segment 1; Join mid skips ahead to the segment that would be playing now, preserving wall-clock break alignment." />
+                        </p>
+                        <select
+                          value={draftClock.join_policy ?? ''}
+                          onChange={(e) => updateDraftClock((c) => ({ ...c, join_policy: e.target.value === '' ? null : e.target.value as typeof JOIN_POLICIES[number] }))}
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-indigo-500"
+                        >
+                          <option value="" className="bg-zinc-900 text-zinc-400">Station default — {JOIN_POLICY_LABELS[supervisorConfig?.join_policy ?? 'join_top'].label}</option>
+                          {JOIN_POLICIES.map((o) => (
+                            <option key={o} value={o} className="bg-zinc-900">{JOIN_POLICY_LABELS[o].label}</option>
+                          ))}
+                        </select>
+                      </div>
                     </div>
                   </div>
 

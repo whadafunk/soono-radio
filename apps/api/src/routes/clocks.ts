@@ -23,7 +23,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
         description: clocks.description,
         station_id_playlist_id: clocks.station_id_playlist_id,
         jingle_playlist_id: clocks.jingle_playlist_id,
-        finish_policy: clocks.finish_policy,
         join_policy: clocks.join_policy,
         duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
         used_count: usedExpr,
@@ -64,7 +63,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
       description: parsed.data.description ?? null,
       station_id_playlist_id: parsed.data.station_id_playlist_id ?? null,
       jingle_playlist_id: parsed.data.jingle_playlist_id ?? null,
-      ...(parsed.data.finish_policy && { finish_policy: parsed.data.finish_policy }),
       ...(parsed.data.join_policy && { join_policy: parsed.data.join_policy }),
     }).returning();
     return reply.status(201).send(clock);
@@ -79,7 +77,6 @@ export async function clockRoutes(fastify: FastifyInstance) {
         description: clocks.description,
         station_id_playlist_id: clocks.station_id_playlist_id,
         jingle_playlist_id: clocks.jingle_playlist_id,
-        finish_policy: clocks.finish_policy,
         join_policy: clocks.join_policy,
         duration_seconds: sql<number>`COALESCE(SUM(${clockSegments.duration_seconds}), 0)`,
         used_count: usedExpr,
@@ -149,14 +146,15 @@ export async function clockRoutes(fastify: FastifyInstance) {
     const parsed = z.array(ClockSegmentCreateSchema).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
 
-    // Structure lock: when a clock is in use anywhere, its segment count, order, types,
-    // and durations are frozen — only internal config changes are allowed.
+    // Structure lock: when a clock is actually scheduled (calendar / template),
+    // its segment count, order, types, and durations are frozen — only internal
+    // config changes are allowed.  Show assignment alone does NOT lock structure;
+    // it is a design-time hint, not a scheduling commitment.
     const [lockRow] = await db.select({
       usageCount: sql<number>`(
         (SELECT COUNT(*) FROM ${calendarEntries}      WHERE ${calendarEntries.clock_id}      = ${id}) +
         (SELECT COUNT(*) FROM ${templateEntries}      WHERE ${templateEntries.clock_id}      = ${id}) +
-        (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${id}) +
-        (SELECT COUNT(*) FROM ${shows}                WHERE ${shows.default_clock_id}        = ${id})
+        (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${id})
       )`,
     }).from(clocks).where(eq(clocks.id, id));
 
@@ -166,35 +164,32 @@ export async function clockRoutes(fastify: FastifyInstance) {
       const incoming = parsed.data;
       if (existing.length !== incoming.length) {
         return reply.status(409).send({
-          error: 'Clock structure is locked — cannot add or remove segments while the clock is scheduled or assigned to a show.',
+          error: 'Clock structure is locked — cannot add or remove segments while the clock is scheduled.',
         });
       }
       for (let i = 0; i < existing.length; i++) {
         if (existing[i].type !== incoming[i].type || existing[i].duration_seconds !== incoming[i].duration_seconds) {
           return reply.status(409).send({
-            error: `Clock structure is locked — segment ${i + 1} type or duration cannot change while the clock is scheduled or assigned to a show.`,
+            error: `Clock structure is locked — segment ${i + 1} type or duration cannot change while the clock is scheduled.`,
           });
         }
       }
     }
 
-    // Unassigned clocks (no shows reference this clock) must back every music
-    // segment with at least one specific `playlist` source — otherwise nothing
-    // will play. See docs/clocks-rotations-redesign.md §2.
     const [{ assignedCount }] = await db
       .select({ assignedCount: sql<number>`COUNT(*)` })
       .from(shows).where(eq(shows.default_clock_id, id));
     if (assignedCount === 0) {
-      const offending = parsed.data
+      const showModeOffenders = parsed.data
         .map((s, i) => ({ s, i }))
         .filter(({ s }) =>
           s.type === 'music' &&
-          !(s.sources ?? []).some((src) => src.type === 'playlist'),
+          (s.sources ?? []).some((src) => src.type === 'show_playlist'),
         );
-      if (offending.length > 0) {
+      if (showModeOffenders.length > 0) {
         return reply.status(400).send({
-          error: 'Unassigned clocks require at least one playlist source on every music segment',
-          segment_indexes: offending.map(({ i }) => i),
+          error: 'Show Playlist mode requires the clock to be assigned to a show',
+          segment_indexes: showModeOffenders.map(({ i }) => i),
         });
       }
     }
@@ -226,7 +221,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
           accept_live: s.accept_live ?? true,
           accept_sweepers: s.accept_sweepers ?? [],
           sweeper_config: s.sweeper_config ?? null,
-          silence_detection_action: s.silence_detection_action ?? null,
+          silence_threshold_seconds: s.silence_threshold_seconds ?? null,
           rotation_type: s.rotation_type ?? null,
         })),
       );

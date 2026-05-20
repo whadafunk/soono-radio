@@ -300,9 +300,6 @@ export type RotationInsert = typeof rotations.$inferInsert;
 
 // ─── Clocks ───────────────────────────────────────────────────────────────────
 
-export const FINISH_POLICIES = ['hard_cut', 'finish_segment'] as const;
-export type FinishPolicy = (typeof FINISH_POLICIES)[number];
-
 export const JOIN_POLICIES = ['join_top', 'join_mid'] as const;
 export type JoinPolicy = (typeof JOIN_POLICIES)[number];
 
@@ -316,10 +313,9 @@ export const clocks = sqliteTable('clocks', {
   station_id_playlist_id: integer('station_id_playlist_id'),
   // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
   jingle_playlist_id: integer('jingle_playlist_id'),
-  // Handover policies — null means inherit from supervisor config defaults
-  // NOTE: overrun_policy column exists in DB but is no longer used (superseded by
-  // show.extension_policy). Cannot drop via libsql — left as inert schema drift.
-  finish_policy: text('finish_policy', { enum: FINISH_POLICIES }),
+  // Handover policy — null means inherit from supervisor config defaults
+  // NOTE: overrun_policy and finish_policy columns exist in DB but are no longer used.
+  // Cannot drop via libsql migration — left as inert schema drift.
   join_policy: text('join_policy', { enum: JOIN_POLICIES }),
   created_at: integer('created_at', { mode: 'timestamp' })
     .notNull()
@@ -439,8 +435,10 @@ export const clockSegments = sqliteTable(
     accept_sweepers: text('accept_sweepers', { mode: 'json' }).notNull().default('[]'),
     // Per-segment sweeper distribution: { per_hour, min_gap_minutes, sources[] }
     sweeper_config: text('sweeper_config', { mode: 'json' }),
-    // Only for live / live_audience: action when silence is detected on harbor
+    // Legacy — superseded by silence_threshold_seconds. Kept inert in DB.
     silence_detection_action: text('silence_detection_action'),
+    // Only for live / live_audience: threshold override (null = use global Mix Engine setting)
+    silence_threshold_seconds: integer('silence_threshold_seconds'),
     // Simple rotation algorithm for stop_set/live/live_audience segments
     rotation_type: text('rotation_type'),
   },

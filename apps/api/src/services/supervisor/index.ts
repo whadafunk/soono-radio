@@ -192,8 +192,8 @@ async function computeDrift(scheduled: ResolvedSegment): Promise<number> {
  *
  * For tiling clocks where the current segment is the last one, the boundary
  * is the start of the next clock instance — which for now we treat as a
- * soft handover (the clock's own finish_policy governs it). So warning only
- * fires intra-clock.
+ * soft handover (governed by the first segment's start_policy on the next clock).
+ * So warning only fires intra-clock.
  */
 async function computeHardCutWarning(scheduled: ResolvedSegment): Promise<boolean> {
   if (scheduled.segment.can_skip) return false;

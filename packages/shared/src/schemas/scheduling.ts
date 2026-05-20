@@ -63,7 +63,7 @@ export const SEGMENT_SOURCE_TYPES = [
 export type SegmentSourceType = (typeof SEGMENT_SOURCE_TYPES)[number];
 
 export const SegmentSourceEntrySchema = z.discriminatedUnion('type', [
-  z.object({ type: z.literal('show_playlist'), tier: z.string().optional(), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional(), rotation_id: z.number().int().positive().nullable().optional() }),
+  z.object({ type: z.literal('show_playlist') }),
   z.object({ type: z.literal('show_jingles'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
   z.object({ type: z.literal('show_beds'), weight: z.number().int().positive().default(1), rotation: z.enum(SIMPLE_ROTATION_TYPES).optional() }),
   // promos / campaigns gain an optional simple rotation — used by the stop-set two-slot UI
@@ -81,14 +81,6 @@ export type SegmentSourceEntry = z.infer<typeof SegmentSourceEntrySchema>;
 
 export const SWEEPER_TYPES = ['commercial', 'promo', 'station_id', 'jingle'] as const;
 export type SweeperType = (typeof SWEEPER_TYPES)[number];
-
-export const SILENCE_DETECTION_ACTIONS = [
-  'none',
-  'switch_to_music',
-  'alert',
-  'fade_and_switch',
-] as const;
-export type SilenceDetectionAction = (typeof SILENCE_DETECTION_ACTIONS)[number];
 
 // ============ CLOCKS ============
 
@@ -138,7 +130,7 @@ export const ClockSegmentSchema = z.object({
   // Legacy field — superseded by sweeper_config. Still returned by API for old data.
   accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
   sweeper_config: SegmentSweeperConfigSchema.nullable().default(null),
-  silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable(),
+  silence_threshold_seconds: z.number().int().min(1).max(60).nullable(),
   rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable(),
 });
 export type ClockSegment = z.infer<typeof ClockSegmentSchema>;
@@ -171,7 +163,7 @@ export const ClockSegmentCreateSchema = z.object({
   accept_live: z.boolean().default(true),
   accept_sweepers: z.array(z.enum(SWEEPER_TYPES)).default([]),
   sweeper_config: SegmentSweeperConfigSchema.nullable().optional(),
-  silence_detection_action: z.enum(SILENCE_DETECTION_ACTIONS).nullable().optional(),
+  silence_threshold_seconds: z.number().int().min(1).max(60).nullable().optional(),
   rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable().optional(),
 });
 export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
@@ -196,8 +188,8 @@ export const ClockSchema = z.object({
   station_id_playlist_id: z.number().int().nullable(),
   // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
   jingle_playlist_id: z.number().int().nullable(),
-  // null = inherit from supervisor config defaults
-  finish_policy: z.enum(FINISH_POLICIES).nullable(),
+  // finish_policy removed: transition behaviour is expressed by the first segment's
+  // start_policy on the incoming clock; a per-clock override is redundant.
   join_policy: z.enum(JOIN_POLICIES).nullable(),
   duration_seconds: z.number().int().nonnegative(),
   // Derived: populated by the API on read; not stored.
@@ -215,7 +207,6 @@ export const ClockCreateSchema = z.object({
   description: z.string().nullable().optional(),
   station_id_playlist_id: z.number().int().positive().nullable().optional(),
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
-  finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),
   join_policy: z.enum(JOIN_POLICIES).nullable().optional(),
 });
 export type ClockCreate = z.infer<typeof ClockCreateSchema>;
@@ -225,7 +216,6 @@ export const ClockPatchSchema = z.object({
   description: z.string().nullable().optional(),
   station_id_playlist_id: z.number().int().positive().nullable().optional(),
   jingle_playlist_id: z.number().int().positive().nullable().optional(),
-  finish_policy: z.enum(FINISH_POLICIES).nullable().optional(),
   join_policy: z.enum(JOIN_POLICIES).nullable().optional(),
 });
 export type ClockPatch = z.infer<typeof ClockPatchSchema>;

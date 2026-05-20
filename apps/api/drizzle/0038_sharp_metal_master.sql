@@ -1,0 +1,1 @@
+ALTER TABLE `clocks` DROP COLUMN `finish_policy`;
