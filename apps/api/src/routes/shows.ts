@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, asc, sql } from 'drizzle-orm';
+import { eq, asc, sql, and, ne } from 'drizzle-orm';
 import {
   ShowCreateSchema,
   ShowPatchSchema,
@@ -18,6 +18,14 @@ export async function showRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/shows', async (request, reply) => {
     const parsed = ShowCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.default_clock_id != null) {
+      const [conflict] = await db.select({ id: shows.id, name: shows.name })
+        .from(shows).where(eq(shows.default_clock_id, parsed.data.default_clock_id));
+      if (conflict) return reply.status(409).send({
+        error: `Clock is already assigned to "${conflict.name}". A clock can only be used by one show.`,
+        conflicting_show: { id: conflict.id, name: conflict.name },
+      });
+    }
     const [show] = await db.insert(shows).values({
       name: parsed.data.name,
       host: parsed.data.host ?? null,
@@ -42,6 +50,14 @@ export async function showRoutes(fastify: FastifyInstance) {
     const id = Number(request.params.id);
     const parsed = ShowPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.default_clock_id != null) {
+      const [conflict] = await db.select({ id: shows.id, name: shows.name })
+        .from(shows).where(and(eq(shows.default_clock_id, parsed.data.default_clock_id), ne(shows.id, id)));
+      if (conflict) return reply.status(409).send({
+        error: `Clock is already assigned to "${conflict.name}". A clock can only be used by one show.`,
+        conflicting_show: { id: conflict.id, name: conflict.name },
+      });
+    }
     const [updated] = await db.update(shows)
       .set({ ...parsed.data, updated_at: sql`(unixepoch())` })
       .where(eq(shows.id, id))

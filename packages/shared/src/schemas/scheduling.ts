@@ -192,7 +192,7 @@ export const ClockSchema = z.object({
   used: z.boolean().default(false),
   slot_count: z.number().int().nonnegative().default(0),
   // Shows that have this clock set as their default_clock_id
-  assigned_shows: z.array(z.object({ id: z.number().int(), name: z.string() })).default([]),
+  assigned_shows: z.array(z.object({ id: z.number().int(), name: z.string(), jingle_playlist_id: z.number().int().nullable() })).default([]),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });

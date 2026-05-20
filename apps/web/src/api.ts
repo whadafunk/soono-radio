@@ -747,11 +747,19 @@ export type CampaignMediaAdd = CampaignMediaCreate & {
 
 // ─── Fetch helper ────────────────────────────────────────────────────────────
 
+export class ApiError extends Error {
+  constructor(public readonly status: number, public readonly body: unknown, message: string) {
+    super(message);
+    this.name = 'ApiError';
+  }
+}
+
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${path}`, init);
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`${init?.method ?? 'GET'} ${path} → ${res.status}: ${body}`);
+    let body: unknown;
+    try { body = await res.json(); } catch { body = await res.text().catch(() => ''); }
+    throw new ApiError(res.status, body, `${init?.method ?? 'GET'} ${path} → ${res.status}`);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

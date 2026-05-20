@@ -39,14 +39,14 @@ export async function clockRoutes(fastify: FastifyInstance) {
 
     const clockIds = rows.map((r) => r.id);
     const assignedShowRows = clockIds.length > 0
-      ? await db.select({ id: shows.id, name: shows.name, clock_id: shows.default_clock_id })
+      ? await db.select({ id: shows.id, name: shows.name, clock_id: shows.default_clock_id, jingle_playlist_id: shows.jingle_playlist_id })
           .from(shows).where(inArray(shows.default_clock_id, clockIds))
       : [];
-    const showsByClockId = new Map<number, { id: number; name: string }[]>();
+    const showsByClockId = new Map<number, { id: number; name: string; jingle_playlist_id: number | null }[]>();
     for (const s of assignedShowRows) {
       if (s.clock_id == null) continue;
       const list = showsByClockId.get(s.clock_id) ?? [];
-      list.push({ id: s.id, name: s.name });
+      list.push({ id: s.id, name: s.name, jingle_playlist_id: s.jingle_playlist_id });
       showsByClockId.set(s.clock_id, list);
     }
 
@@ -92,7 +92,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .groupBy(clocks.id);
     if (!clock) return reply.status(404).send({ error: 'Clock not found' });
     const assignedShowRows = await db
-      .select({ id: shows.id, name: shows.name })
+      .select({ id: shows.id, name: shows.name, jingle_playlist_id: shows.jingle_playlist_id })
       .from(shows).where(eq(shows.default_clock_id, id));
     const { used_count, ...rest } = clock;
     return reply.send({ ...rest, used: used_count > 0, slot_count: used_count, assigned_shows: assignedShowRows });

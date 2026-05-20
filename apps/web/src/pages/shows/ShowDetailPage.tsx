@@ -18,6 +18,7 @@ import {
   fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
   fetchPlaylists, fetchLibrary, fetchLibraryItem, fetchIngestJob,
   uploadLibraryFiles, fetchRotations, fetchShowCampaigns, fetchSupervisorConfig,
+  ApiError,
 } from '../../api';
 import type { PlaylistSummary, ShowCampaign } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
@@ -117,6 +118,7 @@ export function ShowDetailPage() {
   });
 
   const [activeTab, setActiveTab] = useState<'configuration' | 'media-content'>('configuration');
+  const [clockConflictError, setClockConflictError] = useState<string | null>(null);
 
   // ── Local playlist draft (music playlists are saved as part of the main Save) ──
   const [localPlaylists, setLocalPlaylists] = useState<LocalShowPlaylist[]>([]);
@@ -193,12 +195,22 @@ export function ShowDetailPage() {
   const selectedDuration = watch('duration_minutes') ?? show?.duration_minutes ?? 60;
 
   const onSubmit = async (data: ShowPatch) => {
-    await updateMutation.mutateAsync({
-      ...data,
-      host:     data.host?.trim()     || null,
-      producer: data.producer?.trim() || null,
-      notes:    data.notes?.trim()    || null,
-    });
+    setClockConflictError(null);
+    try {
+      await updateMutation.mutateAsync({
+        ...data,
+        host:     data.host?.trim()     || null,
+        producer: data.producer?.trim() || null,
+        notes:    data.notes?.trim()    || null,
+      });
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 409) {
+        const msg = (err.body as { error?: string } | null)?.error ?? 'Clock is already assigned to another show.';
+        setClockConflictError(msg);
+        return;
+      }
+      throw err;
+    }
     if (playlistsDirty) {
       await playlistSyncMutation.mutateAsync(localPlaylists);
     }
@@ -246,7 +258,7 @@ export function ShowDetailPage() {
 
   const hex = COLOR_HEX[selectedColor ?? show.color];
 
-  const jinglePlaylists = allPlaylists.filter((p) => p.type === 'jingle');
+  const jinglePlaylists = allPlaylists.filter((p) => p.type === 'jingle' && p.subcategory === 'show');
   const bedPlaylists    = allPlaylists.filter((p) => p.type === 'bed');
   const musicPlaylists  = allPlaylists.filter((p) => p.type === 'music');
 
@@ -401,14 +413,17 @@ export function ShowDetailPage() {
                     />
                   </Field>
 
-                  <Field label={<span className="flex items-center gap-1">Assigned Clock <HelpTooltip text="The default clock template for this show. Controls which segments play — music, jingles, spots, sweepers — unless a per-slot override is set on the schedule." /></span>}>
+                  <Field label={<span className="flex items-center gap-1">Assigned Clock <HelpTooltip text="The default clock template for this show. Controls which segments play — music, jingles, spots, sweepers — unless a per-slot override is set on the schedule." /></span>} error={clockConflictError ?? undefined}>
                     <Controller
                       control={control}
                       name="default_clock_id"
                       render={({ field }) => (
                         <select
                           value={field.value ?? ''}
-                          onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
+                          onChange={(e) => {
+                            setClockConflictError(null);
+                            field.onChange(e.target.value === '' ? null : Number(e.target.value));
+                          }}
                           className={SELECT}
                         >
                           <option value="">None</option>

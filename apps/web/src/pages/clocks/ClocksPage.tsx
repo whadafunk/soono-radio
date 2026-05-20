@@ -685,12 +685,20 @@ export function ClocksPage() {
                       </div>
                       <div>
                         <p className="text-xs text-zinc-400 mb-1">Jingles Playlist</p>
-                        <PlaylistDropdown
-                          value={draftClock.jingle_playlist_id ?? null}
-                          onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
-                          playlists={allPlaylists}
-                          categories={['jingle']}
-                        />
+                        {draftClock.assigned_shows.length > 0 ? (
+                          <p className="text-xs text-zinc-400 px-3 py-1.5 border border-zinc-800 rounded bg-zinc-800/40 opacity-70">
+                            {allPlaylists.find((p) => p.id === draftClock.assigned_shows[0].jingle_playlist_id)?.name ?? 'None'}
+                            <span className="ml-1.5 text-zinc-500">(from show)</span>
+                          </p>
+                        ) : (
+                          <PlaylistDropdown
+                            value={draftClock.jingle_playlist_id ?? null}
+                            onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
+                            playlists={allPlaylists}
+                            categories={['jingle']}
+                            filter={(p) => p.subcategory === 'show'}
+                          />
+                        )}
                       </div>
                       <div>
                         <p className="text-xs text-zinc-400 mb-1">Station ID Playlist</p>
