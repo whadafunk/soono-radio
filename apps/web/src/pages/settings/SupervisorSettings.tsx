@@ -5,8 +5,8 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { Loader, Check, AlertCircle } from 'lucide-react';
 import {
   SupervisorConfig, SupervisorConfigSchema,
-  FINISH_POLICIES, JOIN_POLICIES, EXTENSION_POLICIES,
-  FinishPolicy, JoinPolicy, ExtensionPolicy,
+  JOIN_POLICIES, EXTENSION_POLICIES,
+  JoinPolicy, ExtensionPolicy,
 } from '@radio/shared';
 import {
   fetchSupervisorConfig,
@@ -176,17 +176,9 @@ export function SupervisorSettings() {
 
         <CollapsibleSection title="Handover defaults">
           <p className="text-xs text-zinc-500 mb-4">
-            Station-wide defaults for clock handover behaviour. Individual clocks and shows can override these.
+            Station-wide defaults for clock handover behaviour. Shows can override these individually.
           </p>
           <div className="space-y-4">
-            <HandoverPolicyRow
-              label="Finish policy"
-              hint="What to do when a hard-start segment is incoming."
-              fieldName="finish_policy"
-              options={FINISH_POLICIES}
-              labels={{ hard_cut: 'Hard cut', finish_segment: 'Finish segment' } as Record<FinishPolicy, string>}
-              register={register}
-            />
             <HandoverPolicyRow
               label="Join policy"
               hint="How to enter a clock when the slot starts mid-way through its design length."

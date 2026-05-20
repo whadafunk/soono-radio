@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { CLOCK_SEGMENT_TYPES, FINISH_POLICIES, JOIN_POLICIES, EXTENSION_POLICIES } from './scheduling.js';
+import { CLOCK_SEGMENT_TYPES, JOIN_POLICIES, EXTENSION_POLICIES } from './scheduling.js';
 
 export const RESOLVED_SCHEDULE_SOURCES = ['calendar', 'template_clock', 'template', 'fallback'] as const;
 export type ResolvedScheduleSource = (typeof RESOLVED_SCHEDULE_SOURCES)[number];
@@ -95,7 +95,6 @@ export const SupervisorConfigSchema = z.object({
   queue_depth_threshold: z.number().int().min(1).max(20).default(1),
   separation_minutes: z.number().int().min(0).max(720).default(30),
   // Station-wide handover defaults — clocks inherit these unless they set an explicit override
-  finish_policy: z.enum(FINISH_POLICIES).default('finish_segment'),
   join_policy: z.enum(JOIN_POLICIES).default('join_top'),
   // Default for shows that don't set extension_policy explicitly
   extension_policy: z.enum(EXTENSION_POLICIES).default('repeat_last_clock'),

@@ -171,10 +171,6 @@ export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
 export const ClockSegmentPatchSchema = ClockSegmentCreateSchema.partial().omit({ sort_order: true });
 export type ClockSegmentPatch = z.infer<typeof ClockSegmentPatchSchema>;
 
-// Clock handover policies — see docs/clocks-rotations-redesign.md §5
-export const FINISH_POLICIES = ['hard_cut', 'finish_segment'] as const;
-export type FinishPolicy = (typeof FINISH_POLICIES)[number];
-
 // join_top: always start clock at segment 0; join_mid: skip ahead to the segment
 // that matches the current wall-clock minute (preserves break-time alignment).
 export const JOIN_POLICIES = ['join_top', 'join_mid'] as const;
@@ -188,8 +184,6 @@ export const ClockSchema = z.object({
   station_id_playlist_id: z.number().int().nullable(),
   // Jingle playlist for unassigned clocks (assigned clocks use show.jingle_playlist_id)
   jingle_playlist_id: z.number().int().nullable(),
-  // finish_policy removed: transition behaviour is expressed by the first segment's
-  // start_policy on the incoming clock; a per-clock override is redundant.
   join_policy: z.enum(JOIN_POLICIES).nullable(),
   duration_seconds: z.number().int().nonnegative(),
   // Derived: populated by the API on read; not stored.
