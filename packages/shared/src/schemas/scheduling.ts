@@ -5,9 +5,11 @@ import { z } from 'zod';
 export const StartPolicySchema = z.discriminatedUnion('type', [
   z.object({ type: z.literal('hard') }),
   z.object({
-    type: z.literal('soft'),
-    plus_seconds: z.number().int().nonnegative().default(30),
-    minus_seconds: z.number().int().nonnegative().default(0),
+    type: z.literal('flexible'),
+    // null = natural end (unlimited); 0 = disabled; N = cut after N seconds overtime
+    late_seconds: z.number().int().nonnegative().nullable().default(null),
+    // null = fill gap (unlimited); 0 = disabled; N = start at most N seconds early
+    early_seconds: z.number().int().nonnegative().nullable().default(0),
   }),
 ]);
 export type StartPolicy = z.infer<typeof StartPolicySchema>;
@@ -153,7 +155,7 @@ export const ClockSegmentCreateSchema = z.object({
   interstitial_station_id_enabled: z.boolean().default(false),
   station_id_every_n_tracks: z.number().int().positive().nullable().optional(),
 
-  start_policy: StartPolicySchema.default({ type: 'soft', plus_seconds: 30, minus_seconds: 0 }),
+  start_policy: StartPolicySchema.default({ type: 'flexible', late_seconds: null, early_seconds: 0 }),
   can_skip: z.boolean().default(false),
   can_fill: z.boolean().default(false),
   can_reschedule: z.boolean().default(false),

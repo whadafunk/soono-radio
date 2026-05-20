@@ -212,7 +212,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
           jingle_every_n_tracks: s.jingle_every_n_tracks ?? null,
           interstitial_station_id_enabled: s.interstitial_station_id_enabled ?? false,
           station_id_every_n_tracks: s.station_id_every_n_tracks ?? null,
-          start_policy: s.start_policy ?? { type: 'soft', plus_seconds: 30, minus_seconds: 0 },
+          start_policy: s.start_policy ?? { type: 'flexible', late_seconds: null, early_seconds: 0 },
           can_skip: s.can_skip ?? false,
           can_fill: s.can_fill ?? false,
           can_reschedule: s.can_reschedule ?? false,

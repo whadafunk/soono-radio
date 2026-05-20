@@ -187,7 +187,7 @@ async function computeDrift(scheduled: ResolvedSegment): Promise<number> {
 /**
  * Hard-cut warning fires when:
  *   - The current segment is fixed-end (can_skip = false), AND
- *   - The next segment in the clock has start_policy.type === 'hard', AND
+ *   - The next segment in the clock has start_policy.type === 'hard' (fixed), AND
  *   - We're within HARD_CUT_WARNING_SECONDS of the boundary.
  *
  * For tiling clocks where the current segment is the last one, the boundary

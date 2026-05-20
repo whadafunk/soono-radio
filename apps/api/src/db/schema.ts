@@ -411,10 +411,10 @@ export const clockSegments = sqliteTable(
     station_id_every_n_tracks: integer('station_id_every_n_tracks'),
 
     // ── Timing ───────────────────────────────────────────────────────────────
-    // { type: 'hard' } | { type: 'soft', plus_seconds, minus_seconds }
+    // { type: 'hard' } | { type: 'flexible', late_seconds: number|null, early_seconds: number|null }
     start_policy: text('start_policy', { mode: 'json' })
       .notNull()
-      .default('{"type":"soft","plus_seconds":30,"minus_seconds":0}'),
+      .default('{"type":"flexible","late_seconds":null,"early_seconds":0}'),
     // NOTE: trailing_time and recovery_tactics columns remain in DB but are no longer used.
     // Superseded by can_skip/can_fill/can_reschedule/catching_up_order/coasting_order below.
     trailing_time: text('trailing_time', { mode: 'json' }).notNull().default('[]'),

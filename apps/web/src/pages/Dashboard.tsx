@@ -477,7 +477,7 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
             {scheduled?.hard_cut_warning && (
               <span
                 className="text-rose-300 bg-rose-900/30 border border-rose-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]"
-                title="Next segment has a hard start — the current segment can't be shortened, so an audible cut is coming."
+                title="Next segment has a fixed start — the current segment can't be shortened, so an audible cut is coming."
               >
                 HARD CUT IN ~{formatHms(scheduled.segment_remaining_seconds)}
               </span>

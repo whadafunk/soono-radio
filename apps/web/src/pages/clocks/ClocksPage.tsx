@@ -64,6 +64,16 @@ import { SaveStatus } from '../../components/SaveStatus';
 // ─── Handover / sweep labels ──────────────────────────────────────────────────
 
 
+function startBadge(policy: StartPolicy): { label: string; cls: string } {
+  if (policy.type === 'hard') return { label: 'fixed', cls: 'bg-red-900/20 text-red-400' };
+  const lateOn  = policy.late_seconds  !== 0;
+  const earlyOn = policy.early_seconds !== 0;
+  if (lateOn && earlyOn) return { label: 'flexible',   cls: 'bg-green-900/20 text-green-400' };
+  if (lateOn)            return { label: 'flexi-late',  cls: 'bg-amber-900/20 text-amber-400' };
+  if (earlyOn)           return { label: 'flexi-early', cls: 'bg-blue-900/20 text-blue-400' };
+  return { label: 'fixed', cls: 'bg-red-900/20 text-red-400' };
+}
+
 const JOIN_POLICY_LABELS: Record<JoinPolicy, { label: string; desc: string }> = {
   join_top:  { label: 'Join at top',  desc: 'Always start the clock at segment 1, regardless of when the slot begins.' },
   join_mid:  { label: 'Join mid',     desc: 'Skip ahead to the segment that would be playing at the current wall-clock minute. Preserves break-time alignment.' },
@@ -194,13 +204,13 @@ const TYPE_DEFAULTS: Record<ClockSegmentType, {
   accept_live: boolean;
   sweeper_config: SegmentSweeperConfig | null;
 }> = {
-  music:         { sources: [{ type: 'show_playlist' }],                start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
-  live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
-  live_audience: { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
+  music:         { sources: [{ type: 'show_playlist' }],                start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
+  live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
+  live_audience: { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
   stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
   news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: null                         },
   voice_track:   { sources: [],                                                      start_policy: { type: 'hard' },                                    can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: false, sweeper_config: null                         },
-  bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'soft', plus_seconds: 30, minus_seconds: 0 }, can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: true,  sweeper_config: null                         },
+  bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: true,  sweeper_config: null                         },
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -1093,9 +1103,9 @@ function SortableSegmentItem({
 
         <span className="flex-1 min-w-0 text-sm text-zinc-200 truncate">{segment.name}</span>
 
-        <span className={`flex-shrink-0 text-xs px-1.5 py-0.5 rounded ${segment.start_policy.type === 'hard' ? 'bg-red-900/20 text-red-400' : 'bg-green-900/20 text-green-400'}`}>
-          {segment.start_policy.type === 'hard' ? 'hard' : 'soft'} start
-        </span>
+        {(() => { const b = startBadge(segment.start_policy); return (
+          <span className={`flex-shrink-0 text-xs px-1.5 py-0.5 rounded ${b.cls}`}>{b.label}</span>
+        ); })()}
 
         {ttAbbrev && (
           <span className="flex-shrink-0 text-xs px-1.5 py-0.5 rounded bg-zinc-800 text-zinc-500 font-mono">
@@ -1175,8 +1185,8 @@ function SegmentDrawer({
     { id: 'live', label: 'Sweepers & Live' },
   ];
 
-  const softPolicy = draft.start_policy.type === 'soft'
-    ? (draft.start_policy as Extract<StartPolicy, { type: 'soft' }>)
+  const flexPolicy = draft.start_policy.type === 'flexible'
+    ? (draft.start_policy as Extract<StartPolicy, { type: 'flexible' }>)
     : null;
 
   return (
@@ -1386,43 +1396,78 @@ function SegmentDrawer({
                 value={draft.start_policy.type}
                 onChange={(e) => {
                   const t = e.target.value as StartPolicy['type'];
-                  update({ start_policy: t === 'hard' ? { type: 'hard' } : { type: 'soft', plus_seconds: 30, minus_seconds: 0 } });
+                  update({ start_policy: t === 'hard' ? { type: 'hard' } : { type: 'flexible', late_seconds: null, early_seconds: 0 } });
                 }}
                 className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
               >
-                <option value="hard" className="bg-zinc-900">Hard — cut on schedule</option>
-                <option value="soft" className="bg-zinc-900">Soft — wait for natural end</option>
+                <option value="hard"     className="bg-zinc-900">Fixed — cut on schedule</option>
+                <option value="flexible" className="bg-zinc-900">Flexible — wait / fill gap</option>
               </select>
             </Field>
 
-            {softPolicy && (
-              <Field label="Timing window" hint="How far late (+) or early (−) this segment may start.">
+            {flexPolicy && (
+              <div className="col-span-2 space-y-2">
+                {/* Start late */}
                 <div className="flex items-center gap-3">
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-zinc-500">+</span>
+                  <label className="flex items-center gap-2 cursor-pointer select-none w-28 shrink-0">
                     <input
-                      type="number"
-                      min={0}
-                      value={softPolicy.plus_seconds}
-                      onChange={(e) => update({ start_policy: { type: 'soft', plus_seconds: parseInt(e.target.value) || 0, minus_seconds: softPolicy.minus_seconds } })}
-                      className="w-16 px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
+                      type="checkbox"
+                      checked={flexPolicy.late_seconds !== 0}
+                      onChange={(e) => update({ start_policy: { ...flexPolicy, late_seconds: e.target.checked ? null : 0 } })}
+                      className="accent-indigo-500"
                     />
-                    <span className="text-xs text-zinc-500">s</span>
-                  </div>
-                  <span className="text-zinc-700">·</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className="text-xs text-zinc-500">−</span>
-                    <input
-                      type="number"
-                      min={0}
-                      value={softPolicy.minus_seconds}
-                      onChange={(e) => update({ start_policy: { type: 'soft', plus_seconds: softPolicy.plus_seconds, minus_seconds: parseInt(e.target.value) || 0 } })}
-                      className="w-16 px-2 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
-                    />
-                    <span className="text-xs text-zinc-500">s</span>
-                  </div>
+                    <span className="text-xs text-zinc-300">Start late</span>
+                    <HelpTooltip text="Wait for the previous segment to finish naturally. Empty limit = natural end; set seconds to force a cut after N seconds of overtime." />
+                  </label>
+                  {flexPolicy.late_seconds !== 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-zinc-400">up to</span>
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder="∞"
+                        value={flexPolicy.late_seconds ?? ''}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value);
+                          update({ start_policy: { ...flexPolicy, late_seconds: isNaN(v) || v <= 0 ? null : v } });
+                        }}
+                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
+                      />
+                      <span className="text-xs text-zinc-400">s late{flexPolicy.late_seconds === null ? ' (natural end)' : ''}</span>
+                    </div>
+                  )}
                 </div>
-              </Field>
+                {/* Start early */}
+                <div className="flex items-center gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer select-none w-28 shrink-0">
+                    <input
+                      type="checkbox"
+                      checked={flexPolicy.early_seconds !== 0}
+                      onChange={(e) => update({ start_policy: { ...flexPolicy, early_seconds: e.target.checked ? null : 0 } })}
+                      className="accent-indigo-500"
+                    />
+                    <span className="text-xs text-zinc-300">Start early</span>
+                    <HelpTooltip text="Start early if the previous segment finishes ahead of schedule. Empty limit = fill gap immediately; set seconds to cap how early it can pull forward." />
+                  </label>
+                  {flexPolicy.early_seconds !== 0 && (
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-zinc-400">up to</span>
+                      <input
+                        type="number"
+                        min={1}
+                        placeholder="∞"
+                        value={flexPolicy.early_seconds ?? ''}
+                        onChange={(e) => {
+                          const v = parseInt(e.target.value);
+                          update({ start_policy: { ...flexPolicy, early_seconds: isNaN(v) || v <= 0 ? null : v } });
+                        }}
+                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
+                      />
+                      <span className="text-xs text-zinc-400">s early{flexPolicy.early_seconds === null ? ' (fill gap)' : ''}</span>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
 
             {/* End policy */}
