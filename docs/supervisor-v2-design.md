@@ -255,6 +255,21 @@ After assembling a track sequence, the planner computes the residual: `segment_d
 
   This rule applies both at plan time (planner avoids placing non-music items where they cannot complete) and at runtime (deviation monitor applies the same priority when replanning near a hard boundary). If a hard cut lands mid-item anyway due to unrecoverable drift, the deviation monitor sends `DROP_COMMITTED` to the relevant content processes so pacing credit is reversed.
 
+**Running-early into a fixed successor — gap must be filled by the current segment:**
+
+When a segment is running ahead of schedule (finishing before its planned end) and its immediate successor has `start_policy.early_seconds === 0` (fixed start, no early handover permitted), there is no escape valve: the gap between when the current segment ends and when the successor is allowed to start is guaranteed dead air unless the *current* segment fills it.
+
+This is distinct from the standard planner residual (which is known at plan time) — it emerges at runtime when actual track durations come in shorter than estimated, or after a deviation event pushes the segment ahead.
+
+The planner must look ahead at the successor's `start_policy` when building the current segment's plan:
+
+- If successor allows early start (`early_seconds > 0` or `null`): a small gap is acceptable — the planner can let the successor absorb it.
+- If successor is fixed (`early_seconds === 0`): the planner must be conservative and fill aggressively. The current segment is the last line of defence against silence before the fixed boundary. At plan time, this means biasing track selection toward shorter items that allow late-stage filler insertion, and reserving filler pool budget for near-boundary use.
+
+At runtime, the deviation monitor must apply the same logic: if the current segment is running early *and* the successor is fixed, trigger a replan immediately rather than coasting. The replan adds filler from `coasting_order` to absorb the gap. The priority order mirrors Decision 8 — filler jingles, station IDs, short promos — and the same minimum-gap threshold (default 5 seconds) applies before attempting to fill.
+
+The `coasting_order` field on the segment encodes exactly which content types are available for this purpose, so no new configuration is needed — this is purely a planning and deviation-monitor decision that depends on the successor's `start_policy`.
+
 **Drift monitor scope:**
 
 The drift monitor only handles deviations that happen at runtime — events that cause reality to diverge from the finalized plan:
