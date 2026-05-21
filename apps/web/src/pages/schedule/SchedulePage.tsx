@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, Fragment, useRef } from 
 import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye, CassetteTape } from 'lucide-react';
 import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
@@ -11,7 +11,10 @@ import {
   fetchClocks,
   fetchIntervals, createInterval, updateInterval, deleteInterval,
   fetchIntervalSlots, createIntervalSlot, updateIntervalSlot, deleteIntervalSlot,
+  fetchRundownSlotContent, upsertRundownShowContent, deleteRundownShowContent,
+  fetchPlaylists,
 } from '../../api';
+import type { RundownSlotContent } from '../../api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -235,6 +238,37 @@ type DragState = {
   isCopy: boolean;
 };
 
+// ─── Rundown content helpers ──────────────────────────────────────────────────
+
+type ContentEntry = { id: number; playlist_id: number | null; playlist_name: string | null };
+type ContentMap   = Map<string, Record<string, ContentEntry>>;
+
+function buildContentMap(rows: RundownSlotContent[]): ContentMap {
+  const map: ContentMap = new Map();
+  for (const row of rows) {
+    const k = `${row.date}|${row.time_start}|${row.clock_id}`;
+    if (!map.has(k)) map.set(k, {});
+    map.get(k)![row.segment_type] = { id: row.id, playlist_id: row.playlist_id, playlist_name: row.playlist_name };
+  }
+  return map;
+}
+
+function getRundownState(
+  clockId: number | null | undefined,
+  date: string,
+  timeStart: string,
+  clockMap: Map<number, ClockType>,
+  contentMap: ContentMap,
+): 'satisfied' | 'pending' | null {
+  if (!clockId) return null;
+  const clock = clockMap.get(clockId);
+  if (!clock) return null;
+  const required = [...new Set(clock.segments.filter(s => s.type === 'news' || s.type === 'bulletin').map(s => s.type))];
+  if (!required.length) return null;
+  const content = contentMap.get(`${date}|${timeStart}|${clockId}`) ?? {};
+  return required.every(t => content[t]?.playlist_id != null) ? 'satisfied' : 'pending';
+}
+
 // ─── Page ─────────────────────────────────────────────────────────────────────
 
 export function SchedulePage() {
@@ -262,6 +296,7 @@ export function SchedulePage() {
     d.setDate(weekStart.getDate() + i);
     return d;
   });
+  const weekEndISO = toISODate(weekDays[weekDays.length - 1]);
 
   const { data: calendarEntries = [] } = useQuery({
     queryKey: ['calendar-entries', weekStartISO],
@@ -277,6 +312,14 @@ export function SchedulePage() {
     }
     return map;
   }, [calendarEntries]);
+
+  const { data: slotContentRows = [] } = useQuery({
+    queryKey: ['rundown-slot-content', weekStartISO],
+    queryFn:  () => fetchRundownSlotContent(weekStartISO, weekEndISO),
+    enabled:  mode === 'calendar',
+  });
+
+  const contentMap = useMemo(() => buildContentMap(slotContentRows), [slotContentRows]);
 
   // Template mutations
   const invalidateTemplate = () => qc.invalidateQueries({ queryKey: ['template-entries'] });
@@ -297,6 +340,11 @@ export function SchedulePage() {
     onSuccess: invalidateCal,
   });
   const calDeleteMutation = useMutation({ mutationFn: deleteCalendarEntry, onSuccess: invalidateCal });
+
+  // Rundown content mutations
+  const invalidateContent = () => qc.invalidateQueries({ queryKey: ['rundown-slot-content'] });
+  const upsertContentMutation = useMutation({ mutationFn: upsertRundownShowContent, onSuccess: invalidateContent });
+  const removeContentMutation = useMutation({ mutationFn: deleteRundownShowContent, onSuccess: invalidateContent });
 
   // ── Drag state ──
   const [activeDrag, setActiveDrag] = useState<DragState | null>(null);
@@ -636,6 +684,7 @@ export function SchedulePage() {
                     calendarEntries={calEntryByDate.get(dateISO) ?? []}
                     showMap={showMap}
                     clockMap={clockMap}
+                    contentMap={contentMap}
                     isToday={checkToday(day)}
                     currentTop={currentTop}
                     activeDrag={
@@ -740,26 +789,35 @@ export function SchedulePage() {
           }}
         />
       )}
-      {calEditSlot && (
-        <CalEditSlotPopover
-          entry={calEditSlot.entry}
-          show={calEditSlot.show}
-          clock={calEditSlot.clock}
-          shows={activeShows}
-          clocks={clocks}
-          x={calEditSlot.x}
-          y={calEditSlot.y}
-          onClose={dismiss}
-          onRemove={() => { calDeleteMutation.mutate(calEditSlot.entry.id); dismiss(); }}
-          onRestore={calEditSlot.entry.is_override
-            ? () => { calDeleteMutation.mutate(calEditSlot.entry.id); dismiss(); }
-            : undefined}
-          onChange={(showId, clockId) => {
-            calUpdateMutation.mutate({ id: calEditSlot.entry.id, patch: { show_id: showId, clock_id: clockId } });
-            dismiss();
-          }}
-        />
-      )}
+      {calEditSlot && (() => {
+        const contentClockId = calEditSlot.clock?.id
+          ?? (calEditSlot.show?.default_clock_id ?? null);
+        const contentClock = contentClockId ? clockMap.get(contentClockId) : undefined;
+        return (
+          <CalEditSlotPopover
+            entry={calEditSlot.entry}
+            show={calEditSlot.show}
+            clock={calEditSlot.clock}
+            shows={activeShows}
+            clocks={clocks}
+            contentClock={contentClock}
+            contentMap={contentMap}
+            onUpsertContent={upsertContentMutation.mutate}
+            onRemoveContent={removeContentMutation.mutate}
+            x={calEditSlot.x}
+            y={calEditSlot.y}
+            onClose={dismiss}
+            onRemove={() => { calDeleteMutation.mutate(calEditSlot.entry.id); dismiss(); }}
+            onRestore={calEditSlot.entry.is_override
+              ? () => { calDeleteMutation.mutate(calEditSlot.entry.id); dismiss(); }
+              : undefined}
+            onChange={(showId, clockId) => {
+              calUpdateMutation.mutate({ id: calEditSlot.entry.id, patch: { show_id: showId, clock_id: clockId } });
+              dismiss();
+            }}
+          />
+        );
+      })()}
     </div>
   );
 }
@@ -877,7 +935,7 @@ function DayColumn({
 // ─── Calendar Day Column ──────────────────────────────────────────────────────
 
 function CalendarDayColumn({
-  date, templateEntries, calendarEntries, showMap, clockMap, isToday, currentTop,
+  date, templateEntries, calendarEntries, showMap, clockMap, contentMap, isToday, currentTop,
   activeDrag, onDragStart, onEmptyClick, onTemplateClick, onCalendarClick,
 }: {
   date: string;
@@ -885,6 +943,7 @@ function CalendarDayColumn({
   calendarEntries: CalendarEntry[];
   showMap: Map<number, Show>;
   clockMap: Map<number, ClockType>;
+  contentMap: ContentMap;
   isToday: boolean;
   currentTop: number;
   activeDrag: DragState | null;
@@ -995,15 +1054,18 @@ function CalendarDayColumn({
         const ovn  = isOvernightEntry(entry.time_start, entry.time_end) && timeToMinutes(entry.time_end) > 0;
         const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
         if (!entry.show_id && entry.clock_id) {
+          const rundownState = getRundownState(entry.clock_id, entry.date, entry.time_start, clockMap, contentMap);
           return [
-            <CalendarClockOnlyBlock key={`c${entry.id}`}    entry={entry} clock={clock} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
-            wrap && <CalendarClockOnlyBlock key={`cw${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+            <CalendarClockOnlyBlock key={`c${entry.id}`}    entry={entry} clock={clock} rundownState={rundownState} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+            wrap && <CalendarClockOnlyBlock key={`cw${entry.id}`} entry={wrap}  clock={clock} rundownState={rundownState} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
           ].filter(Boolean) as React.ReactElement[];
         }
         const showClockSegs = (show?.default_clock_id ? clockMap.get(show.default_clock_id)?.segments : undefined) ?? [];
+        const contentClockId = show?.default_clock_id ?? null;
+        const rundownState = getRundownState(contentClockId, entry.date, entry.time_start, clockMap, contentMap);
         return [
-          <CalendarEntryBlock key={`c${entry.id}`}    entry={entry} show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
-          wrap && <CalendarEntryBlock key={`cw${entry.id}`} entry={wrap}  show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+          <CalendarEntryBlock key={`c${entry.id}`}    entry={entry} show={show} segments={showClockSegs} rundownState={rundownState} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
+          wrap && <CalendarEntryBlock key={`cw${entry.id}`} entry={wrap}  show={show} segments={showClockSegs} rundownState={rundownState} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onCalendarClick(entry, x, y)} />,
         ].filter(Boolean) as React.ReactElement[];
       })}
 
@@ -1140,6 +1202,11 @@ function EntryBlock({ entry, show, segments = [], onClick, onDragStart, isDraggi
             <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : 'text-zinc-300'}`}>
               {show?.name ?? (isOrphaned ? (entry.orphaned_show_name ?? 'Orphaned') : 'No show')}
             </span>
+            {segments.some((s) => s.type === 'news' || s.type === 'bulletin') && (
+              <span title="Has rundown segments — assign content in the calendar">
+                <CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-rose-400/70" />
+              </span>
+            )}
           </div>
           {height >= 60 && show?.host && (
             <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5 pl-[26px]">{show.host}</span>
@@ -1221,6 +1288,11 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
               <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
                 {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
               </span>
+              {clock?.segments?.some((s) => s.type === 'news' || s.type === 'bulletin') && (
+                <span title="Has rundown segments — assign content in the calendar">
+                  <CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-rose-400/70" />
+                </span>
+              )}
             </div>
             {height >= 44 && (
               <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
@@ -1236,10 +1308,11 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
 
 // ─── Calendar Entry Block (show slot) ────────────────────────────────────────
 
-function CalendarEntryBlock({ entry, show, segments = [], onClick, onDragStart, isDragging }: {
+function CalendarEntryBlock({ entry, show, segments = [], rundownState = null, onClick, onDragStart, isDragging }: {
   entry: CalendarEntry;
   show: Show | undefined;
   segments?: ClockSegmentSummary[];
+  rundownState?: 'satisfied' | 'pending' | null;
   onClick: (x: number, y: number) => void;
   onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
@@ -1298,6 +1371,12 @@ function CalendarEntryBlock({ entry, show, segments = [], onClick, onDragStart, 
             <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : 'text-zinc-300'}`}>
               {show?.name ?? (isOrphaned ? (entry.orphaned_show_name ?? 'Orphaned') : 'No show')}
             </span>
+            {rundownState === 'satisfied' && (
+              <span title="Rundown content assigned"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-emerald-400" /></span>
+            )}
+            {rundownState === 'pending' && (
+              <span title="Missing rundown content — open slot to assign"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" /></span>
+            )}
           </div>
           {height >= 60 && show?.host && (
             <span className="text-xs text-zinc-400 leading-tight truncate mt-0.5 pl-[26px]">{show.host}</span>
@@ -1315,9 +1394,10 @@ function CalendarEntryBlock({ entry, show, segments = [], onClick, onDragStart, 
 
 // ─── Calendar Clock-Only Block ────────────────────────────────────────────────
 
-function CalendarClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
+function CalendarClockOnlyBlock({ entry, clock, rundownState = null, onClick, onDragStart, isDragging }: {
   entry: CalendarEntry;
   clock: ClockType | undefined;
+  rundownState?: 'satisfied' | 'pending' | null;
   onClick: (x: number, y: number) => void;
   onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
@@ -1382,6 +1462,12 @@ function CalendarClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging
               <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
                 {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
               </span>
+              {rundownState === 'satisfied' && (
+                <span title="Rundown content assigned"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-emerald-400" /></span>
+              )}
+              {rundownState === 'pending' && (
+                <span title="Missing rundown content — open slot to assign"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" /></span>
+              )}
             </div>
             {height >= 44 && (
               <span className="text-[11px] font-mono leading-none mt-auto pl-[26px]" style={{ color: `${borderColor}60` }}>
@@ -1474,6 +1560,11 @@ function SlotPicker({
             <span className={`flex-1 text-sm font-medium truncate ${selectedClockId === clock.id ? 'text-white' : 'text-zinc-300'}`}>
               {clock.name}
             </span>
+            {clock.assigned_shows.length > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-900/40 text-indigo-300 flex-shrink-0 truncate max-w-[100px]">
+                {clock.assigned_shows[0].name}{clock.assigned_shows.length > 1 ? ` +${clock.assigned_shows.length - 1}` : ''}
+              </span>
+            )}
             <span className="text-[11px] text-zinc-500 flex-shrink-0 tabular-nums">
               {Math.round(clock.duration_seconds / 60)}m
             </span>
@@ -1811,13 +1902,18 @@ function CalNewSlotPopover({
 // ─── Cal Edit Slot Popover (calendar mode) ────────────────────────────────────
 
 function CalEditSlotPopover({
-  entry, show, clock, shows, clocks, x, y, onClose, onRemove, onRestore, onChange,
+  entry, show, clock, shows, clocks, contentClock, contentMap, onUpsertContent, onRemoveContent,
+  x, y, onClose, onRemove, onRestore, onChange,
 }: {
   entry: CalendarEntry;
   show: Show | undefined;
   clock: ClockType | undefined;
   shows: Show[];
   clocks: ClockType[];
+  contentClock: ClockType | undefined;
+  contentMap: ContentMap;
+  onUpsertContent: (data: { date: string; time_start: string; clock_id: number; segment_type: 'news' | 'bulletin'; playlist_id: number }) => void;
+  onRemoveContent: (id: number) => void;
   x: number;
   y: number;
   onClose: () => void;
@@ -1826,11 +1922,33 @@ function CalEditSlotPopover({
   onChange: (showId: number | null, clockId: number | null) => void;
 }) {
   const [picking, setPicking] = useState(false);
+  const [pickingContent, setPickingContent] = useState<'news' | 'bulletin' | null>(null);
+  const [playlistSearch, setPlaylistSearch] = useState('');
   const navigate = useNavigate();
-  const isClockSlot = !entry.show_id && !!entry.clock_id;
-  const hex  = show ? COLOR_HEX[show.color] : '#52525b';
-  const left = Math.min(x + 12, window.innerWidth  - 272);
-  const top  = Math.min(y,      window.innerHeight - 380);
+
+  const isClockSlot   = !entry.show_id && !!entry.clock_id;
+  const hex           = show ? COLOR_HEX[show.color] : '#52525b';
+  const contentClockId = contentClock?.id ?? null;
+  const requiredTypes  = contentClock
+    ? [...new Set(contentClock.segments
+        .filter(s => s.type === 'news' || s.type === 'bulletin')
+        .map(s => s.type as 'news' | 'bulletin'))]
+    : [];
+  const slotKey       = contentClockId ? `${entry.date}|${entry.time_start}|${contentClockId}` : null;
+  const currentContent = slotKey ? (contentMap.get(slotKey) ?? {}) : {};
+
+  const { data: playlists = [] } = useQuery({
+    queryKey: ['playlists'],
+    queryFn: fetchPlaylists,
+    enabled: requiredTypes.length > 0,
+  });
+
+  const filteredPlaylists = playlistSearch
+    ? playlists.filter(p => p.name.toLowerCase().includes(playlistSearch.toLowerCase()))
+    : playlists;
+
+  const left = Math.min(x + 12, window.innerWidth  - 280);
+  const top  = Math.min(y,      window.innerHeight - (requiredTypes.length > 0 ? 500 : 380));
 
   if (picking) {
     return (
@@ -1841,7 +1959,7 @@ function CalEditSlotPopover({
       >
         <div className="flex items-center justify-between px-4 py-3 border-b border-zinc-800">
           <span className="text-sm font-semibold text-zinc-200">Change Slot</span>
-          <button onClick={() => setPicking(false)} className="p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors">
+          <button onClick={() => setPicking(false)} className="p-0.5 text-zinc-400 hover:text-zinc-300 transition-colors">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -1854,6 +1972,61 @@ function CalEditSlotPopover({
           onSelectShow={(id) => { if (id !== null) onChange(id, null); }}
           onSelectClock={(id) => { if (id !== null) onChange(null, id); }}
         />
+      </div>
+    );
+  }
+
+  if (pickingContent) {
+    return (
+      <div
+        className="fixed z-50 bg-zinc-900 border border-zinc-700/80 rounded-xl shadow-2xl w-64 overflow-hidden"
+        style={{ left, top }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center gap-2 px-4 py-3 border-b border-zinc-800">
+          <button onClick={() => setPickingContent(null)} className="p-0.5 text-zinc-400 hover:text-zinc-200 transition-colors">
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </button>
+          <span className="text-sm font-semibold text-zinc-200 capitalize">{pickingContent} content</span>
+          <button onClick={onClose} className="ml-auto p-0.5 text-zinc-400 hover:text-zinc-200 transition-colors">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+        <div className="px-3 py-2 border-b border-zinc-800">
+          <input
+            autoFocus
+            type="text"
+            placeholder="Search playlists…"
+            value={playlistSearch}
+            onChange={(e) => setPlaylistSearch(e.target.value)}
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500"
+          />
+        </div>
+        <div className="max-h-52 overflow-y-auto">
+          {filteredPlaylists.length === 0 ? (
+            <div className="px-4 py-4 text-xs text-zinc-500 text-center">No playlists found</div>
+          ) : filteredPlaylists.map(pl => (
+            <button
+              key={pl.id}
+              onClick={() => {
+                if (contentClockId) {
+                  onUpsertContent({
+                    date: entry.date,
+                    time_start: entry.time_start,
+                    clock_id: contentClockId,
+                    segment_type: pickingContent,
+                    playlist_id: pl.id,
+                  });
+                }
+                setPickingContent(null);
+              }}
+              className="w-full text-left px-4 py-2.5 hover:bg-zinc-800 transition-colors border-b border-zinc-800/60 last:border-0"
+            >
+              <div className="text-xs text-zinc-300 font-medium leading-tight">{pl.name}</div>
+              <div className="text-[10px] text-zinc-500 capitalize mt-0.5">{pl.type}</div>
+            </button>
+          ))}
+        </div>
       </div>
     );
   }
@@ -1885,7 +2058,7 @@ function CalEditSlotPopover({
             }
             {show?.host && <div className="text-xs text-zinc-400 mt-0.5">{show.host}</div>}
           </div>
-          <button onClick={onClose} className="flex-shrink-0 p-0.5 text-zinc-600 hover:text-zinc-300 transition-colors">
+          <button onClick={onClose} className="flex-shrink-0 p-0.5 text-zinc-400 hover:text-zinc-300 transition-colors">
             <X className="w-3.5 h-3.5" />
           </button>
         </div>
@@ -1934,6 +2107,49 @@ function CalEditSlotPopover({
           </button>
         </div>
       </div>
+
+      {requiredTypes.length > 0 && (
+        <div className="border-t border-zinc-800 px-4 py-3 space-y-2.5">
+          <div className="flex items-center gap-1.5">
+            <CassetteTape className="w-3 h-3 text-zinc-500" />
+            <span className="text-[10px] font-semibold uppercase tracking-wider text-zinc-500">Rundown Content</span>
+          </div>
+          {requiredTypes.map(type => {
+            const c = currentContent[type];
+            const hasContent = c?.playlist_id != null;
+            return (
+              <div key={type}>
+                <div className="text-[10px] uppercase tracking-wide font-semibold text-zinc-500 mb-1">{type}</div>
+                {hasContent ? (
+                  <div className="flex items-center gap-1 min-w-0">
+                    <span className="text-xs text-zinc-300 truncate flex-1">{c!.playlist_name ?? 'Unknown playlist'}</span>
+                    <button
+                      onClick={() => { setPickingContent(type); setPlaylistSearch(''); }}
+                      className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0 ml-1"
+                    >
+                      change
+                    </button>
+                    <button
+                      onClick={() => onRemoveContent(c!.id)}
+                      title="Remove assignment"
+                      className="p-0.5 text-zinc-500 hover:text-red-400 transition-colors flex-shrink-0"
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => { setPickingContent(type); setPlaylistSearch(''); }}
+                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                  >
+                    + Assign playlist
+                  </button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }

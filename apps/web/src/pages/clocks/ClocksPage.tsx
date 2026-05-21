@@ -58,7 +58,7 @@ import {
   fetchShowPlaylists,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
-import { HelpTooltip } from '../../components/HelpTooltip';
+import { HelpTooltip, BadgeTooltip } from '../../components/HelpTooltip';
 import { SaveStatus } from '../../components/SaveStatus';
 
 // ─── Handover / sweep labels ──────────────────────────────────────────────────
@@ -525,7 +525,7 @@ export function ClocksPage() {
                       <Clock className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
                       <span className="text-sm font-medium text-white truncate">{clock.name}</span>
                     </div>
-                    <div className="flex gap-x-2 mt-1 ml-5 items-center">
+                    <div className="flex gap-x-2 mt-1 ml-5 items-center flex-wrap gap-y-1">
                       <span
                         className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap cursor-default ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-300' : 'bg-zinc-800 text-zinc-500'}`}
                       >
@@ -534,6 +534,11 @@ export function ClocksPage() {
                       <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
                         {clock.slot_count > 0 ? 'Scheduled' : 'Unscheduled'}
                       </span>
+                      {segs.some((s) => s.type === 'news' || s.type === 'bulletin') && (
+                        <span className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap bg-rose-900/30 text-rose-300">
+                          Requires content
+                        </span>
+                      )}
                     </div>
                   </button>
                   {confirmingDelete ? (
@@ -604,9 +609,18 @@ export function ClocksPage() {
                     onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
                     className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
                   />
-                  <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                    {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
-                  </span>
+                  <BadgeTooltip text={draftClock.slot_count > 0 ? `Active in ${draftClock.slot_count} schedule slot${draftClock.slot_count !== 1 ? 's' : ''}. Visit the Schedule page to view placement.` : 'Not placed on any schedule template or calendar entry. It won\'t air until assigned to a time slot.'}>
+                    <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                      {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
+                    </span>
+                  </BadgeTooltip>
+                  {draftSegs.some((s) => s.type === 'news' || s.type === 'bulletin') && (
+                    <BadgeTooltip text="This clock has news or bulletin segments that need a playlist assigned before air. Open the schedule calendar, click the slot, and assign content in the popover.">
+                      <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-rose-900/30 text-rose-300">
+                        Requires content
+                      </span>
+                    </BadgeTooltip>
+                  )}
                   <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
@@ -639,6 +653,13 @@ export function ClocksPage() {
                       />
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
+                      {draftSegs.some((s) => s.type === 'news' || s.type === 'bulletin') && (
+                        <BadgeTooltip text="This clock has news or bulletin segments that need a playlist assigned before air. Open the schedule calendar, click the slot, and assign content in the popover.">
+                          <span className="text-xs px-2 py-0.5 rounded bg-rose-900/30 text-rose-300 whitespace-nowrap">
+                            Requires content
+                          </span>
+                        </BadgeTooltip>
+                      )}
                       <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                       <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                         assignedShows={draftClock.assigned_shows}
@@ -703,9 +724,11 @@ export function ClocksPage() {
 
                     {/* Right: used by shows (~1/3) */}
                     <div className="flex-[1] min-w-0 px-5 py-4 space-y-3">
-                      <span className={`inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                        {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
-                      </span>
+                      <BadgeTooltip text={draftClock.slot_count > 0 ? `Active in ${draftClock.slot_count} schedule slot${draftClock.slot_count !== 1 ? 's' : ''}. Visit the Schedule page to view placement.` : 'Not placed on any schedule template or calendar entry. It won\'t air until assigned to a time slot.'}>
+                        <span className={`inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                          {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
+                        </span>
+                      </BadgeTooltip>
                       <div>
                         <p className="text-xs font-medium text-zinc-400 mb-2">Assigned by</p>
                         {draftClock.assigned_shows.length === 0 ? (

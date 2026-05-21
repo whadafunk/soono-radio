@@ -175,6 +175,10 @@ export type ClockSegmentPatch = z.infer<typeof ClockSegmentPatchSchema>;
 export const RUNDOWN_SEGMENT_TYPES = ['news', 'bulletin', 'voice_track'] as const;
 export type RundownSegmentType = (typeof RUNDOWN_SEGMENT_TYPES)[number];
 
+// Segment types that use shared show-content playlist (cursor-based sequential playback)
+export const SHOW_CONTENT_SEGMENT_TYPES = ['news', 'bulletin'] as const;
+export type ShowContentSegmentType = (typeof SHOW_CONTENT_SEGMENT_TYPES)[number];
+
 export const RundownAssignmentUpsertSchema = z.object({
   date:          z.string().min(1),
   time_start:    z.string().min(1),
@@ -193,6 +197,15 @@ export const RundownDurationOverrideUpsertSchema = z.object({
   duration_seconds: z.number().int().positive(),
 });
 export type RundownDurationOverrideUpsert = z.infer<typeof RundownDurationOverrideUpsertSchema>;
+
+export const RundownShowContentUpsertSchema = z.object({
+  date:         z.string().min(1),
+  time_start:   z.string().min(1),
+  clock_id:     z.number().int().positive(),
+  segment_type: z.enum(['news', 'bulletin']),
+  playlist_id:  z.number().int().positive(),
+});
+export type RundownShowContentUpsert = z.infer<typeof RundownShowContentUpsertSchema>;
 
 // join_top: always start clock at segment 0; join_mid: skip ahead to the segment
 // that matches the current wall-clock minute (preserves break-time alignment).

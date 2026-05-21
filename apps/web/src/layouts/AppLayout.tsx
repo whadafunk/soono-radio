@@ -4,14 +4,13 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Menu, X, Radio,
   LayoutDashboard, Music2, Users, Calendar,
-  Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat, Loader, Megaphone, ClipboardList,
+  Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat, Loader, Megaphone,
 } from 'lucide-react';
 import { fetchActivityStats } from '../api';
 
 const navItems = [
   { label: 'Dashboard',    path: '/',             icon: LayoutDashboard },
   { label: 'Schedule',     path: '/schedule',     icon: Calendar        },
-  { label: 'Rundown',      path: '/rundown',      icon: ClipboardList   },
   { label: 'Clocks',       path: '/clocks',       icon: Timer           },
   { label: 'Shows',        path: '/shows',        icon: Mic2            },
   { label: 'Library',      path: '/library',      icon: Music2          },

@@ -1,10 +1,10 @@
 import { FastifyInstance } from 'fastify';
 import { and, eq, gte, inArray, lte } from 'drizzle-orm';
-import { RundownAssignmentUpsertSchema, RundownDurationOverrideUpsertSchema, RUNDOWN_SEGMENT_TYPES } from '@radio/shared';
+import { RundownAssignmentUpsertSchema, RundownDurationOverrideUpsertSchema, RundownShowContentUpsertSchema, RUNDOWN_SEGMENT_TYPES } from '@radio/shared';
 import { db } from '../db/index.js';
 import {
-  calendarEntries, clocks, clockSegments, media,
-  rundownAssignments, rundownDurationOverrides, templateClockEntries, templateEntries,
+  calendarEntries, clocks, clockSegments, media, playlists,
+  rundownAssignments, rundownDurationOverrides, rundownShowContent, templateClockEntries, templateEntries,
 } from '../db/schema.js';
 
 // ── Time helpers ──────────────────────────────────────────────────────────────
@@ -158,7 +158,7 @@ export async function rundownRoutes(fastify: FastifyInstance) {
     // Load clock + segment info for all involved (clock_id, date, time_start) combos
     const involvedClockIds = [...new Set(slots.map((s) => s.clock_id))];
 
-    const [segRows, clockRows, assignmentRows, overrideRows] = await Promise.all([
+    const [segRows, clockRows, assignmentRows, overrideRows, showContentRows] = await Promise.all([
       db.select().from(clockSegments)
         .where(and(
           inArray(clockSegments.clock_id, involvedClockIds),
@@ -194,6 +194,22 @@ export async function rundownRoutes(fastify: FastifyInstance) {
           lte(rundownDurationOverrides.date, date_to),
           inArray(rundownDurationOverrides.clock_id, involvedClockIds),
         )),
+      db.select({
+        id: rundownShowContent.id,
+        date: rundownShowContent.date,
+        time_start: rundownShowContent.time_start,
+        clock_id: rundownShowContent.clock_id,
+        segment_type: rundownShowContent.segment_type,
+        playlist_id: rundownShowContent.playlist_id,
+        playlist_name: playlists.name,
+      })
+        .from(rundownShowContent)
+        .leftJoin(playlists, eq(rundownShowContent.playlist_id, playlists.id))
+        .where(and(
+          gte(rundownShowContent.date, date_from),
+          lte(rundownShowContent.date, date_to),
+          inArray(rundownShowContent.clock_id, involvedClockIds),
+        )),
     ]);
 
     const clockNameMap = new Map(clockRows.map((c) => [c.id, c.name]));
@@ -224,6 +240,15 @@ export async function rundownRoutes(fastify: FastifyInstance) {
     const assignmentMap = new Map(assignmentRows.map((a) => [assignmentKey(a), a]));
     const overrideMap = new Map(overrideRows.map((o) => [assignmentKey(o), o]));
 
+    // Index show_content by clock instance + segment_type
+    // showContentMap[instanceKey][segment_type] = { id, playlist_id, playlist_name }
+    const showContentMap = new Map<string, Record<string, { id: number; playlist_id: number | null; playlist_name: string | null }>>();
+    for (const sc of showContentRows) {
+      const k = `${sc.date}|${sc.time_start}|${sc.clock_id}`;
+      if (!showContentMap.has(k)) showContentMap.set(k, {});
+      showContentMap.get(k)![sc.segment_type] = { id: sc.id, playlist_id: sc.playlist_id, playlist_name: sc.playlist_name };
+    }
+
     // Build result
     const result: object[] = [];
 
@@ -238,6 +263,9 @@ export async function rundownRoutes(fastify: FastifyInstance) {
         const override = overrideMap.get(key) ?? null;
         const templateDur = seg.duration_seconds;
         const effectiveDur = override?.duration_seconds ?? assignment?.media_duration_seconds ?? templateDur;
+
+        const instanceKey = `${slot.date}|${slot.time_start}|${slot.clock_id}`;
+        const showContent = showContentMap.get(instanceKey) ?? {};
 
         result.push({
           date: slot.date,
@@ -264,6 +292,8 @@ export async function rundownRoutes(fastify: FastifyInstance) {
           duration_override_seconds: override?.duration_seconds ?? null,
           is_assigned: assignment?.media_id != null,
           effective_duration_seconds: effectiveDur,
+          // Per-type show content for this clock instance (news/bulletin)
+          show_content: showContent,
           // All segments in this clock instance (for the mini timeline)
           clock_segments: allSegs,
         });
@@ -324,6 +354,59 @@ export async function rundownRoutes(fastify: FastifyInstance) {
   fastify.delete<{ Params: { id: string } }>('/rundown/duration-overrides/:id', async (request, reply) => {
     const id = Number(request.params.id);
     await db.delete(rundownDurationOverrides).where(eq(rundownDurationOverrides.id, id));
+    return reply.status(204).send();
+  });
+
+  // GET /rundown/slot-content?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD
+  // Lightweight flat list of rundown_show_content rows for the date range — used by the
+  // calendar schedule view to compute per-slot satisfaction state.
+  fastify.get<{ Querystring: { date_from: string; date_to: string } }>('/rundown/slot-content', async (request, reply) => {
+    const { date_from, date_to } = request.query;
+    if (!date_from || !date_to) return reply.status(400).send({ error: 'date_from and date_to required' });
+
+    const rows = await db
+      .select({
+        id: rundownShowContent.id,
+        date: rundownShowContent.date,
+        time_start: rundownShowContent.time_start,
+        clock_id: rundownShowContent.clock_id,
+        segment_type: rundownShowContent.segment_type,
+        playlist_id: rundownShowContent.playlist_id,
+        playlist_name: playlists.name,
+      })
+      .from(rundownShowContent)
+      .leftJoin(playlists, eq(rundownShowContent.playlist_id, playlists.id))
+      .where(and(
+        gte(rundownShowContent.date, date_from),
+        lte(rundownShowContent.date, date_to),
+      ));
+
+    return reply.send(rows);
+  });
+
+  // PUT /rundown/show-content — upsert a playlist for a segment type in a clock instance
+  fastify.put<{ Body: unknown }>('/rundown/show-content', async (request, reply) => {
+    const parsed = RundownShowContentUpsertSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const { date, time_start, clock_id, segment_type, playlist_id } = parsed.data;
+
+    const [row] = await db
+      .insert(rundownShowContent)
+      .values({ date, time_start, clock_id, segment_type, playlist_id, assigned_at: new Date() })
+      .onConflictDoUpdate({
+        target: [rundownShowContent.date, rundownShowContent.time_start, rundownShowContent.clock_id, rundownShowContent.segment_type],
+        set: { playlist_id, assigned_at: new Date(), updated_at: new Date() },
+      })
+      .returning();
+
+    const [pl] = await db.select({ id: playlists.id, name: playlists.name }).from(playlists).where(eq(playlists.id, playlist_id));
+    return reply.send({ ...row, playlist_name: pl?.name ?? null });
+  });
+
+  // DELETE /rundown/show-content/:id
+  fastify.delete<{ Params: { id: string } }>('/rundown/show-content/:id', async (request, reply) => {
+    const id = Number(request.params.id);
+    await db.delete(rundownShowContent).where(eq(rundownShowContent.id, id));
     return reply.status(204).send();
   });
 }

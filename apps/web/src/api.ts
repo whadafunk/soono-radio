@@ -1232,81 +1232,35 @@ export function deleteActivityJob(jobId: string): Promise<void> {
   return del(`/activity/${jobId}`);
 }
 
-// ─── Rundown ───────────────────────────────────────────────────────────────────
+// ─── Rundown Show Content ─────────────────────────────────────────────────────
 
-export interface RundownSegmentInfo {
+export interface RundownSlotContent {
   id: number;
-  sort_order: number;
-  type: string;
-  duration_seconds: number;
-  name: string;
-  fallback_playlist_id: number | null;
-}
-
-export interface RundownAssignment {
-  id: number;
-  media_id: number | null;
-  media_title: string | null;
-  media_artist: string | null;
-  media_duration_seconds: number | null;
-  media_original_filename: string | null;
-  notes: string | null;
-  assigned_at: string | null;
-}
-
-export interface RundownSlot {
   date: string;
   time_start: string;
   clock_id: number;
-  clock_name: string;
-  segment_index: number;
-  segment_id: number;
-  segment_name: string;
   segment_type: string;
-  template_duration_seconds: number;
-  fallback_playlist_id: number | null;
-  assignment: RundownAssignment | null;
-  duration_override_id: number | null;
-  duration_override_seconds: number | null;
-  is_assigned: boolean;
-  effective_duration_seconds: number;
-  clock_segments: RundownSegmentInfo[];
+  playlist_id: number | null;
+  playlist_name: string | null;
 }
 
-export function fetchRundown(dateFrom: string, dateTo: string): Promise<RundownSlot[]> {
-  return apiFetch(`/rundown?date_from=${dateFrom}&date_to=${dateTo}`);
+export function fetchRundownSlotContent(dateFrom: string, dateTo: string): Promise<RundownSlotContent[]> {
+  return apiFetch(`/rundown/slot-content?date_from=${dateFrom}&date_to=${dateTo}`);
 }
 
-export interface RundownAssignmentUpsert {
+export interface RundownShowContentUpsert {
   date: string;
   time_start: string;
   clock_id: number;
-  segment_index: number;
-  media_id: number | null;
-  notes?: string | null;
+  segment_type: 'news' | 'bulletin';
+  playlist_id: number;
 }
 
-export function upsertRundownAssignment(data: RundownAssignmentUpsert): Promise<RundownAssignment> {
-  return put('/rundown/assignments', data);
+export function upsertRundownShowContent(data: RundownShowContentUpsert): Promise<{ id: number; playlist_name: string | null }> {
+  return put('/rundown/show-content', data);
 }
 
-export function deleteRundownAssignment(id: number): Promise<void> {
-  return del(`/rundown/assignments/${id}`);
-}
-
-export interface RundownDurationOverrideUpsert {
-  date: string;
-  time_start: string;
-  clock_id: number;
-  segment_index: number;
-  duration_seconds: number;
-}
-
-export function upsertRundownDurationOverride(data: RundownDurationOverrideUpsert): Promise<{ id: number }> {
-  return put('/rundown/duration-overrides', data);
-}
-
-export function deleteRundownDurationOverride(id: number): Promise<void> {
-  return del(`/rundown/duration-overrides/${id}`);
+export function deleteRundownShowContent(id: number): Promise<void> {
+  return del(`/rundown/show-content/${id}`);
 }
 

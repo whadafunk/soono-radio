@@ -281,6 +281,13 @@
       "when": 1779581000015,
       "tag": "0039_windy_titania",
       "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "6",
+      "when": 1779378759076,
+      "tag": "0040_unusual_warpath",
+      "breakpoints": true
     }
   ]
 }

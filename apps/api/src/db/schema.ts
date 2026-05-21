@@ -1009,3 +1009,48 @@ export const rundownDurationOverrides = sqliteTable(
 
 export type RundownDurationOverride = typeof rundownDurationOverrides.$inferSelect;
 export type RundownDurationOverrideInsert = typeof rundownDurationOverrides.$inferInsert;
+
+// One playlist assigned per segment type (news|bulletin) per clock instance.
+// All segments of that type draw from this playlist sequentially via the cursor.
+export const rundownShowContent = sqliteTable(
+  'rundown_show_content',
+  {
+    id:           integer('id').primaryKey({ autoIncrement: true }),
+    date:         text('date').notNull(),           // "2026-05-21"
+    time_start:   text('time_start').notNull(),     // "08:00"
+    clock_id:     integer('clock_id').notNull().references(() => clocks.id, { onDelete: 'cascade' }),
+    segment_type: text('segment_type').notNull(),   // 'news' | 'bulletin'
+    playlist_id:  integer('playlist_id').references(() => playlists.id, { onDelete: 'set null' }),
+    assigned_at:  integer('assigned_at', { mode: 'timestamp' }),
+    created_at:   integer('created_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+    updated_at:   integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    slotUniq: unique('rundown_show_content_slot_uniq').on(t.date, t.time_start, t.clock_id, t.segment_type),
+    dateIdx:  index('rundown_show_content_date_idx').on(t.date, t.clock_id),
+  }),
+);
+
+export type RundownShowContent = typeof rundownShowContent.$inferSelect;
+export type RundownShowContentInsert = typeof rundownShowContent.$inferInsert;
+
+// Tracks sequential playback position through a show-content playlist.
+// No row = start from index 0. Advances with each track pick.
+export const rundownPlaybackCursors = sqliteTable(
+  'rundown_playback_cursors',
+  {
+    id:               integer('id').primaryKey({ autoIncrement: true }),
+    date:             text('date').notNull(),
+    time_start:       text('time_start').notNull(),
+    clock_id:         integer('clock_id').notNull().references(() => clocks.id, { onDelete: 'cascade' }),
+    segment_type:     text('segment_type').notNull(),   // 'news' | 'bulletin'
+    next_track_index: integer('next_track_index').notNull().default(0),
+    updated_at:       integer('updated_at', { mode: 'timestamp' }).notNull().default(sql`(unixepoch())`),
+  },
+  (t) => ({
+    slotUniq: unique('rundown_playback_cursors_slot_uniq').on(t.date, t.time_start, t.clock_id, t.segment_type),
+  }),
+);
+
+export type RundownPlaybackCursor = typeof rundownPlaybackCursors.$inferSelect;
+export type RundownPlaybackCursorInsert = typeof rundownPlaybackCursors.$inferInsert;
