@@ -784,6 +784,15 @@ export const TemplateClockEntryUpsertSchema = z.object({
 });
 export type TemplateClockEntryUpsert = z.infer<typeof TemplateClockEntryUpsertSchema>;
 
+// ============ APPLY TEMPLATE ============
+
+export const ApplyTemplateSchema = z.object({
+  date_from: z.string().min(1),
+  date_to:   z.string().min(1),
+  mode:      z.enum(['fill', 'override']),
+});
+export type ApplyTemplate = z.infer<typeof ApplyTemplateSchema>;
+
 // ============ RECORDINGS ============
 
 export const RECORDING_STATUSES = ['pending', 'ready', 'played'] as const;

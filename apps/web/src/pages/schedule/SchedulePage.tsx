@@ -2,7 +2,7 @@ import { useState, useEffect, useLayoutEffect, useMemo, Fragment, useRef } from 
 import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
-import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye, CassetteTape } from 'lucide-react';
+import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye, CassetteTape, CalendarRange, HelpCircle } from 'lucide-react';
 import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@radio/shared';
 import {
   fetchShows, fetchTemplateEntries,
@@ -13,6 +13,8 @@ import {
   fetchIntervalSlots, createIntervalSlot, updateIntervalSlot, deleteIntervalSlot,
   fetchRundownSlotContent, upsertRundownShowContent, deleteRundownShowContent,
   fetchPlaylists,
+  applyTemplate,
+  clearCalendar,
 } from '../../api';
 import type { RundownSlotContent } from '../../api';
 
@@ -346,6 +348,31 @@ export function SchedulePage() {
   const upsertContentMutation = useMutation({ mutationFn: upsertRundownShowContent, onSuccess: invalidateContent });
   const removeContentMutation = useMutation({ mutationFn: deleteRundownShowContent, onSuccess: invalidateContent });
 
+  // Apply-template state + mutation
+  const [showApplyPanel, setShowApplyPanel] = useState(false);
+  const [applyDays, setApplyDays] = useState(14);
+  const [overrideCustom, setOverrideCustom] = useState(false);
+  const [applyResult, setApplyResult] = useState<{ created: number; skipped: number; deleted: number } | null>(null);
+  const clearCalendarMutation = useMutation({
+    mutationFn: clearCalendar,
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['calendar-entries'] }),
+  });
+  const [confirmClear, setConfirmClear] = useState(false);
+  const clearConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const applyTemplateMutation = useMutation({
+    mutationFn: (applyMode: 'fill' | 'override') => {
+      const today = toISODate(new Date());
+      const endDate = new Date();
+      endDate.setDate(endDate.getDate() + applyDays - 1);
+      return applyTemplate({ date_from: today, date_to: toISODate(endDate), mode: applyMode });
+    },
+    onSuccess: (result) => {
+      setApplyResult(result);
+      qc.invalidateQueries({ queryKey: ['calendar-entries'] });
+    },
+  });
+
   // ── Drag state ──
   const [activeDrag, setActiveDrag] = useState<DragState | null>(null);
 
@@ -377,9 +404,7 @@ export function SchedulePage() {
       }
       const tDate = toISODate(weekDays[targetDay - 1]);
       const calE  = calEntryByDate.get(tDate) ?? [];
-      const overridden = new Set(calE.filter((e) => e.is_override).map((e) => e.time_start));
-      const visT = templateEntries.filter((e) => e.day_of_week === targetDay && !overridden.has(e.time_start));
-      return [...calE, ...visT].filter((e) => e.id !== excludeId).map(toSibling);
+      return calE.filter((e) => e.id !== excludeId).map(toSibling);
     };
 
     const snapMin = (raw: number): number => {
@@ -549,6 +574,21 @@ export function SchedulePage() {
           Preview
         </Link>
 
+        {/* Run template — template mode only */}
+        {mode === 'template' && (
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowApplyPanel((v) => !v); setApplyResult(null); }}
+            className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg transition-colors ${
+              showApplyPanel
+                ? 'bg-indigo-600 text-white border-indigo-600'
+                : 'text-zinc-400 hover:text-zinc-200 border-zinc-700'
+            }`}
+          >
+            <CalendarRange className="w-3.5 h-3.5" />
+            Run template
+          </button>
+        )}
+
         {/* Week navigation — calendar mode only */}
         {mode === 'calendar' && (
           <>
@@ -575,9 +615,100 @@ export function SchedulePage() {
             >
               Today
             </button>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (confirmClear) {
+                  if (clearConfirmTimer.current) clearTimeout(clearConfirmTimer.current);
+                  setConfirmClear(false);
+                  clearCalendarMutation.mutate();
+                } else {
+                  setConfirmClear(true);
+                  clearConfirmTimer.current = setTimeout(() => setConfirmClear(false), 4000);
+                }
+              }}
+              disabled={clearCalendarMutation.isPending}
+              className={`px-3 py-1 text-xs font-medium border rounded-md transition-colors disabled:opacity-50 ${
+                confirmClear
+                  ? 'text-rose-300 border-rose-600 ring-2 ring-rose-500 ring-offset-1 ring-offset-zinc-950 animate-pulse'
+                  : 'text-zinc-400 hover:text-rose-300 border-zinc-700 hover:border-rose-700'
+              }`}
+            >
+              {confirmClear ? 'Click again to clear' : 'Clear calendar'}
+            </button>
           </>
         )}
       </div>
+
+      {/* ── Run-template panel ── */}
+      {mode === 'template' && showApplyPanel && (
+        <div
+          className="flex flex-wrap items-center gap-3 px-4 py-3 bg-zinc-900 border border-zinc-700 rounded-lg"
+          onClick={(e) => e.stopPropagation()}
+        >
+          <span className="text-xs font-medium text-zinc-400 flex-shrink-0">Apply for</span>
+          <div className="flex items-center gap-1">
+            {[7, 14, 30, 91].map((d) => (
+              <button
+                key={d}
+                onClick={() => { setApplyDays(d); setApplyResult(null); }}
+                className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
+                  applyDays === d
+                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    : 'text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'
+                }`}
+              >
+                {d === 91 ? '13w' : `${d}d`}
+              </button>
+            ))}
+            <input
+              type="number"
+              min={1}
+              max={91}
+              value={applyDays}
+              onChange={(e) => { setApplyDays(Math.min(91, Math.max(1, Number(e.target.value) || 1))); setApplyResult(null); }}
+              className="w-14 px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded-md text-zinc-300 text-center"
+            />
+            <span className="text-xs text-zinc-500 ml-0.5">days from today</span>
+          </div>
+
+          {/* Override custom checkbox + tooltip */}
+          <label className="flex items-center gap-1.5 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={overrideCustom}
+              onChange={(e) => { setOverrideCustom(e.target.checked); setApplyResult(null); }}
+              className="w-3.5 h-3.5 rounded accent-indigo-500"
+            />
+            <span className="text-xs text-zinc-400">Override custom</span>
+            <div className="relative group">
+              <HelpCircle className="w-3.5 h-3.5 text-zinc-600 hover:text-zinc-400 transition-colors" />
+              <div className="absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-56 bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-2 text-xs text-zinc-300 leading-relaxed invisible group-hover:visible pointer-events-none z-50 shadow-xl">
+                When checked, any existing calendar entries in the range are removed and replaced with the template. Otherwise only empty slots are filled.
+              </div>
+            </div>
+          </label>
+
+          <button
+            onClick={() => { setApplyResult(null); applyTemplateMutation.mutate(overrideCustom ? 'override' : 'fill'); }}
+            disabled={applyTemplateMutation.isPending}
+            className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors disabled:opacity-50"
+          >
+            Apply
+          </button>
+
+          {applyTemplateMutation.isPending && (
+            <span className="text-xs text-zinc-500">Applying…</span>
+          )}
+          {applyResult && !applyTemplateMutation.isPending && (
+            <span className="text-xs text-zinc-400">
+              {applyResult.created} slot{applyResult.created !== 1 ? 's' : ''} created
+              {applyResult.skipped > 0 ? ` · ${applyResult.skipped} skipped` : ''}
+              {applyResult.deleted > 0 ? ` · ${applyResult.deleted} deleted` : ''}
+            </span>
+          )}
+        </div>
+      )}
 
       {/* ── Intervals tab ── */}
       {mode === 'intervals' && <IntervalsTab />}
@@ -680,28 +811,17 @@ export function SchedulePage() {
                   <CalendarDayColumn
                     key={i}
                     date={dateISO}
-                    templateEntries={templateEntries.filter((e) => e.day_of_week === dayOfWeek)}
                     calendarEntries={calEntryByDate.get(dateISO) ?? []}
                     showMap={showMap}
                     clockMap={clockMap}
                     contentMap={contentMap}
                     isToday={checkToday(day)}
                     currentTop={currentTop}
-                    activeDrag={
-                      activeDrag?.entryKind === 'calendar' || activeDrag?.entryKind === 'template-in-calendar'
-                        ? activeDrag : null
-                    }
+                    activeDrag={activeDrag?.entryKind === 'calendar' ? activeDrag : null}
                     onDragStart={startDrag}
                     onEmptyClick={(date, timeStart, timeEnd, maxDurationMinutes, x, y) => {
                       dismiss();
                       setCalNewSlot({ date, timeStart, timeEnd, maxDurationMinutes, x, y });
-                    }}
-                    onTemplateClick={(entry, date, x, y) => {
-                      dismiss();
-                      const s = timeToMinutes(entry.time_start);
-                      const en = timeToMinutes(entry.time_end);
-                      const entryDuration = en > s ? en - s : 1440 - s + en;
-                      setCalNewSlot({ date, timeStart: entry.time_start, timeEnd: entry.time_end, templateEntry: entry, maxDurationMinutes: entryDuration, x, y });
                     }}
                     onCalendarClick={(entry, x, y) => {
                       dismiss();
@@ -935,11 +1055,10 @@ function DayColumn({
 // ─── Calendar Day Column ──────────────────────────────────────────────────────
 
 function CalendarDayColumn({
-  date, templateEntries, calendarEntries, showMap, clockMap, contentMap, isToday, currentTop,
-  activeDrag, onDragStart, onEmptyClick, onTemplateClick, onCalendarClick,
+  date, calendarEntries, showMap, clockMap, contentMap, isToday, currentTop,
+  activeDrag, onDragStart, onEmptyClick, onCalendarClick,
 }: {
   date: string;
-  templateEntries: TemplateEntry[];
   calendarEntries: CalendarEntry[];
   showMap: Map<number, Show>;
   clockMap: Map<number, ClockType>;
@@ -949,20 +1068,9 @@ function CalendarDayColumn({
   activeDrag: DragState | null;
   onDragStart: (state: DragState) => void;
   onEmptyClick: (date: string, timeStart: string, timeEnd: string, maxDurationMinutes: number | null, x: number, y: number) => void;
-  onTemplateClick: (entry: TemplateEntry, date: string, x: number, y: number) => void;
   onCalendarClick: (entry: CalendarEntry, x: number, y: number) => void;
 }) {
   const containerRef = useRef<HTMLDivElement>(null);
-
-  const overriddenStarts = useMemo(
-    () => new Set(calendarEntries.filter((e) => e.is_override).map((e) => e.time_start)),
-    [calendarEntries],
-  );
-
-  const visibleTemplateEntries = useMemo(
-    () => templateEntries.filter((e) => !overriddenStarts.has(e.time_start)),
-    [templateEntries, overriddenStarts],
-  );
 
   function handleBlockDragStart(
     entry: TemplateEntry | CalendarEntry,
@@ -978,8 +1086,7 @@ function CalendarDayColumn({
     const endMin    = rawEnd > startMin ? rawEnd : 24 * 60;
     const cursorMin = ((mouseY - rect.top) / TOTAL_HEIGHT) * 24 * 60;
     const offsetMin = op === 'move' ? Math.max(0, cursorMin - startMin) : 0;
-    const allVisible = [...visibleTemplateEntries, ...calendarEntries];
-    const siblings = allVisible
+    const siblings = calendarEntries
       .filter((e) => e.id !== entry.id)
       .map((e) => {
         const s  = timeToMinutes(e.time_start);
@@ -989,8 +1096,6 @@ function CalendarDayColumn({
     onDragStart({ op, entryKind: kind, entry, date, targetDate: date, startMin, endMin, origStartMin: startMin, origEndMin: endMin, offsetMin, columnRect: rect, siblings, isCopy });
   }
 
-  const templateDraggingId = activeDrag?.entryKind === 'template-in-calendar' && visibleTemplateEntries.some((e) => e.id === activeDrag.entry.id)
-    ? activeDrag.entry.id : null;
   const calDraggingId = activeDrag?.entryKind === 'calendar' && calendarEntries.some((e) => e.id === activeDrag.entry.id)
     ? activeDrag.entry.id : null;
 
@@ -999,9 +1104,7 @@ function CalendarDayColumn({
     const rect = e.currentTarget.getBoundingClientRect();
     const startMin = clickToStartMin(e.clientY, rect.top);
     if (isTimeOccupied(startMin, calendarEntries)) return;
-    if (isTimeOccupied(startMin, visibleTemplateEntries)) return;
-    const allEntries = [...calendarEntries, ...visibleTemplateEntries];
-    onEmptyClick(date, minutesToTime(startMin), minutesToTime((startMin + 60) % 1440), gapAfter(startMin, allEntries), e.clientX, e.clientY);
+    onEmptyClick(date, minutesToTime(startMin), minutesToTime((startMin + 60) % 1440), gapAfter(startMin, calendarEntries), e.clientX, e.clientY);
   }
 
   return (
@@ -1023,27 +1126,6 @@ function CalendarDayColumn({
           <div className="absolute left-0 right-0 border-t border-zinc-700/15" style={{ top: h * HOUR_HEIGHT + (HOUR_HEIGHT * 3) / 4 }} />
         </Fragment>
       ))}
-
-      {/* Template base layer — full color, same as template mode */}
-      {visibleTemplateEntries.flatMap((entry) => {
-        const show  = entry.show_id  ? showMap.get(entry.show_id)   : undefined;
-        const clock = entry.clock_id ? clockMap.get(entry.clock_id) : undefined;
-        const isDragging     = entry.id === templateDraggingId && !activeDrag?.isCopy;
-        const blockDragStart = (op: DragOp, mouseY: number, isCopy: boolean) => handleBlockDragStart(entry, 'template-in-calendar', op, mouseY, isCopy);
-        const ovn  = isOvernightEntry(entry.time_start, entry.time_end) && timeToMinutes(entry.time_end) > 0;
-        const wrap = ovn ? { ...entry, time_start: '00:00' } : null;
-        if (!entry.show_id && entry.clock_id) {
-          return [
-            <ClockOnlyBlock key={`t${entry.id}`}    entry={entry} clock={clock} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
-            wrap && <ClockOnlyBlock key={`tw${entry.id}`} entry={wrap}  clock={clock} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
-          ].filter(Boolean) as React.ReactElement[];
-        }
-        const showClockSegs = (show?.default_clock_id ? clockMap.get(show.default_clock_id)?.segments : undefined) ?? [];
-        return [
-          <EntryBlock key={`t${entry.id}`}    entry={entry} show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={blockDragStart} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
-          wrap && <EntryBlock key={`tw${entry.id}`} entry={wrap}  show={show} segments={showClockSegs} isDragging={isDragging} onDragStart={() => {}} onClick={(x, y) => onTemplateClick(entry, date, x, y)} />,
-        ].filter(Boolean) as React.ReactElement[];
-      })}
 
       {/* Calendar entries */}
       {calendarEntries.flatMap((entry) => {

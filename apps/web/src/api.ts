@@ -1264,3 +1264,17 @@ export function deleteRundownShowContent(id: number): Promise<void> {
   return del(`/rundown/show-content/${id}`);
 }
 
+// ─── Apply Template ───────────────────────────────────────────────────────────
+
+export function clearCalendar(): Promise<void> {
+  return del('/calendar-entries');
+}
+
+export function applyTemplate(data: {
+  date_from: string;
+  date_to: string;
+  mode: 'fill' | 'override';
+}): Promise<{ created: number; skipped: number; deleted: number }> {
+  return post('/apply-template', data);
+}
+
