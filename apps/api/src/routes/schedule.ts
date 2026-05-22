@@ -9,7 +9,29 @@ import {
   ApplyTemplateSchema,
 } from '@radio/shared';
 import { db } from '../db/index.js';
-import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows } from '../db/schema.js';
+import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments } from '../db/schema.js';
+
+// ─── Clock scheduling validation ──────────────────────────────────────────────
+
+async function validateClockForScheduling(clockId: number): Promise<string | null> {
+  const [assignedShow] = await db.select({ name: shows.name })
+    .from(shows).where(eq(shows.default_clock_id, clockId)).limit(1);
+  if (assignedShow) {
+    return `Clock is assigned to show "${assignedShow.name}" and cannot be scheduled individually.`;
+  }
+  const [emptyMusic] = await db.select({ id: clockSegments.id })
+    .from(clockSegments)
+    .where(and(
+      eq(clockSegments.clock_id, clockId),
+      eq(clockSegments.type, 'music'),
+      sql`${clockSegments.sources} = '[]'`,
+    ))
+    .limit(1);
+  if (emptyMusic) {
+    return 'Clock has music segments with no content configured. Add a rotation or playlist source before scheduling.';
+  }
+  return null;
+}
 
 // ─── Apply-template helpers ────────────────────────────────────────────────────
 
@@ -81,6 +103,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/template-entries', async (request, reply) => {
     const parsed = TemplateEntryCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.clock_id != null) {
+      const err = await validateClockForScheduling(parsed.data.clock_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
     const [entry] = await db.insert(templateEntries).values({
       day_of_week: parsed.data.day_of_week,
       time_start: parsed.data.time_start,
@@ -95,6 +121,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     const id = Number(request.params.id);
     const parsed = TemplateEntryPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.clock_id != null) {
+      const err = await validateClockForScheduling(parsed.data.clock_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
     const [updated] = await db.update(templateEntries)
       .set(parsed.data)
       .where(eq(templateEntries.id, id))
@@ -130,6 +160,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/calendar-entries', async (request, reply) => {
     const parsed = CalendarEntryCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.clock_id != null) {
+      const err = await validateClockForScheduling(parsed.data.clock_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
     const [entry] = await db.insert(calendarEntries).values({
       date: parsed.data.date,
       time_start: parsed.data.time_start,
@@ -145,6 +179,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     const id = Number(request.params.id);
     const parsed = CalendarEntryPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.clock_id != null) {
+      const err = await validateClockForScheduling(parsed.data.clock_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
 
     const [current] = await db.select().from(calendarEntries).where(eq(calendarEntries.id, id));
     if (!current) return reply.status(404).send({ error: 'Calendar entry not found' });
@@ -271,6 +309,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
   fastify.put<{ Body: unknown }>('/template-clock-entries', async (request, reply) => {
     const parsed = TemplateClockEntryUpsertSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (parsed.data.clock_id != null) {
+      const err = await validateClockForScheduling(parsed.data.clock_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
     const existing = await db.select().from(templateClockEntries).where(
       and(
         eq(templateClockEntries.day_of_week, parsed.data.day_of_week),

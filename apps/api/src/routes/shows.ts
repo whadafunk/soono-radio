@@ -7,7 +7,20 @@ import {
   ShowPlaylistPatchSchema,
 } from '@radio/shared';
 import { db } from '../db/index.js';
-import { shows, showPlaylists, playlists, templateEntries, calendarEntries, campaigns, customers } from '../db/schema.js';
+import { shows, showPlaylists, playlists, templateEntries, calendarEntries, templateClockEntries, campaigns, customers } from '../db/schema.js';
+
+async function validateClockForShowAssignment(clockId: number): Promise<string | null> {
+  const [te] = await db.select({ id: templateEntries.id })
+    .from(templateEntries).where(eq(templateEntries.clock_id, clockId)).limit(1);
+  if (te) return 'Clock is scheduled in the template and cannot be assigned to a show.';
+  const [tce] = await db.select({ id: templateClockEntries.id })
+    .from(templateClockEntries).where(eq(templateClockEntries.clock_id, clockId)).limit(1);
+  if (tce) return 'Clock is scheduled in the template and cannot be assigned to a show.';
+  const [ce] = await db.select({ id: calendarEntries.id })
+    .from(calendarEntries).where(eq(calendarEntries.clock_id, clockId)).limit(1);
+  if (ce) return 'Clock has individual calendar entries and cannot be assigned to a show.';
+  return null;
+}
 
 export async function showRoutes(fastify: FastifyInstance) {
   fastify.get('/shows', async (_request, reply) => {
@@ -25,6 +38,8 @@ export async function showRoutes(fastify: FastifyInstance) {
         error: `Clock is already assigned to "${conflict.name}". A clock can only be used by one show.`,
         conflicting_show: { id: conflict.id, name: conflict.name },
       });
+      const schedErr = await validateClockForShowAssignment(parsed.data.default_clock_id);
+      if (schedErr) return reply.status(409).send({ error: schedErr });
     }
     const [show] = await db.insert(shows).values({
       name: parsed.data.name,
@@ -57,6 +72,8 @@ export async function showRoutes(fastify: FastifyInstance) {
         error: `Clock is already assigned to "${conflict.name}". A clock can only be used by one show.`,
         conflicting_show: { id: conflict.id, name: conflict.name },
       });
+      const schedErr = await validateClockForShowAssignment(parsed.data.default_clock_id);
+      if (schedErr) return reply.status(409).send({ error: schedErr });
     }
     const [updated] = await db.update(shows)
       .set({ ...parsed.data, updated_at: sql`(unixepoch())` })
