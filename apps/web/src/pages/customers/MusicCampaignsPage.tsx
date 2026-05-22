@@ -46,7 +46,7 @@ export function MusicCampaignsPage({
   });
   const { data: customers = [] } = useQuery({ queryKey: ['customers'], queryFn: fetchCustomers });
   const { data: playlists = [] } = useQuery({ queryKey: ['playlists'], queryFn: fetchPlaylists });
-  const musicPlaylists = useMemo(() => playlists.filter((p) => p.type === 'music'), [playlists]);
+  const musicPlaylists = useMemo(() => playlists.filter((p) => p.type === 'music' && p.subcategory === 'heavy_rotation'), [playlists]);
 
   const filtered = useMemo(
     () => focusedCustomerId ? campaigns.filter((c) => c.customer_id === focusedCustomerId) : campaigns,

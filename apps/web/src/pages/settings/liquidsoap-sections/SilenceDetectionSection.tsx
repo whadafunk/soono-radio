@@ -14,11 +14,12 @@ export function SilenceDetectionSection({ register, control }: Props) {
   const threshold = useWatch({ control, name: 'silence_detection.threshold_seconds' }) ?? 5;
   const fallback = useWatch({ control, name: 'silence_detection.fallback' }) ?? 'none';
 
-  const { data: playlists = [] } = useQuery({
+  const { data: rawPlaylists = [] } = useQuery({
     queryKey: ['playlists'],
     queryFn: fetchPlaylists,
     enabled: fallback === 'playlist',
   });
+  const playlists = rawPlaylists.filter(p => (p.total_seconds ?? 0) > 0 || p.kind === 'dynamic');
 
   return (
     <CollapsibleSection title="Silence Detection">

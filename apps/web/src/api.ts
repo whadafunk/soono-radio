@@ -584,6 +584,7 @@ export interface PlaylistSummary {
   subcategory?: string | null;
   kind: string;
   is_default?: boolean;
+  total_seconds?: number;
 }
 
 export async function fetchPlaylists(): Promise<PlaylistSummary[]> {

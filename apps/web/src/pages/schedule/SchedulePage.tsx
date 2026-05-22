@@ -2033,9 +2033,10 @@ function CalEditSlotPopover({
     enabled: requiredTypes.length > 0,
   });
 
-  const filteredPlaylists = playlistSearch
-    ? playlists.filter(p => p.name.toLowerCase().includes(playlistSearch.toLowerCase()))
-    : playlists;
+  const filteredPlaylists = playlists.filter(p =>
+    ((p.total_seconds ?? 0) > 0 || p.kind === 'dynamic') &&
+    (!playlistSearch || p.name.toLowerCase().includes(playlistSearch.toLowerCase())),
+  );
 
   const left = Math.min(x + 12, window.innerWidth  - 280);
   const top  = Math.min(y,      window.innerHeight - (requiredTypes.length > 0 ? 500 : 380));

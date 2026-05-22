@@ -683,6 +683,10 @@ function PlaylistItem({
     setSubcategoryMutation.mutate(pl.subcategory === sub ? 'standard' : sub);
   };
 
+  useEffect(() => {
+    if (isHeavyRotation && pl.is_default) defaultMutation.mutate(false);
+  }, [isHeavyRotation, pl.is_default]); // eslint-disable-line react-hooks/exhaustive-deps
+
   return (
     <div
       onClick={() => onSelect(pl.id)}
@@ -700,6 +704,9 @@ function PlaylistItem({
           className="flex-shrink-0 w-3.5 h-3.5 accent-indigo-500 cursor-pointer rounded"
         />
         <span className="text-sm text-white truncate flex-1 min-w-0">{pl.name}</span>
+        {pl.total_seconds != null && pl.total_seconds > 0 && (
+          <span className="text-xs font-mono text-zinc-500 flex-shrink-0">{fmtTotalDuration(pl.total_seconds)}</span>
+        )}
         {/* Badge column — natural width, no reserved slots for absent badges */}
         <div className="flex items-center gap-1 flex-shrink-0">
           {/* Jingle subcategory — only shown for jingle type */}
@@ -710,8 +717,10 @@ function PlaylistItem({
           {isMusic && (
             <span className="w-4 text-center text-xs font-bold text-white">{isDynamic ? 'D' : 'S'}</span>
           )}
-          {/* Default — eligible types only, clickable to toggle */}
-          {canBeDefault && (pl.is_default ? (
+          {/* Default — eligible types only; disabled (non-clickable) for heavy rotation */}
+          {canBeDefault && (isHeavyRotation ? (
+            <span className={BADGE_DISPLAY} title="Not available for heavy rotation playlists">default</span>
+          ) : pl.is_default ? (
             <button
               onClick={(e) => { e.stopPropagation(); defaultMutation.mutate(false); }}
               className={BADGE_ACTIVE}
@@ -811,6 +820,11 @@ function PlaylistHeader({
   });
 
   const canBeDefault = DEFAULT_ELIGIBLE_TYPES.has(playlist.type);
+  const isHeavyRotation = playlist.subcategory === 'heavy_rotation';
+
+  useEffect(() => {
+    if (isHeavyRotation && playlist.is_default) toggleDefaultMutation.mutate(false);
+  }, [isHeavyRotation, playlist.is_default]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const commitRename = () => {
     const trimmed = draftName.trim();
@@ -858,7 +872,14 @@ function PlaylistHeader({
             {playlist.kind}
           </span>
         )}
-        {canBeDefault && (
+        {canBeDefault && (isHeavyRotation ? (
+          <span
+            title="Not available for heavy rotation playlists"
+            className="text-xs px-2.5 py-0.5 rounded-full font-medium text-zinc-600 border border-dashed border-zinc-700 cursor-default"
+          >
+            Default
+          </span>
+        ) : (
           <button
             onClick={() => toggleDefaultMutation.mutate(!playlist.is_default)}
             disabled={toggleDefaultMutation.isPending}
@@ -871,7 +892,7 @@ function PlaylistHeader({
           >
             Default
           </button>
-        )}
+        ))}
       </div>
 
       {/* Row 3: music subcategory toggle with icons */}

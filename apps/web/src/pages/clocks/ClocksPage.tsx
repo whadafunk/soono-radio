@@ -1797,7 +1797,7 @@ function SourcesEditor({
   // Live — harbor always on, optional single beds playlist
   if (segType === 'live') {
     const bedPlaylists = playlists.filter(
-      (p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'bed',
+      (p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'bed' && (p.total_seconds ?? 0) > 0,
     );
     const currentBedId = (sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined)?.playlist_id ?? null;
     return (
@@ -2476,7 +2476,8 @@ function PlaylistDropdown({ value, onChange, playlists, categories, filter, inva
   const byCategory = categories?.length
     ? playlists.filter(p => categories.includes(playlistMediaCategory(p.type as any, p.subcategory as any)))
     : playlists;
-  const filtered = filter ? byCategory.filter(filter) : byCategory;
+  const nonEmpty = byCategory.filter(p => (p.total_seconds ?? 0) > 0 || p.kind === 'dynamic');
+  const filtered = filter ? nonEmpty.filter(filter) : nonEmpty;
   return (
     <select
       value={value ?? ''}

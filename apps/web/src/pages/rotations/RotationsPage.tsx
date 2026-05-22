@@ -114,7 +114,7 @@ export function RotationsPage() {
   const { data: rotations = [] } = useQuery({ queryKey: ['rotations'], queryFn: fetchRotations });
   // For the hot-play playlist picker (music kind only). Filtered to music-type playlists below.
   const { data: allPlaylists = [] } = useQuery({ queryKey: ['playlists'], queryFn: fetchPlaylists });
-  const musicPlaylists = allPlaylists.filter((p) => p.type === 'music');
+  const musicPlaylists = allPlaylists.filter((p) => p.type === 'music' && ((p.total_seconds ?? 0) > 0 || p.kind === 'dynamic'));
 
   const saveMutation = useMutation({
     mutationFn: () => {

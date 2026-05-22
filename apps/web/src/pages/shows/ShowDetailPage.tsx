@@ -658,7 +658,7 @@ function MusicPlaylistsSection({
       <div className="space-y-2 mb-2">
         {localPlaylists.map((lp) => {
           const availableForCard = allMusicPlaylists.filter(
-            (p) => !usedIds.has(p.id) || p.id === lp.playlist_id,
+            (p) => ((p.total_seconds ?? 0) > 0 || p.kind === 'dynamic') && (!usedIds.has(p.id) || p.id === lp.playlist_id),
           );
           return (
             <div key={lp.tempId} className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
@@ -761,7 +761,8 @@ function PlaylistSelect({
   onChange: (id: number | null) => void;
   placeholder: string;
 }) {
-  if (playlists.length === 0) {
+  const visible = playlists.filter(p => (p.total_seconds ?? 0) > 0 || p.kind === 'dynamic');
+  if (visible.length === 0) {
     return <p className="text-xs text-zinc-500 italic">{placeholder} — no matching playlists in library.</p>;
   }
   return (
@@ -771,7 +772,7 @@ function PlaylistSelect({
       className={SELECT}
     >
       <option value="">None</option>
-      {playlists.map((p) => (
+      {visible.map((p) => (
         <option key={p.id} value={p.id}>{p.name}</option>
       ))}
     </select>

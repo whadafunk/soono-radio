@@ -86,6 +86,7 @@ export const PlaylistSchema = z.object({
   kind: z.enum(PLAYLIST_KINDS),
   rules: DynamicRulesSchema.nullable(),
   is_default: z.boolean().optional().default(false),
+  total_seconds: z.number().optional().default(0),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
 });

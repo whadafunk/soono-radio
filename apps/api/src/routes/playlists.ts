@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, ne, asc, inArray, and, or, like, gte, lte, between, sql, SQL, isNull } from 'drizzle-orm';
+import { eq, ne, asc, inArray, and, or, like, gte, lte, between, sql, SQL, isNull, getTableColumns } from 'drizzle-orm';
 import {
   PlaylistCreateSchema,
   PlaylistPatchSchema,
@@ -104,7 +104,16 @@ export async function playlistRoutes(fastify: FastifyInstance) {
   // ── Playlist CRUD ──────────────────────────────────────────────────────────
 
   fastify.get('/playlists', async (_req, reply) => {
-    const rows = await db.select().from(playlists).orderBy(asc(playlists.name));
+    const rows = await db
+      .select({
+        ...getTableColumns(playlists),
+        total_seconds: sql<number>`COALESCE(SUM(${media.duration_seconds}), 0)`,
+      })
+      .from(playlists)
+      .leftJoin(playlistMedia, eq(playlistMedia.playlist_id, playlists.id))
+      .leftJoin(media, eq(media.id, playlistMedia.media_id))
+      .groupBy(playlists.id)
+      .orderBy(asc(playlists.name));
     return reply.send(rows);
   });
 
