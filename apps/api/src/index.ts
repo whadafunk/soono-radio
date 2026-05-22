@@ -78,7 +78,8 @@ const start = async () => {
     }
     // Re-run identification for ingest jobs that completed but whose
     // fire-and-forget lookup was cut short by the previous shutdown.
-    await recoverLookupJobs();
+    // Fire-and-forget — involves external API calls and must not block startup.
+    recoverLookupJobs().catch((err) => fastify.log.error(err, 'recoverLookupJobs failed'));
     // Pick up any jobs that were left in 'queued' across restarts.
     ingestQueue.signal();
 
