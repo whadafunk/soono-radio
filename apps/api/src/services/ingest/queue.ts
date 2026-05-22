@@ -1,7 +1,9 @@
-import { eq, asc, inArray } from 'drizzle-orm';
+import { eq, asc, inArray, isNull, isNotNull, and } from 'drizzle-orm';
 import { db } from '../../db/index.js';
 import { ingestJobs } from '../../db/schema.js';
 import { runIngestJob } from './worker.js';
+import { identifyForIngest } from '../acoustid.js';
+import { maybeFinalizeLookupJob } from '../backgroundJobs.js';
 
 /**
  * Single-flight in-process queue. Phase 2 ships intentionally minimal — one
@@ -62,6 +64,7 @@ async function pickNextQueued(): Promise<string | null> {
 /**
  * On boot, mark any in-progress jobs as failed (they were interrupted) and
  * leave queued jobs alone — the queue will pick them up.
+ * Also writes lookup_result='failed' so they don't block batch finalization.
  */
 export async function recoverInterruptedJobs(): Promise<number> {
   const result = await db
@@ -70,11 +73,47 @@ export async function recoverInterruptedJobs(): Promise<number> {
       status: 'failed',
       error_message: 'Interrupted by API restart',
       completed_at: new Date(),
+      lookup_result: 'failed',
+      lookup_result_json: JSON.stringify({ error: 'Interrupted by API restart' }),
     })
     .where(inArray(ingestJobs.status, ['analyzing', 'transcoding']));
-  // libsql's update result type doesn't expose count directly; the return
-  // value here is the recovery count consumers of this function don't need.
   return Number((result as any).rowsAffected ?? 0);
+}
+
+/**
+ * On boot, re-run identification for any ingest jobs that completed
+ * successfully but whose fire-and-forget identification was cut short by a
+ * restart. Then attempts to finalize any lookup batch whose last job is now
+ * accounted for. Queued jobs are left alone — the queue handles them normally.
+ */
+export async function recoverLookupJobs(): Promise<void> {
+  const orphans = await db
+    .select()
+    .from(ingestJobs)
+    .where(
+      and(
+        isNotNull(ingestJobs.lookup_job_id),
+        isNull(ingestJobs.lookup_result),
+        eq(ingestJobs.status, 'completed'),
+      ),
+    );
+
+  // Collect affected lookup job IDs so we only finalize once per batch.
+  const affectedLookupJobIds = new Set<string>();
+
+  for (const job of orphans) {
+    if (!job.media_id || !job.lookup_job_id) continue;
+    const result = await identifyForIngest(job.media_id, job.uploaded_filename);
+    await db.update(ingestJobs).set({
+      lookup_result: result.outcome,
+      lookup_result_json: JSON.stringify(result),
+    }).where(eq(ingestJobs.id, job.id));
+    affectedLookupJobIds.add(job.lookup_job_id);
+  }
+
+  for (const lookupJobId of affectedLookupJobIds) {
+    await maybeFinalizeLookupJob(lookupJobId);
+  }
 }
 
 export const ingestQueue = new IngestQueue();

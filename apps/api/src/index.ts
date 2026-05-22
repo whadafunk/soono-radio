@@ -21,7 +21,7 @@ import { promoRoutes } from './routes/promos.js';
 import { musicCampaignRoutes } from './routes/musicCampaigns.js';
 import { rundownRoutes } from './routes/rundown.js';
 import { runMigrations } from './db/index.js';
-import { ingestQueue, recoverInterruptedJobs } from './services/ingest/queue.js';
+import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
 import { ensureDirs } from './services/ingest/paths.js';
 import * as supervisor from './services/supervisor/index.js';
 import { loadIntegrationsConfig } from './services/integrations/config.js';
@@ -76,6 +76,9 @@ const start = async () => {
     if (recovered > 0) {
       fastify.log.info({ recovered }, 'Marked interrupted ingest jobs as failed');
     }
+    // Re-run identification for ingest jobs that completed but whose
+    // fire-and-forget lookup was cut short by the previous shutdown.
+    await recoverLookupJobs();
     // Pick up any jobs that were left in 'queued' across restarts.
     ingestQueue.signal();
 
