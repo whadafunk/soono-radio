@@ -47,6 +47,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
             name: clockSegments.name,
             type: clockSegments.type,
             duration_seconds: clockSegments.duration_seconds,
+            sources: clockSegments.sources,
           }).from(clockSegments).where(inArray(clockSegments.clock_id, clockIds)).orderBy(asc(clockSegments.sort_order))
         : Promise.resolve([]),
     ]);
@@ -69,7 +70,11 @@ export async function clockRoutes(fastify: FastifyInstance) {
       used: used_count > 0,
       slot_count: used_count,
       assigned_shows: showsByClockId.get(c.id) ?? [],
-      segments: segsByClockId.get(c.id) ?? [],
+      segments: (segsByClockId.get(c.id) ?? []).map(({ sources, ...s }) => ({
+        ...s,
+        is_rundown: (s.type === 'news' || s.type === 'bulletin') &&
+          (sources as { type: string }[]).some(src => src.type === 'recording'),
+      })),
     })));
   });
 
@@ -116,10 +121,16 @@ export async function clockRoutes(fastify: FastifyInstance) {
           name: clockSegments.name,
           type: clockSegments.type,
           duration_seconds: clockSegments.duration_seconds,
+          sources: clockSegments.sources,
         }).from(clockSegments).where(eq(clockSegments.clock_id, id)).orderBy(asc(clockSegments.sort_order)),
     ]);
     const { used_count, ...rest } = clock;
-    return reply.send({ ...rest, used: used_count > 0, slot_count: used_count, assigned_shows: assignedShowRows, segments: singleSegRows });
+    const segments = singleSegRows.map(({ sources, ...s }) => ({
+      ...s,
+      is_rundown: (s.type === 'news' || s.type === 'bulletin') &&
+        (sources as { type: string }[]).some(src => src.type === 'recording'),
+    }));
+    return reply.send({ ...rest, used: used_count > 0, slot_count: used_count, assigned_shows: assignedShowRows, segments });
   });
 
   fastify.patch<{ Params: { id: string }; Body: unknown }>('/clocks/:id', async (request, reply) => {

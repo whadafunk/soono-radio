@@ -218,6 +218,8 @@ export const ClockSegmentSummarySchema = z.object({
   name: z.string(),
   type: z.enum(CLOCK_SEGMENT_TYPES),
   duration_seconds: z.number().int().positive(),
+  // true only for news/bulletin segments whose sources include 'recording'
+  is_rundown: z.boolean().default(false),
 });
 export type ClockSegmentSummary = z.infer<typeof ClockSegmentSummarySchema>;
 

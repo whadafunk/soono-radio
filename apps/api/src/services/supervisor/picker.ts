@@ -58,7 +58,12 @@ export async function pickNext(now: Date = new Date()): Promise<PickResult | nul
       return pickFromSegment(scheduled, now);
 
     case 'news':
-    case 'bulletin':
+    case 'bulletin': {
+      // Only rundown-managed when at least one source is 'recording'; otherwise live-driven.
+      const sources = scheduled.segment.sources as { type: string }[];
+      if (!sources.some(s => s.type === 'recording')) return null;
+      return pickFromRundownSegment(scheduled, now);
+    }
     case 'voice_track':
       return pickFromRundownSegment(scheduled, now);
 

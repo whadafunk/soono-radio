@@ -1388,7 +1388,7 @@ function SegmentDrawer({
                         }}
                         className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
                       />
-                      <span className="text-xs text-zinc-400">s late{flexPolicy.late_seconds === null ? ' (natural end)' : ''}</span>
+                      <span className="text-xs text-zinc-400">sec late{flexPolicy.late_seconds === null ? ' (natural end)' : ''}</span>
                     </div>
                   )}
                 </div>
@@ -1421,7 +1421,7 @@ function SegmentDrawer({
                         }}
                         className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
                       />
-                      <span className="text-xs text-zinc-400">s early{flexPolicy.early_seconds === null ? ' (fill gap)' : ''}</span>
+                      <span className="text-xs text-zinc-400">sec early{flexPolicy.early_seconds === null ? ' (fill gap)' : ''}</span>
                     </div>
                   )}
                 </div>

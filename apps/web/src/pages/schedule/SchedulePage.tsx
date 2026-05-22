@@ -268,7 +268,7 @@ function getRundownState(
   if (!clockId) return null;
   const clock = clockMap.get(clockId);
   if (!clock) return null;
-  const required = [...new Set(clock.segments.filter(s => s.type === 'news' || s.type === 'bulletin').map(s => s.type))];
+  const required = [...new Set(clock.segments.filter(s => s.is_rundown).map(s => s.type as 'news' | 'bulletin'))];
   if (!required.length) return null;
   const content = contentMap.get(`${date}|${timeStart}|${clockId}`) ?? {};
   const assigned = required.filter(t => content[t]?.playlist_id != null).length;
@@ -1290,7 +1290,7 @@ function EntryBlock({ entry, show, segments = [], onClick, onDragStart, isDraggi
             <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : 'text-zinc-300'}`}>
               {show?.name ?? (isOrphaned ? (entry.orphaned_show_name ?? 'Orphaned') : 'No show')}
             </span>
-            {segments.some((s) => s.type === 'news' || s.type === 'bulletin') && (
+            {segments.some((s) => s.is_rundown) && (
               <span title="Has rundown segments — assign content in the calendar" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/80">RUNDOWN</span>
             )}
           </div>
@@ -1374,7 +1374,7 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
               <span className={`text-[13px] font-semibold leading-tight truncate ${isOrphaned ? 'text-amber-400' : clock ? 'text-zinc-300' : 'text-zinc-500 italic'}`}>
                 {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
               </span>
-              {clock?.segments?.some((s) => s.type === 'news' || s.type === 'bulletin') && (
+              {clock?.segments?.some((s) => s.is_rundown) && (
                 <span title="Has rundown segments — assign content in the calendar" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/80">RUNDOWN</span>
               )}
             </div>
@@ -2027,9 +2027,7 @@ function CalEditSlotPopover({
   const hex           = show ? COLOR_HEX[show.color] : '#52525b';
   const contentClockId = contentClock?.id ?? null;
   const requiredTypes  = contentClock
-    ? [...new Set(contentClock.segments
-        .filter(s => s.type === 'news' || s.type === 'bulletin')
-        .map(s => s.type as 'news' | 'bulletin'))]
+    ? [...new Set(contentClock.segments.filter(s => s.is_rundown).map(s => s.type as 'news' | 'bulletin'))]
     : [];
   const slotKey       = contentClockId ? `${entry.date}|${entry.time_start}|${contentClockId}` : null;
   const currentContent = slotKey ? (contentMap.get(slotKey) ?? {}) : {};
