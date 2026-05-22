@@ -81,6 +81,40 @@ Nullable FK added in migration 0039. If set for a `news`, `bulletin`, or
 when no rundown assignment exists — before falling through to the segment's
 regular `sources` config.
 
+### `rundown_show_content`
+
+Assigns a **playlist** (rather than a single file) to all segments of a given
+type within a clock instance. One row per `(date, time_start, clock_id,
+segment_type)`.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | integer PK | |
+| `date` | text | `YYYY-MM-DD` |
+| `time_start` | text | `HH:MM` — clock instance start |
+| `clock_id` | integer FK → clocks | `ON DELETE CASCADE` |
+| `segment_type` | text | `'news'` or `'bulletin'` |
+| `playlist_id` | integer FK → playlists | `ON DELETE CASCADE` |
+
+Unique constraint: `(date, time_start, clock_id, segment_type)`.
+
+This is distinct from per-slot file assignments in `rundown_assignments`. The
+supervisor reads show-content at air time and sequences tracks from the playlist
+in order, advancing a cursor (`rundown_playback_cursors`) between segments.
+
+### `rundown_playback_cursors`
+
+Tracks sequential playback position through a show-content playlist.
+
+| Column | Type | Notes |
+|--------|------|-------|
+| `id` | integer PK | |
+| `date` | text | `YYYY-MM-DD` |
+| `time_start` | text | `HH:MM` |
+| `clock_id` | integer FK → clocks | |
+| `segment_type` | text | `'news'` or `'bulletin'` |
+| `next_track_index` | integer | 0-based; advances after each pick |
+
 ---
 
 ## API endpoints
@@ -168,6 +202,45 @@ Upsert body (validated by `RundownDurationOverrideUpsertSchema`):
 
 Deletes a single override by primary key.
 
+### `GET /rundown/slot-content?date_from=YYYY-MM-DD&date_to=YYYY-MM-DD`
+
+Returns all `rundown_show_content` rows for the date range, joined with the
+playlist name:
+
+```json
+[
+  {
+    "id": 7,
+    "date": "2026-05-22",
+    "time_start": "08:00",
+    "clock_id": 3,
+    "segment_type": "news",
+    "playlist_id": 12,
+    "playlist_name": "Morning News"
+  }
+]
+```
+
+### `PUT /rundown/show-content`
+
+Upsert body (validated by `RundownShowContentUpsertSchema`):
+
+```json
+{
+  "date": "2026-05-22",
+  "time_start": "08:00",
+  "clock_id": 3,
+  "segment_type": "news",
+  "playlist_id": 12
+}
+```
+
+Conflict target: `(date, time_start, clock_id, segment_type)`.
+
+### `DELETE /rundown/show-content/:id`
+
+Deletes a single show-content assignment by primary key.
+
 ---
 
 ## Supervisor integration
@@ -205,6 +278,57 @@ V1 — tiling precision matters more for music segments than for rundown content
 ---
 
 ## UI
+
+### Calendar popover — show content
+
+Component: `CalEditSlotPopover` in `apps/web/src/pages/schedule/SchedulePage.tsx`
+
+When a calendar entry's clock contains `news` or `bulletin` segments, the slot
+popover shows a **Rundown Content** section at the bottom. One row per required
+type; each row lets the operator assign or change the playlist for that type in
+this specific clock instance.
+
+Clicking **+ Assign playlist** opens a playlist search panel filtered to
+playlists that have at least one track (`total_seconds > 0`) or are dynamic.
+Selecting a playlist calls `PUT /rundown/show-content`. The × button calls
+`DELETE /rundown/show-content/:id`.
+
+The calendar block itself displays a coloured **RUNDOWN** badge based on
+assignment state:
+
+| State | Colour |
+|-------|--------|
+| All required types assigned | Emerald |
+| Some assigned | Amber |
+| None assigned | Rose |
+
+#### Playlist vs slot duration validation
+
+When a playlist is assigned, a compact validation row appears below the
+playlist name:
+
+```
+5:34 playlist  ·  6:00 slot          -0:26
+```
+
+- **playlist** — `total_seconds` of the assigned playlist (sum of all track
+  durations, computed via join in `GET /playlists`).
+- **slot** — sum of `duration_seconds` for all segments of this type in the
+  clock (`ClockSegmentSummary.duration_seconds`).
+- **delta** — `playlist − slot`, displayed with sign. Amber when non-zero,
+  emerald when exact.
+
+A negative delta means the playlist is shorter than the allocated slot (risk of
+dead air). A positive delta means the playlist overruns the slot (content will
+be cut off mid-track). Both are warnings; neither blocks saving.
+
+The delta is computed entirely on the frontend from cached data — no extra API
+call. A configurable safe-margin threshold (`|delta| ≤ margin`) is planned to
+suppress the amber warning for small acceptable divergences.
+
+---
+
+### Rundown editor page
 
 Route: `/rundown`  
 Component: `apps/web/src/pages/rundown/RundownPage.tsx`
