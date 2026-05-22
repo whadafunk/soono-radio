@@ -534,11 +534,6 @@ export function ClocksPage() {
                       <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
                         {clock.slot_count > 0 ? 'Scheduled' : 'Unscheduled'}
                       </span>
-                      {segs.some((s) => s.type === 'news' || s.type === 'bulletin') && (
-                        <span className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap bg-rose-900/30 text-rose-300">
-                          Requires content
-                        </span>
-                      )}
                     </div>
                   </button>
                   {confirmingDelete ? (
@@ -614,13 +609,6 @@ export function ClocksPage() {
                       {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
                     </span>
                   </BadgeTooltip>
-                  {draftSegs.some((s) => s.type === 'news' || s.type === 'bulletin') && (
-                    <BadgeTooltip text="This clock has news or bulletin segments that need a playlist assigned before air. Open the schedule calendar, click the slot, and assign content in the popover.">
-                      <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-rose-900/30 text-rose-300">
-                        Requires content
-                      </span>
-                    </BadgeTooltip>
-                  )}
                   <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
@@ -653,13 +641,6 @@ export function ClocksPage() {
                       />
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
-                      {draftSegs.some((s) => s.type === 'news' || s.type === 'bulletin') && (
-                        <BadgeTooltip text="This clock has news or bulletin segments that need a playlist assigned before air. Open the schedule calendar, click the slot, and assign content in the popover.">
-                          <span className="text-xs px-2 py-0.5 rounded bg-rose-900/30 text-rose-300 whitespace-nowrap">
-                            Requires content
-                          </span>
-                        </BadgeTooltip>
-                      )}
                       <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                       <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                         assignedShows={draftClock.assigned_shows}
