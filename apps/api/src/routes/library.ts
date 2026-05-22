@@ -110,19 +110,10 @@ export async function libraryRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'No files uploaded' });
       }
 
-      // For music uploads, create one lookup_id background job for the whole
-      // batch so identification results appear in the Activity tab.
-      const lookupJobId =
-        category === 'music'
-          ? await createJob(
-              'lookup_id',
-              `Auto lookup — ${pending.length} track${pending.length !== 1 ? 's' : ''}`,
-              pending.length,
-            )
-          : null;
-
-      // Rename each temp file to its final staging path under the new job id,
-      // then insert the ingest_jobs row.
+      // Rename each temp file to its final staging path and insert ingest rows.
+      // lookup_job_id is set in a follow-up UPDATE after all rows exist, so a
+      // partial failure never leaves an orphaned background job.
+      const ingestJobIds: string[] = [];
       for (const p of pending) {
         const jobId = newJobId();
         const finalPath = stagingPathFor(jobId);
@@ -135,10 +126,24 @@ export async function libraryRoutes(fastify: FastifyInstance) {
           uploaded_size_bytes: p.size,
           staging_path: finalPath,
           category,
-          lookup_job_id: lookupJobId,
         });
 
+        ingestJobIds.push(jobId);
         created.push({ job_id: jobId, filename: p.filename, size_bytes: p.size });
+      }
+
+      // For music uploads, create one lookup_id background job for the batch
+      // and link all ingest rows to it. Done after inserts so a DB error above
+      // can't leave a background job with no ingest rows attached.
+      if (category === 'music') {
+        const lookupJobId = await createJob(
+          'lookup_id',
+          `Auto lookup — ${ingestJobIds.length} track${ingestJobIds.length !== 1 ? 's' : ''}`,
+          ingestJobIds.length,
+        );
+        await db.update(ingestJobs)
+          .set({ lookup_job_id: lookupJobId })
+          .where(inArray(ingestJobs.id, ingestJobIds));
       }
 
       // Wake the worker. It picks up jobs serially; this is fire-and-forget.

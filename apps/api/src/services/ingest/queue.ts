@@ -1,6 +1,6 @@
 import { eq, asc, inArray, isNull, isNotNull, and } from 'drizzle-orm';
 import { db } from '../../db/index.js';
-import { ingestJobs } from '../../db/schema.js';
+import { ingestJobs, backgroundJobs } from '../../db/schema.js';
 import { runIngestJob } from './worker.js';
 import { identifyForIngest } from '../acoustid.js';
 import { maybeFinalizeLookupJob } from '../backgroundJobs.js';
@@ -87,6 +87,7 @@ export async function recoverInterruptedJobs(): Promise<number> {
  * accounted for. Queued jobs are left alone — the queue handles them normally.
  */
 export async function recoverLookupJobs(): Promise<void> {
+  // Re-identify ingest jobs that completed but whose identification was cut short.
   const orphans = await db
     .select()
     .from(ingestJobs)
@@ -98,7 +99,6 @@ export async function recoverLookupJobs(): Promise<void> {
       ),
     );
 
-  // Collect affected lookup job IDs so we only finalize once per batch.
   const affectedLookupJobIds = new Set<string>();
 
   for (const job of orphans) {
@@ -113,6 +113,18 @@ export async function recoverLookupJobs(): Promise<void> {
 
   for (const lookupJobId of affectedLookupJobIds) {
     await maybeFinalizeLookupJob(lookupJobId);
+  }
+
+  // Also finalize any 'running' lookup jobs that have no linked ingest rows —
+  // these were created before the upload failed and have nothing to wait for.
+  const stuckJobs = await db
+    .select({ id: backgroundJobs.id })
+    .from(backgroundJobs)
+    .where(and(eq(backgroundJobs.type, 'lookup_id'), eq(backgroundJobs.status, 'running')));
+
+  for (const job of stuckJobs) {
+    if (affectedLookupJobIds.has(job.id)) continue; // already being handled above
+    await maybeFinalizeLookupJob(job.id);
   }
 }
 
