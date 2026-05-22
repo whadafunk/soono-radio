@@ -74,6 +74,28 @@ function norm(s: string): string {
 }
 
 /**
+ * Strip trailing video/live/quality descriptors that appear in YouTube rips
+ * and poorly-tagged files. These tokens don't exist on MusicBrainz recordings
+ * and cause false "cover detected" results by polluting structured queries.
+ *
+ * Examples:
+ *   "Burning Heart Video"           → "Burning Heart"
+ *   "Police and Thieves Live 2001"  → "Police and Thieves"
+ *   "Eye of the Tiger HQ"           → "Eye of the Tiger"
+ *   "Burning Heart Vide"            → "Burning Heart"  (truncated rip artifact)
+ */
+export function cleanTitleForSearch(s: string): string {
+  return s
+    // full phrases first (longest/most specific → applied before single-word pass)
+    .replace(/\b(?:official\s+music\s+video|official\s+(?:audio|video)|music\s+video|lyric(?:s?\s+video)?|acoustic\s+version|radio\s+edit)\s*$/i, '')
+    // "Live 2001", "Live at Wembley", "Live Version"
+    .replace(/\bLive\s+(?:\d{4}|[Vv]ersion\b|[Aa]t\b.*)\s*$/i, '')
+    // single-word quality / format tags and common truncation artefacts
+    .replace(/\b(?:video|audio|hq|hd|4k|remastered?|re-?mastered?|vide)\s*$/i, '')
+    .trim();
+}
+
+/**
  * Returns true when an MB artist name can be found inside either filename part.
  * Uses the primary (pre-comma) name so "Vanessa Carlton" still matches "Vanessa Carlton".
  * Used to detect cover recordings: if the original artist is absent from the filename
@@ -173,7 +195,7 @@ export async function searchMusicBrainzByArtist(
 
   const clauses: string[] = [];
   for (const title of titles) {
-    const t = title.replace(/"/g, '');
+    const t = cleanTitleForSearch(title.replace(/"/g, ''));
     if (!t) continue;
     clauses.push(`(recording:"${t}" AND artist:"${a}")`);
     if (pA !== a) clauses.push(`(recording:"${t}" AND artist:"${pA}")`);
@@ -205,8 +227,8 @@ export async function searchMusicBrainz(
   partB: string,
   { freeTextFallback = true }: { freeTextFallback?: boolean } = {},
 ): Promise<AcoustIDCandidate[]> {
-  const a = partA.replace(/"/g, '');
-  const b = partB.replace(/"/g, '');
+  const a = cleanTitleForSearch(partA.replace(/"/g, ''));
+  const b = cleanTitleForSearch(partB.replace(/"/g, ''));
   const pA = primaryName(a); // e.g. "Luis Fonsi" from "Luis Fonsi, Manuel Turizo"
   const pB = primaryName(b);
 
