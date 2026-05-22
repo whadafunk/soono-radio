@@ -110,6 +110,17 @@ export async function libraryRoutes(fastify: FastifyInstance) {
         return reply.status(400).send({ error: 'No files uploaded' });
       }
 
+      // For music uploads, create one lookup_id background job for the whole
+      // batch so identification results appear in the Activity tab.
+      const lookupJobId =
+        category === 'music'
+          ? await createJob(
+              'lookup_id',
+              `Auto lookup — ${pending.length} track${pending.length !== 1 ? 's' : ''}`,
+              pending.length,
+            )
+          : null;
+
       // Rename each temp file to its final staging path under the new job id,
       // then insert the ingest_jobs row.
       for (const p of pending) {
@@ -124,6 +135,7 @@ export async function libraryRoutes(fastify: FastifyInstance) {
           uploaded_size_bytes: p.size,
           staging_path: finalPath,
           category,
+          lookup_job_id: lookupJobId,
         });
 
         created.push({ job_id: jobId, filename: p.filename, size_bytes: p.size });

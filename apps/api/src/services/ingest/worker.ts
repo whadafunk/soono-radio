@@ -8,8 +8,9 @@ import { measureLoudness } from './loudnorm.js';
 import { decideTranscode, transcodeToMp3, TRANSCODE_DEFAULTS } from './transcode.js';
 import { sha256File } from './hash.js';
 import { ensureDirs, mediaPathForSha, stagingPathFor } from './paths.js';
-import { autoIdentifyOnIngest } from '../acoustid.js';
+import { identifyForIngest } from '../acoustid.js';
 import { autoAnalyseOnIngest } from '../audioAnalysis.js';
+import { maybeFinalizeLookupJob } from '../backgroundJobs.js';
 
 export interface IngestOutcome {
   jobId: string;
@@ -101,6 +102,15 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       // Clean up staging copies — we don't need them.
       await safeUnlink(stagingPath);
       if (transcodedPath) await safeUnlink(transcodedPath);
+
+      if (job.lookup_job_id && job.category === 'music') {
+        await db.update(ingestJobs).set({
+          lookup_result: 'skipped',
+          lookup_result_json: JSON.stringify({ reason: 'Duplicate — already in library' }),
+        }).where(eq(ingestJobs.id, jobId));
+        maybeFinalizeLookupJob(job.lookup_job_id).catch(() => undefined);
+      }
+
       return {
         jobId,
         status: 'completed',
@@ -146,10 +156,18 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
 
     await markJobCompleted(jobId, mediaId);
 
-    // For music tracks, attempt auto-identification and audio analysis in the
-    // background. Both are fire-and-forget — results do not affect ingest status.
+    // For music tracks, run identification and audio analysis in the background.
+    // Neither affects ingest status — fire-and-forget.
     if (job.category === 'music') {
-      autoIdentifyOnIngest(mediaId).catch(() => undefined);
+      if (job.lookup_job_id) {
+        identifyForIngest(mediaId, job.uploaded_filename).then(async (result) => {
+          await db.update(ingestJobs).set({
+            lookup_result: result.outcome,
+            lookup_result_json: JSON.stringify(result),
+          }).where(eq(ingestJobs.id, jobId));
+          await maybeFinalizeLookupJob(job.lookup_job_id!);
+        }).catch(() => undefined);
+      }
       autoAnalyseOnIngest(mediaId).catch(() => undefined);
     }
 
@@ -157,6 +175,13 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await markJobFailed(jobId, message);
+    if (job.lookup_job_id && job.category === 'music') {
+      await db.update(ingestJobs).set({
+        lookup_result: 'failed',
+        lookup_result_json: JSON.stringify({ error: message }),
+      }).where(eq(ingestJobs.id, jobId));
+      maybeFinalizeLookupJob(job.lookup_job_id).catch(() => undefined);
+    }
     return { jobId, status: 'failed', mediaId: null, error: message, deduped: false };
   }
 }

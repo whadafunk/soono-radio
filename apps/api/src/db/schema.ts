@@ -109,6 +109,13 @@ export const ingestJobs = sqliteTable(
     media_id: integer('media_id').references(() => media.id, { onDelete: 'set null' }),
     error_message: text('error_message'),
 
+    // Set at upload time for music batches; links all ingest jobs in one upload
+    // to a single background lookup_id job so results appear in Activity.
+    lookup_job_id: text('lookup_job_id'),
+    // Written by the worker after identification: 'applied' | 'skipped' | 'failed'
+    lookup_result: text('lookup_result'),
+    lookup_result_json: text('lookup_result_json'),
+
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),

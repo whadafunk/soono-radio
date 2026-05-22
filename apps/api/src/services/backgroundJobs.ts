@@ -1,6 +1,6 @@
 import { eq, sql, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
-import { backgroundJobs } from '../db/schema.js';
+import { backgroundJobs, ingestJobs } from '../db/schema.js';
 import type { JobType, JobStatus } from '../db/schema.js';
 import type { LookupIdResults, AnalyseResults } from '@radio/shared';
 
@@ -62,6 +62,39 @@ export async function failJob(jobId: string, error: string): Promise<void> {
       completed_at: new Date(),
     })
     .where(eq(backgroundJobs.id, jobId));
+}
+
+/**
+ * Called after each ingest job writes its lookup_result. Once all ingest jobs
+ * linked to the lookup job have a result, builds the final LookupIdResults and
+ * transitions the background job to completed or review_pending.
+ */
+export async function maybeFinalizeLookupJob(lookupJobId: string): Promise<void> {
+  const jobs = await db
+    .select()
+    .from(ingestJobs)
+    .where(eq(ingestJobs.lookup_job_id, lookupJobId));
+
+  if (jobs.some((j) => j.lookup_result === null)) return; // still waiting
+
+  const results: LookupIdResults = { applied: [], skipped: [], failed: [] };
+  for (const job of jobs) {
+    const mediaId = job.media_id;
+    if (!mediaId) continue;
+    let data: Record<string, unknown> = {};
+    try { data = job.lookup_result_json ? JSON.parse(job.lookup_result_json) : {}; } catch { /* ignore */ }
+
+    if (job.lookup_result === 'applied') {
+      const c = data.appliedCandidate as { title?: string | null; artist?: string | null; album?: string | null; year?: number | null; score?: number } | undefined;
+      results.applied.push({ id: mediaId, filename: job.uploaded_filename, title: c?.title ?? null, artist: c?.artist ?? null, album: c?.album ?? null, year: c?.year ?? null, score: c?.score ?? 0 });
+    } else if (job.lookup_result === 'skipped') {
+      results.skipped.push({ id: mediaId, filename: job.uploaded_filename, reason: (data.reason as string) ?? 'Unknown', candidates: (data.candidates as LookupIdResults['skipped'][number]['candidates']) ?? [], resolved: false });
+    } else if (job.lookup_result === 'failed') {
+      results.failed.push({ id: mediaId, filename: job.uploaded_filename, error: (data.error as string) ?? 'Unknown error' });
+    }
+  }
+
+  await completeLookupIdJob(lookupJobId, results);
 }
 
 // When a new batch includes tracks that already have a pending review,

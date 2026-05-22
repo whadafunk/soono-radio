@@ -189,15 +189,49 @@ export function isAutoApply(
   return top.score - candidates[1].score >= acoustid_min_gap;
 }
 
+export interface IngestIdentificationResult {
+  outcome: 'applied' | 'skipped' | 'failed';
+  filename: string;
+  /** Present when outcome === 'applied' */
+  appliedCandidate?: { title: string | null; artist: string | null; album: string | null; year: number | null; score: number };
+  /** Present when outcome === 'skipped' */
+  reason?: string;
+  candidates?: Pick<AcoustIDCandidate, 'acoustid' | 'score' | 'title' | 'artist' | 'album' | 'year' | 'source' | 'fromFreeText'>[];
+  /** Present when outcome === 'failed' */
+  error?: string;
+}
+
 /**
- * Fire-and-forget AcoustID lookup for newly ingested music tracks.
- * Only writes metadata when the match clears the auto-apply threshold.
- * All errors are swallowed so ingest status is never affected.
+ * Run identification for a single track and return a structured result.
+ * Applies metadata immediately when the match clears the auto-apply threshold.
+ * Used by the ingest worker to feed per-file outcomes into the batch lookup job.
  */
-export async function autoIdentifyOnIngest(mediaId: number): Promise<void> {
+export async function identifyForIngest(mediaId: number, filename: string): Promise<IngestIdentificationResult> {
   try {
     const candidates = await identifyMedia(mediaId);
-    if (!isAutoApply(candidates, { allowMusicBrainz: true })) return;
+    if (candidates.length === 0 || !isAutoApply(candidates, { allowMusicBrainz: true })) {
+      let reason: string;
+      if (candidates.length === 0) {
+        reason = 'No matches found';
+      } else if (candidates[0].source === 'filename') {
+        reason = 'Cover detected — not in MusicBrainz. Use per-track Lookup ID to apply.';
+      } else if (candidates[0].source === 'musicbrainz' && candidates[0].fromFreeText) {
+        reason = 'Loose text match only — cannot auto-apply. Use per-track Lookup ID to verify.';
+      } else if (candidates[0].source === 'musicbrainz') {
+        reason = `Filename search — low confidence (${Math.round(candidates[0].score * 100)}%). Use per-track Lookup ID to pick manually.`;
+      } else {
+        reason = `Low confidence (${Math.round(candidates[0].score * 100)}%)`;
+      }
+      return {
+        outcome: 'skipped',
+        filename,
+        reason,
+        candidates: candidates.map((c) => ({
+          acoustid: c.acoustid, score: c.score, title: c.title, artist: c.artist,
+          album: c.album, year: c.year, source: c.source, fromFreeText: c.fromFreeText,
+        })),
+      };
+    }
     const top = candidates[0];
     await db.update(media).set({
       title: top.title,
@@ -207,8 +241,13 @@ export async function autoIdentifyOnIngest(mediaId: number): Promise<void> {
       notes: sql`COALESCE(${media.notes}, ${media.original_filename})`,
       updated_at: new Date(),
     }).where(eq(media.id, mediaId));
-  } catch {
-    // Best-effort — failures must never surface to the ingest caller.
+    return {
+      outcome: 'applied',
+      filename,
+      appliedCandidate: { title: top.title, artist: top.artist, album: top.album, year: top.year, score: top.score },
+    };
+  } catch (err) {
+    return { outcome: 'failed', filename, error: (err as Error).message };
   }
 }
 
