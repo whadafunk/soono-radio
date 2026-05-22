@@ -198,7 +198,7 @@ const TYPE_DEFAULTS: Record<ClockSegmentType, {
   accept_live: boolean;
   sweeper_config: SegmentSweeperConfig | null;
 }> = {
-  music:         { sources: [{ type: 'show_playlist' }],                start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
+  music:         { sources: [],                                         start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
   live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
   stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
   news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: null                         },
@@ -1608,14 +1608,15 @@ function MusicSourceEditor({
     enabled: singleShowId !== null,
   });
 
-  // Normalize sources to match assignment state
+  // Sync sources to assignment state: add show_playlist when assigned, clear it when unassigned.
+  // Intentionally only runs on isAssigned changes — sources/onChange omitted from deps deliberately.
   useEffect(() => {
     if (isAssigned && !sources.some((s) => s.type === 'show_playlist')) {
       onChange([{ type: 'show_playlist' }]);
     } else if (!isAssigned && sources.length > 0 && sources.every((s) => s.type === 'show_playlist')) {
       onChange([]);
     }
-  }, [isAssigned]);
+  }, [isAssigned]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addPlaylist = () => {
     const usedIds = new Set(playlistSources.map((s) => s.playlist_id));
