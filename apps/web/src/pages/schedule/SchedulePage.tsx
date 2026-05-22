@@ -264,14 +264,17 @@ function getRundownState(
   timeStart: string,
   clockMap: Map<number, ClockType>,
   contentMap: ContentMap,
-): 'satisfied' | 'pending' | null {
+): 'satisfied' | 'partial' | 'pending' | null {
   if (!clockId) return null;
   const clock = clockMap.get(clockId);
   if (!clock) return null;
   const required = [...new Set(clock.segments.filter(s => s.type === 'news' || s.type === 'bulletin').map(s => s.type))];
   if (!required.length) return null;
   const content = contentMap.get(`${date}|${timeStart}|${clockId}`) ?? {};
-  return required.every(t => content[t]?.playlist_id != null) ? 'satisfied' : 'pending';
+  const assigned = required.filter(t => content[t]?.playlist_id != null).length;
+  if (assigned === required.length) return 'satisfied';
+  if (assigned === 0) return 'pending';
+  return 'partial';
 }
 
 // ─── Page ─────────────────────────────────────────────────────────────────────
@@ -342,7 +345,7 @@ export function SchedulePage() {
   const calUpdateMutation = useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: Parameters<typeof updateCalendarEntry>[1] }) =>
       updateCalendarEntry(id, patch),
-    onSuccess: invalidateCal,
+    onSuccess: () => { invalidateCal(); invalidateContent(); },
   });
   const calDeleteMutation = useMutation({ mutationFn: deleteCalendarEntry, onSuccess: invalidateCal });
 
@@ -514,7 +517,7 @@ export function SchedulePage() {
         updateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, day_of_week: tDay } });
       } else if (drag.entryKind === 'calendar') {
         const e = drag.entry as CalendarEntry;
-        calUpdateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, date: tDate } });
+        calUpdateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, date: tDate, is_override: true } });
       } else {
         const e = drag.entry as TemplateEntry;
         calCreateMutation.mutate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
@@ -1288,9 +1291,7 @@ function EntryBlock({ entry, show, segments = [], onClick, onDragStart, isDraggi
               {show?.name ?? (isOrphaned ? (entry.orphaned_show_name ?? 'Orphaned') : 'No show')}
             </span>
             {segments.some((s) => s.type === 'news' || s.type === 'bulletin') && (
-              <span title="Has rundown segments — assign content in the calendar">
-                <CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-rose-400/70" />
-              </span>
+              <span title="Has rundown segments — assign content in the calendar" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/80">RUNDOWN</span>
             )}
           </div>
           {height >= 60 && show?.host && (
@@ -1374,9 +1375,7 @@ function ClockOnlyBlock({ entry, clock, onClick, onDragStart, isDragging }: {
                 {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
               </span>
               {clock?.segments?.some((s) => s.type === 'news' || s.type === 'bulletin') && (
-                <span title="Has rundown segments — assign content in the calendar">
-                  <CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-rose-400/70" />
-                </span>
+                <span title="Has rundown segments — assign content in the calendar" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-rose-500/15 text-rose-300/80">RUNDOWN</span>
               )}
             </div>
             {height >= 44 && (
@@ -1397,7 +1396,7 @@ function CalendarEntryBlock({ entry, show, segments = [], rundownState = null, o
   entry: CalendarEntry;
   show: Show | undefined;
   segments?: ClockSegmentSummary[];
-  rundownState?: 'satisfied' | 'pending' | null;
+  rundownState?: 'satisfied' | 'partial' | 'pending' | null;
   onClick: (x: number, y: number) => void;
   onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
@@ -1457,10 +1456,13 @@ function CalendarEntryBlock({ entry, show, segments = [], rundownState = null, o
               {show?.name ?? (isOrphaned ? (entry.orphaned_show_name ?? 'Orphaned') : 'No show')}
             </span>
             {rundownState === 'satisfied' && (
-              <span title="Rundown content assigned"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-emerald-400" /></span>
+              <span title="All rundown content assigned" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90">RUNDOWN</span>
+            )}
+            {rundownState === 'partial' && (
+              <span title="Some rundown content missing — open slot to assign" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">RUNDOWN</span>
             )}
             {rundownState === 'pending' && (
-              <span title="Missing rundown content — open slot to assign"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" /></span>
+              <span title="No rundown content assigned — open slot to assign" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">RUNDOWN</span>
             )}
           </div>
           {height >= 60 && show?.host && (
@@ -1482,7 +1484,7 @@ function CalendarEntryBlock({ entry, show, segments = [], rundownState = null, o
 function CalendarClockOnlyBlock({ entry, clock, rundownState = null, onClick, onDragStart, isDragging }: {
   entry: CalendarEntry;
   clock: ClockType | undefined;
-  rundownState?: 'satisfied' | 'pending' | null;
+  rundownState?: 'satisfied' | 'partial' | 'pending' | null;
   onClick: (x: number, y: number) => void;
   onDragStart: (op: DragOp, mouseY: number, isCopy: boolean) => void;
   isDragging: boolean;
@@ -1548,10 +1550,13 @@ function CalendarClockOnlyBlock({ entry, clock, rundownState = null, onClick, on
                 {clock?.name ?? (isOrphaned ? (entry.orphaned_clock_name ?? 'Orphaned') : 'No clock')}
               </span>
               {rundownState === 'satisfied' && (
-                <span title="Rundown content assigned"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-emerald-400" /></span>
+                <span title="All rundown content assigned" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-emerald-500/15 text-emerald-300/90">RUNDOWN</span>
+              )}
+              {rundownState === 'partial' && (
+                <span title="Some rundown content missing — open slot to assign" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">RUNDOWN</span>
               )}
               {rundownState === 'pending' && (
-                <span title="Missing rundown content — open slot to assign"><CassetteTape className="w-3.5 h-3.5 flex-shrink-0 text-amber-400" /></span>
+                <span title="No rundown content assigned — open slot to assign" className="flex-shrink-0 text-[10px] font-semibold tracking-wide px-1.5 py-0.5 rounded bg-rose-500/20 text-rose-300">RUNDOWN</span>
               )}
             </div>
             {height >= 44 && (
@@ -1895,7 +1900,7 @@ function CalNewSlotPopover({
   onClose: () => void;
   onSave: (date: string, showId: number | null, clockId: number | null, timeStart: string, timeEnd: string, isOverride: boolean) => void;
 }) {
-  const isOverride = !!templateEntry;
+  const isOverride = true;
   const [selectedShowId,  setSelectedShowId]  = useState<number | null>(templateEntry?.show_id  ?? null);
   const [selectedClockId, setSelectedClockId] = useState<number | null>(templateEntry?.clock_id ?? null);
   const [timeStart, setTimeStart] = useState(initStart);

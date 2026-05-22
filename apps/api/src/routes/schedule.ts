@@ -9,7 +9,7 @@ import {
   ApplyTemplateSchema,
 } from '@radio/shared';
 import { db } from '../db/index.js';
-import { templateEntries, calendarEntries, templateClockEntries } from '../db/schema.js';
+import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows } from '../db/schema.js';
 
 // ─── Apply-template helpers ────────────────────────────────────────────────────
 
@@ -145,22 +145,118 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     const id = Number(request.params.id);
     const parsed = CalendarEntryPatchSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
-    const [updated] = await db.update(calendarEntries)
-      .set(parsed.data)
-      .where(eq(calendarEntries.id, id))
-      .returning();
-    if (!updated) return reply.status(404).send({ error: 'Calendar entry not found' });
+
+    const [current] = await db.select().from(calendarEntries).where(eq(calendarEntries.id, id));
+    if (!current) return reply.status(404).send({ error: 'Calendar entry not found' });
+
+    const newDate      = parsed.data.date       ?? current.date;
+    const newTimeStart = parsed.data.time_start  ?? current.time_start;
+    const positionChanged = newDate !== current.date || newTimeStart !== current.time_start;
+
+    // Resolve effective clock_id for rundown migration: prefer the entry's own
+    // clock_id; fall back to the show's default_clock_id (matches frontend key logic).
+    let clockId = current.clock_id;
+    if (clockId === null && current.show_id !== null) {
+      const [show] = await db.select({ default_clock_id: shows.default_clock_id })
+        .from(shows).where(eq(shows.id, current.show_id));
+      clockId = show?.default_clock_id ?? null;
+    }
+
+    const updated = await db.transaction(async (tx) => {
+      const [entry] = await tx.update(calendarEntries)
+        .set(parsed.data)
+        .where(eq(calendarEntries.id, id))
+        .returning();
+
+      if (positionChanged && clockId !== null) {
+        // Clear any rundown rows already at the destination to avoid unique conflicts
+        await tx.delete(rundownAssignments).where(and(
+          eq(rundownAssignments.date, newDate),
+          eq(rundownAssignments.time_start, newTimeStart),
+          eq(rundownAssignments.clock_id, clockId),
+        ));
+        await tx.delete(rundownDurationOverrides).where(and(
+          eq(rundownDurationOverrides.date, newDate),
+          eq(rundownDurationOverrides.time_start, newTimeStart),
+          eq(rundownDurationOverrides.clock_id, clockId),
+        ));
+        await tx.delete(rundownShowContent).where(and(
+          eq(rundownShowContent.date, newDate),
+          eq(rundownShowContent.time_start, newTimeStart),
+          eq(rundownShowContent.clock_id, clockId),
+        ));
+
+        // Migrate rundown rows from old position to new position
+        await tx.update(rundownAssignments)
+          .set({ date: newDate, time_start: newTimeStart })
+          .where(and(
+            eq(rundownAssignments.date, current.date),
+            eq(rundownAssignments.time_start, current.time_start),
+            eq(rundownAssignments.clock_id, clockId),
+          ));
+        await tx.update(rundownDurationOverrides)
+          .set({ date: newDate, time_start: newTimeStart })
+          .where(and(
+            eq(rundownDurationOverrides.date, current.date),
+            eq(rundownDurationOverrides.time_start, current.time_start),
+            eq(rundownDurationOverrides.clock_id, clockId),
+          ));
+        await tx.update(rundownShowContent)
+          .set({ date: newDate, time_start: newTimeStart })
+          .where(and(
+            eq(rundownShowContent.date, current.date),
+            eq(rundownShowContent.time_start, current.time_start),
+            eq(rundownShowContent.clock_id, clockId),
+          ));
+      }
+
+      return entry;
+    });
+
     return reply.send(updated);
   });
 
   fastify.delete<{ Params: { id: string } }>('/calendar-entries/:id', async (request, reply) => {
     const id = Number(request.params.id);
-    await db.delete(calendarEntries).where(eq(calendarEntries.id, id));
+    await db.transaction(async (tx) => {
+      const [entry] = await tx.select().from(calendarEntries).where(eq(calendarEntries.id, id));
+      if (entry) {
+        let clockId = entry.clock_id;
+        if (clockId === null && entry.show_id !== null) {
+          const [show] = await tx.select({ default_clock_id: shows.default_clock_id })
+            .from(shows).where(eq(shows.id, entry.show_id));
+          clockId = show?.default_clock_id ?? null;
+        }
+        if (clockId !== null) {
+          await tx.delete(rundownAssignments).where(and(
+            eq(rundownAssignments.date, entry.date),
+            eq(rundownAssignments.time_start, entry.time_start),
+            eq(rundownAssignments.clock_id, clockId),
+          ));
+          await tx.delete(rundownDurationOverrides).where(and(
+            eq(rundownDurationOverrides.date, entry.date),
+            eq(rundownDurationOverrides.time_start, entry.time_start),
+            eq(rundownDurationOverrides.clock_id, clockId),
+          ));
+          await tx.delete(rundownShowContent).where(and(
+            eq(rundownShowContent.date, entry.date),
+            eq(rundownShowContent.time_start, entry.time_start),
+            eq(rundownShowContent.clock_id, clockId),
+          ));
+        }
+      }
+      await tx.delete(calendarEntries).where(eq(calendarEntries.id, id));
+    });
     return reply.status(204).send();
   });
 
   fastify.delete('/calendar-entries', async (_req, reply) => {
-    await db.delete(calendarEntries);
+    await db.transaction(async (tx) => {
+      await tx.delete(rundownAssignments);
+      await tx.delete(rundownDurationOverrides);
+      await tx.delete(rundownShowContent);
+      await tx.delete(calendarEntries);
+    });
     return reply.status(204).send();
   });
 
@@ -236,6 +332,14 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
         .where(and(gte(calendarEntries.date, date_from), lte(calendarEntries.date, date_to)));
       deleted = existing.length;
       if (deleted > 0) {
+        const dateWhere = and(gte(rundownAssignments.date, date_from), lte(rundownAssignments.date, date_to));
+        await db.delete(rundownAssignments).where(dateWhere);
+        await db.delete(rundownDurationOverrides).where(
+          and(gte(rundownDurationOverrides.date, date_from), lte(rundownDurationOverrides.date, date_to)),
+        );
+        await db.delete(rundownShowContent).where(
+          and(gte(rundownShowContent.date, date_from), lte(rundownShowContent.date, date_to)),
+        );
         await db.delete(calendarEntries).where(
           and(gte(calendarEntries.date, date_from), lte(calendarEntries.date, date_to)),
         );
