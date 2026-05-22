@@ -185,10 +185,19 @@ const TYPE_ICONS: Record<PlaylistType, React.ElementType> = {
 const TYPE_COLORS: Record<PlaylistType, string> = {
   music:     'bg-blue-600/20 text-blue-300 border border-blue-700/40',
   jingle:    'bg-emerald-600/20 text-emerald-300 border border-emerald-700/40',
-  bed:       'bg-teal-600/20 text-teal-300 border border-teal-700/40',
+  bed:       'bg-amber-600/20 text-amber-300 border border-amber-700/40',
   spot:      'bg-rose-600/20 text-rose-300 border border-rose-700/40',
   promo:     'bg-violet-600/20 text-violet-300 border border-violet-700/40',
   recording: 'bg-zinc-600/20 text-zinc-300 border border-zinc-700/40',
+};
+
+const TYPE_TITLE_COLORS: Record<PlaylistType, string> = {
+  music:     'text-blue-400',
+  jingle:    'text-emerald-400',
+  bed:       'text-amber-400',
+  spot:      'text-rose-400',
+  promo:     'text-violet-400',
+  recording: 'text-zinc-400',
 };
 
 const SUBCATEGORY_LABELS: Record<string, string> = {
@@ -592,7 +601,7 @@ export function PlaylistsPage() {
                     >
                       <ChevronRight className={`w-3 h-3 text-zinc-300 transition-transform ${collapsed ? '' : 'rotate-90'}`} />
                       <TypeIcon className="w-3 h-3 text-zinc-300" />
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-zinc-300">
+                      <span className={`text-[11px] font-semibold uppercase tracking-wider ${TYPE_TITLE_COLORS[type]}`}>
                         {TYPE_LABELS[type]} ({group.length})
                       </span>
                     </button>
