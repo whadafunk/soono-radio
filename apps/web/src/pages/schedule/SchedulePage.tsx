@@ -1991,6 +1991,13 @@ function CalNewSlotPopover({
 
 // ─── Cal Edit Slot Popover (calendar mode) ────────────────────────────────────
 
+function fmtSec(s: number): string {
+  const abs = Math.abs(Math.round(s));
+  const m = Math.floor(abs / 60);
+  const sec = abs % 60;
+  return `${m}:${String(sec).padStart(2, '0')}`;
+}
+
 function CalEditSlotPopover({
   entry, show, clock, shows, clocks, contentClock, contentMap, onUpsertContent, onRemoveContent,
   x, y, onClose, onRemove, onRestore, onChange,
@@ -2208,25 +2215,45 @@ function CalEditSlotPopover({
           {requiredTypes.map(type => {
             const c = currentContent[type];
             const hasContent = c?.playlist_id != null;
+            const slotSecs = contentClock?.segments
+              .filter(s => s.type === type)
+              .reduce((sum, s) => sum + s.duration_seconds, 0) ?? 0;
+            const assignedPlaylist = hasContent ? playlists.find(p => p.id === c!.playlist_id) : null;
+            const playlistSecs = assignedPlaylist?.total_seconds ?? null;
+            const delta = (playlistSecs != null && playlistSecs > 0 && slotSecs > 0)
+              ? playlistSecs - slotSecs
+              : null;
             return (
               <div key={type}>
                 <div className="text-[10px] uppercase tracking-wide font-semibold text-zinc-500 mb-1">{type}</div>
                 {hasContent ? (
-                  <div className="flex items-center gap-1 min-w-0">
-                    <span className="text-xs text-zinc-300 truncate flex-1">{c!.playlist_name ?? 'Unknown playlist'}</span>
-                    <button
-                      onClick={() => { setPickingContent(type); setPlaylistSearch(''); }}
-                      className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0 ml-1"
-                    >
-                      change
-                    </button>
-                    <button
-                      onClick={() => onRemoveContent(c!.id)}
-                      title="Remove assignment"
-                      className="p-0.5 text-zinc-500 hover:text-red-400 transition-colors flex-shrink-0"
-                    >
-                      <X className="w-3 h-3" />
-                    </button>
+                  <div>
+                    <div className="flex items-center gap-1 min-w-0">
+                      <span className="text-xs text-zinc-300 truncate flex-1">{c!.playlist_name ?? 'Unknown playlist'}</span>
+                      <button
+                        onClick={() => { setPickingContent(type); setPlaylistSearch(''); }}
+                        className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors flex-shrink-0 ml-1"
+                      >
+                        change
+                      </button>
+                      <button
+                        onClick={() => onRemoveContent(c!.id)}
+                        title="Remove assignment"
+                        className="p-0.5 text-zinc-500 hover:text-red-400 transition-colors flex-shrink-0"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </div>
+                    {delta != null && (
+                      <div className="flex items-center gap-1.5 mt-0.5">
+                        <span className="text-[10px] font-mono text-zinc-500">{fmtSec(playlistSecs!)} playlist</span>
+                        <span className="text-[10px] text-zinc-700">·</span>
+                        <span className="text-[10px] font-mono text-zinc-500">{fmtSec(slotSecs)} slot</span>
+                        <span className={`text-[10px] font-mono ml-auto font-semibold ${delta === 0 ? 'text-emerald-400' : 'text-amber-400'}`}>
+                          {delta > 0 ? '+' : '-'}{fmtSec(Math.abs(delta))}
+                        </span>
+                      </div>
+                    )}
                   </div>
                 ) : (
                   <button
