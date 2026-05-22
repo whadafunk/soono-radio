@@ -983,6 +983,7 @@ function StaticEditor({
       apiPost<TrackRow[]>(`/playlists/${playlist.id}/tracks/bulk`, { media_ids: mediaIds }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playlist-tracks', playlist.id] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
     },
     onError: (e) => showToast('error', (e as Error).message),
   });
@@ -991,6 +992,7 @@ function StaticEditor({
     mutationFn: (trackId: number) => apiDelete(`/playlists/${playlist.id}/tracks/${trackId}`),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['playlist-tracks', playlist.id] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
     },
     onError: (e) => showToast('error', (e as Error).message),
   });
