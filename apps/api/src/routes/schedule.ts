@@ -43,6 +43,15 @@ async function validateClockForScheduling(clockId: number): Promise<string | nul
   return null;
 }
 
+async function validateShowForScheduling(showId: number): Promise<string | null> {
+  const [show] = await db.select({ name: shows.name, jingle_playlist_id: shows.jingle_playlist_id })
+    .from(shows).where(eq(shows.id, showId)).limit(1);
+  if (show && !show.jingle_playlist_id) {
+    return `Show "${show.name}" has no jingle playlist configured. Jingles won't play until one is assigned.`;
+  }
+  return null;
+}
+
 // ─── Apply-template helpers ────────────────────────────────────────────────────
 
 function applyPad2(n: number): string { return String(n).padStart(2, '0'); }
@@ -117,6 +126,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       const err = await validateClockForScheduling(parsed.data.clock_id);
       if (err) return reply.status(409).send({ error: err });
     }
+    if (parsed.data.show_id != null) {
+      const err = await validateShowForScheduling(parsed.data.show_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
     const [entry] = await db.insert(templateEntries).values({
       day_of_week: parsed.data.day_of_week,
       time_start: parsed.data.time_start,
@@ -133,6 +146,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
     if (parsed.data.clock_id != null) {
       const err = await validateClockForScheduling(parsed.data.clock_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
+    if (parsed.data.show_id != null) {
+      const err = await validateShowForScheduling(parsed.data.show_id);
       if (err) return reply.status(409).send({ error: err });
     }
     const [updated] = await db.update(templateEntries)
@@ -174,6 +191,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       const err = await validateClockForScheduling(parsed.data.clock_id);
       if (err) return reply.status(409).send({ error: err });
     }
+    if (parsed.data.show_id != null) {
+      const err = await validateShowForScheduling(parsed.data.show_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
     const [entry] = await db.insert(calendarEntries).values({
       date: parsed.data.date,
       time_start: parsed.data.time_start,
@@ -191,6 +212,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
     if (parsed.data.clock_id != null) {
       const err = await validateClockForScheduling(parsed.data.clock_id);
+      if (err) return reply.status(409).send({ error: err });
+    }
+    if (parsed.data.show_id != null) {
+      const err = await validateShowForScheduling(parsed.data.show_id);
       if (err) return reply.status(409).send({ error: err });
     }
 
