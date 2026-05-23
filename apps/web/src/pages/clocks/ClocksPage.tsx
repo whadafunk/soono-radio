@@ -987,7 +987,7 @@ function SegmentList({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
-  assignedShows: { id: number; name: string }[];
+  assignedShows: { id: number; name: string; jingle_playlist_id: number | null; bed_playlist_id: number | null }[];
 }) {
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
 
@@ -1042,7 +1042,7 @@ function SortableSegmentItem({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
-  assignedShows: { id: number; name: string }[];
+  assignedShows: { id: number; name: string; jingle_playlist_id: number | null; bed_playlist_id: number | null }[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: segment.id, disabled: locked });
   const meta = SEGMENT_META[segment.type];
@@ -1144,7 +1144,7 @@ function SegmentDrawer({
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
   sweeperRotations: Rotation[];
-  assignedShows: { id: number; name: string }[];
+  assignedShows: { id: number; name: string; jingle_playlist_id: number | null; bed_playlist_id: number | null }[];
 }) {
   const [tab, setTab] = useState<DrawerTab>('content');
   const [draft, setDraft] = useState<SegmentDraft>({ ...segment });
@@ -1620,7 +1620,7 @@ function MusicSourceEditor({
   onChange: (sources: SegmentSourceEntry[]) => void;
   playlists: PlaylistSummary[];
   musicRotations: Rotation[];
-  assignedShows: { id: number; name: string }[];
+  assignedShows: { id: number; name: string; jingle_playlist_id: number | null; bed_playlist_id: number | null }[];
 }) {
   const isAssigned = assignedShows.length > 0;
   const playlistSources = sources.filter(
@@ -1790,7 +1790,7 @@ function SourcesEditor({
   onChange: (sources: SegmentSourceEntry[]) => void;
   playlists: PlaylistSummary[];
   musicRotations?: Rotation[];
-  assignedShows?: { id: number; name: string }[];
+  assignedShows?: { id: number; name: string; jingle_playlist_id: number | null; bed_playlist_id: number | null }[];
 }) {
   if (segType === 'music') {
     return (
@@ -1806,6 +1806,8 @@ function SourcesEditor({
 
   // Live — harbor always on, optional single beds playlist
   if (segType === 'live') {
+    const isShowAssigned = assignedShows.length > 0;
+    const showBedId = isShowAssigned ? assignedShows[0].bed_playlist_id : null;
     const bedPlaylists = playlists.filter(
       (p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'bed' && (p.total_seconds ?? 0) > 0,
     );
@@ -1818,20 +1820,27 @@ function SourcesEditor({
         </div>
         <div className="flex items-center gap-3">
           <span className="text-xs text-zinc-400 w-10 flex-shrink-0">Beds</span>
-          <select
-            value={currentBedId ?? ''}
-            onChange={(e) => {
-              const v = e.target.value;
-              if (!v) onChange([{ type: 'live' }]);
-              else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
-            }}
-            className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-          >
-            <option value="" className="bg-zinc-900">None</option>
-            {bedPlaylists.map((p) => (
-              <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
-            ))}
-          </select>
+          {isShowAssigned ? (
+            <p className="flex-1 text-xs text-zinc-400 px-3 py-1.5 border border-zinc-800 rounded bg-zinc-800/40 opacity-70">
+              {playlists.find((p) => p.id === showBedId)?.name ?? 'None'}
+              <span className="ml-1.5 text-zinc-500">(from show)</span>
+            </p>
+          ) : (
+            <select
+              value={currentBedId ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) onChange([{ type: 'live' }]);
+                else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
+              }}
+              className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+            >
+              <option value="" className="bg-zinc-900">None</option>
+              {bedPlaylists.map((p) => (
+                <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
+              ))}
+            </select>
+          )}
         </div>
       </div>
     );
@@ -1849,6 +1858,8 @@ function SourcesEditor({
 
   // News / Bulletin — single source, either harbor or recording (mutually exclusive)
   if (segType === 'news' || segType === 'bulletin') {
+    const isShowAssigned = assignedShows.length > 0;
+    const showBedId = isShowAssigned ? assignedShows[0].bed_playlist_id : null;
     const currentType = (sources[0]?.type ?? 'live') as 'live' | 'recording';
     const bedPlaylists = playlists.filter(
       (p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'bed' && (p.total_seconds ?? 0) > 0,
@@ -1869,20 +1880,27 @@ function SourcesEditor({
         {currentType === 'live' && (
           <div className="flex items-center gap-3">
             <span className="text-xs text-zinc-400 w-10 flex-shrink-0">Beds</span>
-            <select
-              value={currentBedId ?? ''}
-              onChange={(e) => {
-                const v = e.target.value;
-                if (!v) onChange([{ type: 'live' }]);
-                else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
-              }}
-              className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-            >
-              <option value="" className="bg-zinc-900">None</option>
-              {bedPlaylists.map((p) => (
-                <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
-              ))}
-            </select>
+            {isShowAssigned ? (
+              <p className="flex-1 text-xs text-zinc-400 px-3 py-1.5 border border-zinc-800 rounded bg-zinc-800/40 opacity-70">
+                {playlists.find((p) => p.id === showBedId)?.name ?? 'None'}
+                <span className="ml-1.5 text-zinc-500">(from show)</span>
+              </p>
+            ) : (
+              <select
+                value={currentBedId ?? ''}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  if (!v) onChange([{ type: 'live' }]);
+                  else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
+                }}
+                className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+              >
+                <option value="" className="bg-zinc-900">None</option>
+                {bedPlaylists.map((p) => (
+                  <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
+                ))}
+              </select>
+            )}
           </div>
         )}
       </div>
