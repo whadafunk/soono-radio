@@ -1168,7 +1168,7 @@ function SegmentDrawer({
     : { type: 'flexible' as const, late_seconds: 0, early_seconds: 0 };
 
   return (
-    <div className="border-t border-zinc-700/60 bg-zinc-900/80">
+    <div className="border-t border-zinc-700/60 bg-zinc-700/20">
       <div className="flex border-b border-zinc-700/60 px-4">
         {TABS.map((t) => (
           <button
