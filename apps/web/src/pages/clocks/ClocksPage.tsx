@@ -1404,6 +1404,7 @@ function SegmentDrawer({
                         min={1}
                         placeholder="∞"
                         value={flexPolicy.late_seconds ?? ''}
+                        onKeyDown={(e) => { if (['e', 'E', '+', '-', '.'].includes(e.key)) e.preventDefault(); }}
                         onChange={(e) => {
                           const v = parseInt(e.target.value);
                           update({ start_policy: { ...flexPolicy, late_seconds: isNaN(v) || v <= 0 ? null : v } });
@@ -1437,6 +1438,7 @@ function SegmentDrawer({
                         min={1}
                         placeholder="∞"
                         value={flexPolicy.early_seconds ?? ''}
+                        onKeyDown={(e) => { if (['e', 'E', '+', '-', '.'].includes(e.key)) e.preventDefault(); }}
                         onChange={(e) => {
                           const v = parseInt(e.target.value);
                           update({ start_policy: { ...flexPolicy, early_seconds: isNaN(v) || v <= 0 ? null : v } });
