@@ -1363,7 +1363,7 @@ function SegmentDrawer({
         {tab === 'timing' && (
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <p className="text-xs font-medium text-zinc-400 mb-2">Start policy</p>
+              <p className="text-xs font-medium text-zinc-300 mb-2">Start policy</p>
               <div className="space-y-2">
                 {/* Start late */}
                 <div className="flex items-center gap-3">
@@ -1382,7 +1382,7 @@ function SegmentDrawer({
                   </label>
                   {flexPolicy.late_seconds !== 0 && (
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-zinc-400">up to</span>
+                      <span className="text-xs text-zinc-300">up to</span>
                       <input
                         type="number"
                         min={1}
@@ -1394,7 +1394,7 @@ function SegmentDrawer({
                         }}
                         className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
                       />
-                      <span className="text-xs text-zinc-400">sec late{flexPolicy.late_seconds === null ? ' (natural end)' : ''}</span>
+                      <span className="text-xs text-zinc-300">sec late{flexPolicy.late_seconds === null ? ' (natural end)' : ''}</span>
                     </div>
                   )}
                 </div>
@@ -1415,7 +1415,7 @@ function SegmentDrawer({
                   </label>
                   {flexPolicy.early_seconds !== 0 && (
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-zinc-400">up to</span>
+                      <span className="text-xs text-zinc-300">up to</span>
                       <input
                         type="number"
                         min={1}
@@ -1427,7 +1427,7 @@ function SegmentDrawer({
                         }}
                         className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
                       />
-                      <span className="text-xs text-zinc-400">sec early{flexPolicy.early_seconds === null ? ' (fill gap)' : ''}</span>
+                      <span className="text-xs text-zinc-300">sec early{flexPolicy.early_seconds === null ? ' (fill gap)' : ''}</span>
                     </div>
                   )}
                 </div>
@@ -1436,7 +1436,7 @@ function SegmentDrawer({
 
             {/* End policy */}
             <div className="col-span-2 space-y-3">
-              <p className="text-xs font-medium text-zinc-400">End policy</p>
+              <p className="text-xs font-medium text-zinc-300">End policy</p>
 
               {isRundownLive ? (
                 <p className="text-xs text-zinc-500 italic">Live segment — operator controls timing. No automatic catching up or coasting.</p>
@@ -1444,7 +1444,7 @@ function SegmentDrawer({
                 <>
                   {(CATCHUP_TYPES[draft.type].length > 0 || isRundownMode) && (
                     <div>
-                      <p className="text-xs text-zinc-400 mb-1.5">Catching up — skip order <HelpTooltip text="Event types to skip when running late, in priority order. Check to enable, drag to reorder." /></p>
+                      <p className="text-xs text-zinc-300 mb-1.5">Catching up — skip order <HelpTooltip text="Event types to skip when running late, in priority order. Check to enable, drag to reorder." /></p>
                       <DriftOrderList
                         allTypes={isRundownMode ? (['jingles', 'station_ids'] as DriftEventType[]) : CATCHUP_TYPES[draft.type]}
                         order={draft.catching_up_order}
@@ -1455,7 +1455,7 @@ function SegmentDrawer({
 
                   {(COASTING_TYPES[draft.type].length > 0 || isRundownMode) && (
                     <div>
-                      <p className="text-xs text-zinc-400 mb-1.5">Coasting — fill order <HelpTooltip text="Event types to fill with when the segment ends early, in preference order. Check to enable, drag to reorder." /></p>
+                      <p className="text-xs text-zinc-300 mb-1.5">Coasting — fill order <HelpTooltip text="Event types to fill with when the segment ends early, in preference order. Check to enable, drag to reorder." /></p>
                       <DriftOrderList
                         allTypes={isRundownMode ? (['jingles', 'station_ids'] as DriftEventType[]) : COASTING_TYPES[draft.type]}
                         order={draft.coasting_order}
@@ -1470,7 +1470,7 @@ function SegmentDrawer({
                         className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
                       <div>
                         <span className="text-xs font-medium text-zinc-200">Reschedule if late</span>
-                        <p className="text-xs text-zinc-500">Defer the whole segment to the next available slot rather than playing it late.</p>
+                        <p className="text-xs text-zinc-400">Defer the whole segment to the next available slot rather than playing it late.</p>
                       </div>
                     </label>
                   )}
@@ -1493,7 +1493,7 @@ function SegmentDrawer({
               <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1 space-y-4">
                 {/* Between-track jingles */}
                 <div>
-                  <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Between-track jingles</p>
+                  <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider mb-3">Between-track jingles</p>
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="Enable" hint="Source: clock's jingle playlist — shared with sweepers">
                       <label className="flex items-center gap-2 cursor-pointer">
@@ -1527,7 +1527,7 @@ function SegmentDrawer({
 
                 {/* Between-track station IDs */}
                 <div>
-                  <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider mb-3">Between-track station IDs</p>
+                  <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider mb-3">Between-track station IDs</p>
                   <div className="grid grid-cols-2 gap-4">
                     <Field label="Enable" hint="Source: clock's station ID playlist — shared with sweepers">
                       <label className="flex items-center gap-2 cursor-pointer">
@@ -2435,9 +2435,9 @@ function ClockActions({ dirty, isPending, confirmDelete, slotCount, assignedShow
 function Field({ label, hint, className, children }: { label: string; hint?: string; className?: string; children: React.ReactNode }) {
   return (
     <div className={className}>
-      <label className="block text-xs font-medium text-zinc-400 mb-1">{label}</label>
+      <label className="block text-xs font-medium text-zinc-300 mb-1">{label}</label>
       {children}
-      {hint && <p className="mt-1 text-xs text-zinc-500">{hint}</p>}
+      {hint && <p className="mt-1 text-xs text-zinc-400">{hint}</p>}
     </div>
   );
 }
@@ -2576,9 +2576,9 @@ function DriftOrderRow({
         className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
       />
       {active && index !== undefined && (
-        <span className="text-xs text-zinc-600 w-3 text-right shrink-0">{index}.</span>
+        <span className="text-xs text-zinc-400 w-3 text-right shrink-0">{index}.</span>
       )}
-      <span className={`text-xs ${active ? 'text-zinc-200' : 'text-zinc-500'}`}>
+      <span className={`text-xs ${active ? 'text-zinc-200' : 'text-zinc-400'}`}>
         {DRIFT_EVENT_LABELS[type]}
       </span>
     </div>
