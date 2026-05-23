@@ -1099,6 +1099,7 @@ function SortableSegmentItem({
 
       <div className={`overflow-hidden transition-all duration-200 ${isExpanded ? 'max-h-[700px]' : 'max-h-0'}`}>
         {isExpanded && (
+          <div className="border-l-2 mx-3 mb-3 rounded-b overflow-hidden" style={{ borderColor: meta.color }}>
           <SegmentDrawer
             segment={segment}
             locked={locked}
@@ -1109,6 +1110,7 @@ function SortableSegmentItem({
             sweeperRotations={sweeperRotations}
             assignedShows={assignedShows}
           />
+          </div>
         )}
       </div>
     </div>
@@ -1166,7 +1168,7 @@ function SegmentDrawer({
     : { type: 'flexible' as const, late_seconds: 0, early_seconds: 0 };
 
   return (
-    <div className="border-t border-zinc-700/60 bg-zinc-800/40">
+    <div className="border-t border-zinc-700/60 bg-zinc-900/80">
       <div className="flex border-b border-zinc-700/60 px-4">
         {TABS.map((t) => (
           <button
