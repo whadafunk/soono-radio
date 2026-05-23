@@ -9,7 +9,7 @@ import {
   ApplyTemplateSchema,
 } from '@radio/shared';
 import { db } from '../db/index.js';
-import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments } from '../db/schema.js';
+import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments, clocks } from '../db/schema.js';
 
 // ─── Clock scheduling validation ──────────────────────────────────────────────
 
@@ -29,6 +29,16 @@ async function validateClockForScheduling(clockId: number): Promise<string | nul
     .limit(1);
   if (emptyMusic) {
     return 'Clock has music segments with no content configured. Add a rotation or playlist source before scheduling.';
+  }
+  const [clockRow] = await db.select({ jingle_playlist_id: clocks.jingle_playlist_id, station_id_playlist_id: clocks.station_id_playlist_id })
+    .from(clocks).where(eq(clocks.id, clockId)).limit(1);
+  if (clockRow) {
+    const missing: string[] = [];
+    if (!clockRow.jingle_playlist_id) missing.push('jingle');
+    if (!clockRow.station_id_playlist_id) missing.push('station ID');
+    if (missing.length > 0) {
+      return `Clock is missing a ${missing.join(' and ')} playlist. Branding won't play until these are configured.`;
+    }
   }
   return null;
 }

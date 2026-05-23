@@ -501,12 +501,17 @@ export function ShowDetailPage() {
                     control={control}
                     name="jingle_playlist_id"
                     render={({ field }) => (
-                      <PlaylistSelect
-                        playlists={jinglePlaylists}
-                        value={field.value ?? null}
-                        onChange={(v) => { field.onChange(v); setValue('jingle_playlist_id', v, { shouldDirty: true }); }}
-                        placeholder="No jingle playlist assigned"
-                      />
+                      <>
+                        <PlaylistSelect
+                          playlists={jinglePlaylists}
+                          value={field.value ?? null}
+                          onChange={(v) => { field.onChange(v); setValue('jingle_playlist_id', v, { shouldDirty: true }); }}
+                          placeholder="No jingle playlist assigned"
+                        />
+                        {!field.value && (
+                          <p className="mt-1.5 text-xs text-amber-400">No jingle playlist — jingles won't play for this show.</p>
+                        )}
+                      </>
                     )}
                   />
                 </section>

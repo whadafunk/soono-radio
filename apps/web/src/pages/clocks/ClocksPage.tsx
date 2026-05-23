@@ -674,18 +674,28 @@ export function ClocksPage() {
                       <div>
                         <p className="text-xs text-zinc-400 mb-1">Jingles Playlist</p>
                         {draftClock.assigned_shows.length > 0 ? (
-                          <p className="text-xs text-zinc-400 px-3 py-1.5 border border-zinc-800 rounded bg-zinc-800/40 opacity-70">
-                            {allPlaylists.find((p) => p.id === draftClock.assigned_shows[0].jingle_playlist_id)?.name ?? 'None'}
-                            <span className="ml-1.5 text-zinc-500">(from show)</span>
-                          </p>
+                          <>
+                            <p className="text-xs text-zinc-400 px-3 py-1.5 border border-zinc-800 rounded bg-zinc-800/40 opacity-70">
+                              {allPlaylists.find((p) => p.id === draftClock.assigned_shows[0].jingle_playlist_id)?.name ?? 'None'}
+                              <span className="ml-1.5 text-zinc-500">(from show)</span>
+                            </p>
+                            {!draftClock.assigned_shows[0].jingle_playlist_id && (
+                              <p className="mt-1 text-xs text-amber-400">No jingle playlist set on the assigned show.</p>
+                            )}
+                          </>
                         ) : (
-                          <PlaylistDropdown
-                            value={draftClock.jingle_playlist_id ?? null}
-                            onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
-                            playlists={allPlaylists}
-                            categories={['jingle']}
-                            filter={(p) => p.subcategory === 'show'}
-                          />
+                          <>
+                            <PlaylistDropdown
+                              value={draftClock.jingle_playlist_id ?? null}
+                              onChange={(id) => updateDraftClock((c) => ({ ...c, jingle_playlist_id: id }))}
+                              playlists={allPlaylists}
+                              categories={['jingle']}
+                              filter={(p) => p.subcategory === 'show'}
+                            />
+                            {!draftClock.jingle_playlist_id && (
+                              <p className="mt-1 text-xs text-amber-400">No jingle playlist — jingles won't play.</p>
+                            )}
+                          </>
                         )}
                       </div>
                       <div>
@@ -697,6 +707,9 @@ export function ClocksPage() {
                           categories={['jingle']}
                           filter={(p) => p.subcategory === 'stationid'}
                         />
+                        {!draftClock.station_id_playlist_id && (
+                          <p className="mt-1 text-xs text-amber-400">No station ID playlist — station IDs won't play.</p>
+                        )}
                       </div>
                     </div>
 
