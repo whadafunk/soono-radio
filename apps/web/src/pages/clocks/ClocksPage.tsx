@@ -130,21 +130,21 @@ const DRIFT_EVENT_LABELS: Record<DriftEventType, string> = {
 // Which event types are applicable for catching-up (skip) per segment type
 const CATCHUP_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
   music:         ['jingles', 'station_ids', 'songs'],
-  stop_set:      ['jingles', 'promos', 'spots'],
+  stop_set:      ['promos', 'spots'],
   news:          [],
   live:          [],
-  voice_track:   [],
+  voice_track:   ['jingles', 'station_ids'],
   bulletin:      [],
 };
 
 // Which event types are applicable for coasting (fill) per segment type
 const COASTING_TYPES: Record<ClockSegmentType, DriftEventType[]> = {
   music:         ['jingles', 'station_ids', 'songs'],
-  stop_set:      ['jingles', 'promos', 'spots'],
+  stop_set:      ['promos', 'spots'],
   news:          [],
   live:          [],
-  voice_track:   ['jingles', 'station_ids', 'promos'],
-  bulletin:      ['jingles', 'station_ids', 'promos'],
+  voice_track:   ['jingles', 'station_ids'],
+  bulletin:      ['jingles', 'station_ids'],
 };
 
 const DURATION_DEFAULT: Record<ClockSegmentType, number> = {
@@ -1441,7 +1441,7 @@ function SegmentDrawer({
             <div className="col-span-2 space-y-3">
               <p className="text-xs font-semibold text-zinc-300">End policy</p>
 
-              {isRundownLive ? (
+              {(isRundownLive || draft.type === 'live') ? (
                 <p className="text-xs text-zinc-500 italic">Live segment — operator controls timing. No automatic catching up or coasting.</p>
               ) : (
                 <>
