@@ -1154,7 +1154,7 @@ function SegmentDrawer({
   const isRundownMode = (draft.type === 'news' || draft.type === 'bulletin')
     && draft.sources.some((s) => s.type === 'recording');
   const isRundownLive = (draft.type === 'news' || draft.type === 'bulletin')
-    && draft.sources.length > 0 && draft.sources.every((s) => s.type === 'live');
+    && (draft.sources[0]?.type ?? 'live') === 'live';
 
   const TABS: { id: DrawerTab; label: string }[] = [
     { id: 'content', label: 'Content' },
