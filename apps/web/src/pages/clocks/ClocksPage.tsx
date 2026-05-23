@@ -1837,15 +1837,42 @@ function SourcesEditor({
   // News / Bulletin — single source, either harbor or recording (mutually exclusive)
   if (segType === 'news' || segType === 'bulletin') {
     const currentType = (sources[0]?.type ?? 'live') as 'live' | 'recording';
+    const bedPlaylists = playlists.filter(
+      (p) => playlistMediaCategory(p.type as any, p.subcategory as any) === 'bed' && (p.total_seconds ?? 0) > 0,
+    );
+    const currentBedId = currentType === 'live'
+      ? (sources.find((s) => s.type === 'playlist') as Extract<SegmentSourceEntry, { type: 'playlist' }> | undefined)?.playlist_id ?? null
+      : null;
     return (
-      <select
-        value={currentType}
-        onChange={(e) => onChange([makeDefaultSource(e.target.value as 'live' | 'recording')])}
-        className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
-      >
-        <option value="live" className="bg-zinc-900">Harbor (live)</option>
-        <option value="recording" className="bg-zinc-900">Recording</option>
-      </select>
+      <div className="space-y-3">
+        <select
+          value={currentType}
+          onChange={(e) => onChange([makeDefaultSource(e.target.value as 'live' | 'recording')])}
+          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+        >
+          <option value="live" className="bg-zinc-900">Harbor (live)</option>
+          <option value="recording" className="bg-zinc-900">Recording</option>
+        </select>
+        {currentType === 'live' && (
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-zinc-400 w-10 flex-shrink-0">Beds</span>
+            <select
+              value={currentBedId ?? ''}
+              onChange={(e) => {
+                const v = e.target.value;
+                if (!v) onChange([{ type: 'live' }]);
+                else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
+              }}
+              className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+            >
+              <option value="" className="bg-zinc-900">None</option>
+              {bedPlaylists.map((p) => (
+                <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
+              ))}
+            </select>
+          </div>
+        )}
+      </div>
     );
   }
 
