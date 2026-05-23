@@ -1149,6 +1149,10 @@ function SegmentDrawer({
 
   const meta = SEGMENT_META[draft.type];
   const isLive = draft.type === 'live';
+  const isRundownMode = (draft.type === 'news' || draft.type === 'bulletin')
+    && draft.sources.some((s) => s.type === 'recording');
+  const isRundownLive = (draft.type === 'news' || draft.type === 'bulletin')
+    && draft.sources.length > 0 && draft.sources.every((s) => s.type === 'live');
 
   const TABS: { id: DrawerTab; label: string }[] = [
     { id: 'content', label: 'Content' },
@@ -1432,37 +1436,43 @@ function SegmentDrawer({
             <div className="col-span-2 space-y-3">
               <p className="text-xs font-medium text-zinc-400">End policy</p>
 
-              {CATCHUP_TYPES[draft.type].length > 0 && (
-                <div>
-                  <p className="text-xs text-zinc-400 mb-1.5">Catching up — skip order <HelpTooltip text="Event types to skip when running late, in priority order. Check to enable, drag to reorder." /></p>
-                  <DriftOrderList
-                    allTypes={CATCHUP_TYPES[draft.type]}
-                    order={draft.catching_up_order}
-                    onChange={(next) => update({ catching_up_order: next, can_skip: next.length > 0 })}
-                  />
-                </div>
-              )}
+              {isRundownLive ? (
+                <p className="text-xs text-zinc-500 italic">Live segment — operator controls timing. No automatic catching up or coasting.</p>
+              ) : (
+                <>
+                  {(CATCHUP_TYPES[draft.type].length > 0 || isRundownMode) && (
+                    <div>
+                      <p className="text-xs text-zinc-400 mb-1.5">Catching up — skip order <HelpTooltip text="Event types to skip when running late, in priority order. Check to enable, drag to reorder." /></p>
+                      <DriftOrderList
+                        allTypes={isRundownMode ? (['jingles', 'station_ids'] as DriftEventType[]) : CATCHUP_TYPES[draft.type]}
+                        order={draft.catching_up_order}
+                        onChange={(next) => update({ catching_up_order: next, can_skip: next.length > 0 })}
+                      />
+                    </div>
+                  )}
 
-              {COASTING_TYPES[draft.type].length > 0 && (
-                <div>
-                  <p className="text-xs text-zinc-400 mb-1.5">Coasting — fill order <HelpTooltip text="Event types to fill with when the segment ends early, in preference order. Check to enable, drag to reorder." /></p>
-                  <DriftOrderList
-                    allTypes={COASTING_TYPES[draft.type]}
-                    order={draft.coasting_order}
-                    onChange={(next) => update({ coasting_order: next, can_fill: next.length > 0 })}
-                  />
-                </div>
-              )}
+                  {(COASTING_TYPES[draft.type].length > 0 || isRundownMode) && (
+                    <div>
+                      <p className="text-xs text-zinc-400 mb-1.5">Coasting — fill order <HelpTooltip text="Event types to fill with when the segment ends early, in preference order. Check to enable, drag to reorder." /></p>
+                      <DriftOrderList
+                        allTypes={isRundownMode ? (['jingles', 'station_ids'] as DriftEventType[]) : COASTING_TYPES[draft.type]}
+                        order={draft.coasting_order}
+                        onChange={(next) => update({ coasting_order: next, can_fill: next.length > 0 })}
+                      />
+                    </div>
+                  )}
 
-              {(draft.type === 'voice_track' || draft.type === 'bulletin') && (
-                <label className="flex items-center gap-2.5 cursor-pointer">
-                  <input type="checkbox" checked={draft.can_reschedule} onChange={(e) => update({ can_reschedule: e.target.checked })}
-                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
-                  <div>
-                    <span className="text-xs font-medium text-zinc-200">Reschedule if late</span>
-                    <p className="text-xs text-zinc-500">Defer the whole segment to the next available slot rather than playing it late.</p>
-                  </div>
-                </label>
+                  {(draft.type === 'voice_track' || draft.type === 'bulletin' || draft.type === 'news') && (
+                    <label className="flex items-center gap-2.5 cursor-pointer">
+                      <input type="checkbox" checked={draft.can_reschedule} onChange={(e) => update({ can_reschedule: e.target.checked })}
+                        className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
+                      <div>
+                        <span className="text-xs font-medium text-zinc-200">Reschedule if late</span>
+                        <p className="text-xs text-zinc-500">Defer the whole segment to the next available slot rather than playing it late.</p>
+                      </div>
+                    </label>
+                  )}
+                </>
               )}
             </div>
           </div>
@@ -1477,7 +1487,7 @@ function SegmentDrawer({
             <Field label="End clip playlist" hint="Plays after segment content">
               <PlaylistDropdown value={draft.end_clip_playlist_id} onChange={(v) => update({ end_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
             </Field>
-            {draft.type === 'music' && (
+            {(draft.type === 'music' || isRundownMode) && (
               <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1 space-y-4">
                 {/* Between-track jingles */}
                 <div>
