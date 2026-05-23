@@ -15,6 +15,7 @@ import {
   fetchPlaylists,
   applyTemplate,
   clearCalendar,
+  ApiError,
 } from '../../api';
 import type { RundownSlotContent } from '../../api';
 
@@ -329,9 +330,18 @@ export function SchedulePage() {
 
   const contentMap = useMemo(() => buildContentMap(slotContentRows), [slotContentRows]);
 
+  const extractApiError = (err: unknown): string =>
+    err instanceof ApiError && typeof (err.body as Record<string, unknown>)?.error === 'string'
+      ? (err.body as { error: string }).error
+      : 'An unexpected error occurred';
+
   // Template mutations
   const invalidateTemplate = () => qc.invalidateQueries({ queryKey: ['template-entries'] });
-  const createMutation = useMutation({ mutationFn: createTemplateEntry, onSuccess: invalidateTemplate });
+  const createMutation = useMutation({
+    mutationFn: createTemplateEntry,
+    onSuccess: () => { invalidateTemplate(); dismiss(); },
+    onError: (err) => setScheduleError(extractApiError(err)),
+  });
   const updateMutation = useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: Parameters<typeof updateTemplateEntry>[1] }) =>
       updateTemplateEntry(id, patch),
@@ -341,7 +351,11 @@ export function SchedulePage() {
 
   // Calendar mutations
   const invalidateCal = () => qc.invalidateQueries({ queryKey: ['calendar-entries'] });
-  const calCreateMutation = useMutation({ mutationFn: createCalendarEntry, onSuccess: invalidateCal });
+  const calCreateMutation = useMutation({
+    mutationFn: createCalendarEntry,
+    onSuccess: () => { invalidateCal(); dismiss(); },
+    onError: (err) => setScheduleError(extractApiError(err)),
+  });
   const calUpdateMutation = useMutation({
     mutationFn: ({ id, patch }: { id: number; patch: Parameters<typeof updateCalendarEntry>[1] }) =>
       updateCalendarEntry(id, patch),
@@ -538,11 +552,14 @@ export function SchedulePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  const [scheduleError, setScheduleError] = useState<string | null>(null);
+
   const dismiss = () => {
     setNewSlot(null);
     setEditSlot(null);
     setCalNewSlot(null);
     setCalEditSlot(null);
+    setScheduleError(null);
   };
 
   const goBack    = () => { const d = new Date(baseDate); d.setDate(d.getDate() - 7); setBaseDate(d); };
@@ -858,8 +875,11 @@ export function SchedulePage() {
           clocks={clocks}
           x={newSlot.x}
           y={newSlot.y}
+          error={scheduleError}
+          isPending={createMutation.isPending}
           onClose={dismiss}
           onSave={(showId, clockId, timeStart, timeEnd) => {
+            setScheduleError(null);
             createMutation.mutate({
               day_of_week: newSlot.dayOfWeek,
               time_start: timeStart,
@@ -867,7 +887,6 @@ export function SchedulePage() {
               show_id: showId,
               clock_id: clockId,
             });
-            dismiss();
           }}
         />
       )}
@@ -901,8 +920,11 @@ export function SchedulePage() {
           clocks={clocks}
           x={calNewSlot.x}
           y={calNewSlot.y}
+          error={scheduleError}
+          isPending={calCreateMutation.isPending}
           onClose={dismiss}
           onSave={(date, showId, clockId, timeStart, timeEnd, isOverride) => {
+            setScheduleError(null);
             calCreateMutation.mutate({
               date,
               time_start: timeStart,
@@ -911,7 +933,6 @@ export function SchedulePage() {
               clock_id: clockId,
               is_override: isOverride,
             });
-            dismiss();
           }}
         />
       )}
@@ -1679,7 +1700,7 @@ function SlotPicker({
 // ─── New Slot Popover (template mode) ─────────────────────────────────────────
 
 function NewSlotPopover({
-  timeStart: initStart, maxDurationMinutes, shows, clocks, x, y, onClose, onSave,
+  timeStart: initStart, maxDurationMinutes, shows, clocks, x, y, error, isPending, onClose, onSave,
 }: {
   dayOfWeek: number;
   timeStart: string;
@@ -1689,6 +1710,8 @@ function NewSlotPopover({
   clocks: ClockType[];
   x: number;
   y: number;
+  error?: string | null;
+  isPending?: boolean;
   onClose: () => void;
   onSave: (showId: number | null, clockId: number | null, timeStart: string, timeEnd: string) => void;
 }) {
@@ -1756,13 +1779,16 @@ function NewSlotPopover({
         onSelectClock={(id) => { setSelectedClockId(id); setSelectedShowId(null); }}
       />
 
-      <div className="px-4 py-3 border-t border-zinc-800">
+      <div className="px-4 py-3 border-t border-zinc-800 flex flex-col gap-2">
+        {error && (
+          <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2.5 py-1.5">{error}</p>
+        )}
         <button
           onClick={() => onSave(selectedShowId, selectedClockId, timeStart, effectiveEnd)}
-          disabled={!timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
+          disabled={isPending || !timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
           className="w-full py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
         >
-          Schedule
+          {isPending ? 'Scheduling…' : 'Schedule'}
         </button>
       </div>
     </div>
@@ -1886,7 +1912,7 @@ function EditSlotPopover({
 // ─── Cal New Slot Popover (calendar mode) ─────────────────────────────────────
 
 function CalNewSlotPopover({
-  date, timeStart: initStart, templateEntry, maxDurationMinutes, shows, clocks, x, y, onClose, onSave,
+  date, timeStart: initStart, templateEntry, maxDurationMinutes, shows, clocks, x, y, error, isPending, onClose, onSave,
 }: {
   date: string;
   timeStart: string;
@@ -1897,6 +1923,8 @@ function CalNewSlotPopover({
   clocks: ClockType[];
   x: number;
   y: number;
+  error?: string | null;
+  isPending?: boolean;
   onClose: () => void;
   onSave: (date: string, showId: number | null, clockId: number | null, timeStart: string, timeEnd: string, isOverride: boolean) => void;
 }) {
@@ -1976,13 +2004,16 @@ function CalNewSlotPopover({
         onSelectClock={(id) => { setSelectedClockId(id); setSelectedShowId(null); }}
       />
 
-      <div className="px-4 py-3 border-t border-zinc-800">
+      <div className="px-4 py-3 border-t border-zinc-800 flex flex-col gap-2">
+        {error && (
+          <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2.5 py-1.5">{error}</p>
+        )}
         <button
           onClick={() => onSave(date, selectedShowId, selectedClockId, timeStart, effectiveEnd, isOverride)}
-          disabled={!timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
+          disabled={isPending || !timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
           className="w-full py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
         >
-          {isOverride ? 'Override for this day' : 'Schedule'}
+          {isPending ? 'Scheduling…' : isOverride ? 'Override for this day' : 'Schedule'}
         </button>
       </div>
     </div>
