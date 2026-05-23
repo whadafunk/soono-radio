@@ -1253,7 +1253,7 @@ function SegmentDrawer({
             </Field>
 
             <div className="col-span-2">
-              <label className="block text-xs font-medium text-zinc-400 mb-2">
+              <label className="block text-xs font-medium text-zinc-300 mb-2">
                 Source{' '}
                 {draft.type === 'music' && (
                   <span className={`ml-1 text-[10px] font-normal px-1 py-0.5 rounded ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-400' : 'bg-indigo-900/30 text-indigo-400'}`}>
@@ -1334,7 +1334,10 @@ function SegmentDrawer({
             )}
 
             {(draft.type === 'music' || draft.type === 'news' || draft.type === 'bulletin') && (
-              <Field label="Accept live" hint="Allow the DJ to take over this segment via the harbor input">
+              <div>
+                <label className="block text-xs font-medium text-zinc-300 mb-1 flex items-center gap-1">
+                  Accept live <HelpTooltip text="Allow the DJ to take over this segment via the harbor input" />
+                </label>
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
                     type="checkbox"
@@ -1344,7 +1347,7 @@ function SegmentDrawer({
                   />
                   <span className="text-sm text-zinc-300">Allow DJ to go live during this segment</span>
                 </label>
-              </Field>
+              </div>
             )}
 
             {(draft.type === 'news' || draft.type === 'bulletin' || draft.type === 'voice_track') && (
@@ -1363,7 +1366,7 @@ function SegmentDrawer({
         {tab === 'timing' && (
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
-              <p className="text-xs font-medium text-zinc-300 mb-2">Start policy</p>
+              <p className="text-xs font-semibold text-zinc-300 mb-2">Start policy</p>
               <div className="space-y-2">
                 {/* Start late */}
                 <div className="flex items-center gap-3">
@@ -1436,7 +1439,7 @@ function SegmentDrawer({
 
             {/* End policy */}
             <div className="col-span-2 space-y-3">
-              <p className="text-xs font-medium text-zinc-300">End policy</p>
+              <p className="text-xs font-semibold text-zinc-300">End policy</p>
 
               {isRundownLive ? (
                 <p className="text-xs text-zinc-500 italic">Live segment — operator controls timing. No automatic catching up or coasting.</p>
@@ -1483,10 +1486,10 @@ function SegmentDrawer({
         {/* ── Transitions tab ── */}
         {tab === 'transitions' && (
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Start clip playlist" hint="Plays before segment content">
+            <Field label="Start clip playlist" tooltip="Plays before segment content">
               <PlaylistDropdown value={draft.start_clip_playlist_id} onChange={(v) => update({ start_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
             </Field>
-            <Field label="End clip playlist" hint="Plays after segment content">
+            <Field label="End clip playlist" tooltip="Plays after segment content">
               <PlaylistDropdown value={draft.end_clip_playlist_id} onChange={(v) => update({ end_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
             </Field>
             {(draft.type === 'music' || isRundownMode) && (
@@ -1495,7 +1498,7 @@ function SegmentDrawer({
                 <div>
                   <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider mb-3">Between-track jingles</p>
                   <div className="grid grid-cols-2 gap-4">
-                    <Field label="Enable" hint="Source: clock's jingle playlist — shared with sweepers">
+                    <Field label="Enable" tooltip="Source: clock's jingle playlist — shared with sweepers">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
@@ -1529,7 +1532,7 @@ function SegmentDrawer({
                 <div>
                   <p className="text-xs font-semibold text-zinc-300 uppercase tracking-wider mb-3">Between-track station IDs</p>
                   <div className="grid grid-cols-2 gap-4">
-                    <Field label="Enable" hint="Source: clock's station ID playlist — shared with sweepers">
+                    <Field label="Enable" tooltip="Source: clock's station ID playlist — shared with sweepers">
                       <label className="flex items-center gap-2 cursor-pointer">
                         <input
                           type="checkbox"
@@ -2306,19 +2309,19 @@ function SegmentSweeperEditor({
         <div className="space-y-2">
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500">Per hour</span>
+              <span className="text-xs text-zinc-300">Per hour</span>
               <input type="number" min={0} max={20} value={config.per_hour}
                 onChange={(e) => update({ per_hour: Math.max(0, Math.min(20, parseInt(e.target.value) || 0)) })}
                 className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
               />
             </div>
             <div className="flex items-center gap-2">
-              <span className="text-xs text-zinc-500">Min gap</span>
+              <span className="text-xs text-zinc-300">Min gap</span>
               <input type="number" min={1} value={config.min_gap_minutes}
                 onChange={(e) => update({ min_gap_minutes: Math.max(1, parseInt(e.target.value) || 1) })}
                 className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
               />
-              <span className="text-xs text-zinc-500">min</span>
+              <span className="text-xs text-zinc-300">min</span>
             </div>
           </div>
           <div className="space-y-1.5">
@@ -2335,7 +2338,7 @@ function SegmentSweeperEditor({
                     ))}
                   </select>
                   <div className="flex items-center gap-1">
-                    <span className="text-xs text-zinc-500">wt</span>
+                    <span className="text-xs text-zinc-300">wt</span>
                     <input type="number" min={1} value={src.weight}
                       onChange={(e) => updateSource(i, { weight: Math.max(1, parseInt(e.target.value) || 1) })}
                       className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
@@ -2432,10 +2435,12 @@ function ClockActions({ dirty, isPending, confirmDelete, slotCount, assignedShow
   );
 }
 
-function Field({ label, hint, className, children }: { label: string; hint?: string; className?: string; children: React.ReactNode }) {
+function Field({ label, hint, tooltip, className, children }: { label: string; hint?: string; tooltip?: string; className?: string; children: React.ReactNode }) {
   return (
     <div className={className}>
-      <label className="block text-xs font-medium text-zinc-300 mb-1">{label}</label>
+      <label className="block text-xs font-medium text-zinc-300 mb-1 flex items-center gap-1">
+        {label}{tooltip && <HelpTooltip text={tooltip} />}
+      </label>
       {children}
       {hint && <p className="mt-1 text-xs text-zinc-400">{hint}</p>}
     </div>
