@@ -243,6 +243,7 @@ function PromoModal({
   const [minPlays, setMinPlays] = useState(promo?.min_plays_per_day?.toString() ?? '1');
   const [maxPlays, setMaxPlays] = useState(promo?.max_plays_per_day?.toString() ?? '3');
   const [notes, setNotes] = useState(promo?.notes ?? '');
+  const [active, setActive] = useState(promo?.active ?? true);
   const [deleteConfirm, setDeleteConfirm] = useState(false);
   const [error, setError] = useState('');
 
@@ -287,6 +288,7 @@ function PromoModal({
       max_plays_per_day: max,
       no_air_during_show: showId ? noAirDuringShow : false,
       notes: notes.trim() || null,
+      active,
     };
 
     if (isNew) createMutation.mutate(payload);
@@ -421,11 +423,10 @@ function PromoModal({
               </div>
               <button
                 type="button"
-                onClick={() => updateMutation.mutate({ active: !promo!.active })}
-                disabled={updateMutation.isPending}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${promo!.active ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+                onClick={() => setActive((v) => !v)}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${active ? 'bg-indigo-600' : 'bg-zinc-700'}`}
               >
-                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${promo!.active ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
+                <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${active ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
               </button>
             </div>
           )}
