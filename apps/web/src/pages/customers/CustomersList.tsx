@@ -1520,7 +1520,7 @@ function CreateCampaignForm({
             <div>
               <label className={LABEL + (!firstInSlot ? ' opacity-40' : '')}>
                 First-in-slot rule
-                <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day. Once daily + shared: one opening per day guaranteed; when multiple campaigns compete for the first slot, they share it across days." />
+                <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day." />
               </label>
               <select
                 {...register('first_in_slot_mode', { setValueAs: v => v === '' ? null : v })}
@@ -1529,7 +1529,6 @@ function CreateCampaignForm({
               >
                 <option value="always">Every play</option>
                 <option value="at_least_one">At least once daily</option>
-                <option value="at_least_one_shared">Once daily + shared</option>
               </select>
             </div>
           </div>
@@ -2571,7 +2570,7 @@ function CampaignEditForm({
           <div>
             <label className={LABEL + (!firstInSlot ? ' opacity-40' : '')}>
               First-in-slot rule
-              <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day. Once daily + shared: one opening per day guaranteed; when multiple campaigns compete for the first slot, they share it across days." />
+              <HelpTooltip text="Every play: all airings open the break. At least once daily: the scheduler guarantees at least one opening position per day." />
             </label>
             <select
               {...register('first_in_slot_mode', { setValueAs: v => v === '' ? null : v })}
@@ -2580,7 +2579,6 @@ function CampaignEditForm({
             >
               <option value="always">Every play</option>
               <option value="at_least_one">At least once daily</option>
-              <option value="at_least_one_shared">Once daily + shared</option>
             </select>
           </div>
         </div>
