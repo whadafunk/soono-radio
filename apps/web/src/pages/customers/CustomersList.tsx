@@ -1438,8 +1438,8 @@ function CreateCampaignForm({
             </div>
             <div>
               <label className={LABEL + (!selectedIntervalId ? ' opacity-40' : '')}>
-                Plays / Week (interval)
-                <HelpTooltip text="How many times this campaign must air within the selected interval per week." />
+                Plays / Day (interval)
+                <HelpTooltip text="How many times this campaign must air within the selected interval per day." />
               </label>
               <input
                 type="number"
@@ -2489,8 +2489,8 @@ function CampaignEditForm({
           </div>
           <div>
             <label className={LABEL + (!selectedIntervalId ? ' opacity-40' : '')}>
-              Plays / Week (interval)
-              <HelpTooltip text="How many times this campaign must air within the selected interval per week." />
+              Plays / Day (interval)
+              <HelpTooltip text="How many times this campaign must air within the selected interval per day." />
             </label>
             <input
               type="number"
