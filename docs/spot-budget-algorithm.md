@@ -4,10 +4,24 @@ Calculates how much ad/promo time is available in the schedule. Used by the oper
 
 ---
 
+## Two Modes
+
+The service operates in two modes. The formulas are the same; the inputs differ.
+
+| | Projection | Live Remaining |
+|---|---|---|
+| **L1 input** | all stop-sets in the full period | future stop-sets only (now → end of period) |
+| **L2 input** | planned plays per campaign | remaining plays per campaign (planned − aired so far) |
+| **Used by** | UI (planning, campaign creation) | UI (live dashboard) + Supervisor (scheduling decisions) |
+
+Past breaks have already happened — their capacity is gone. Past plays have already aired — their demand is satisfied. Live mode strips both out so L3 reflects genuine remaining room.
+
+---
+
 ## Three Layers
 
 ```
-L1  raw inventory (clock/calendar, no campaigns)
+L1  inventory (clock/calendar projection for the relevant window)
   × (1 − promo_margin)
   = effective inventory
 
@@ -30,10 +44,13 @@ L3
 
 Derived from the clock/calendar configuration. No campaigns or promos involved.
 
+**Projection mode**: enumerate all stop-sets across the full period.  
+**Live mode**: enumerate only future stop-sets (from now to end of period). Past breaks are excluded.
+
 ### Two dimensions
 
-- **Minutes** — sum of all stop-set segment durations in the period
-- **Breaks** — count of all stop-set segments in the period
+- **Minutes** — sum of all stop-set segment durations in the window
+- **Breaks** — count of all stop-set segments in the window
 
 Every break has exactly one first position. The first-slot capacity equals the break count — no separate sub-budget needed at this layer.
 
@@ -68,6 +85,9 @@ Typical margin: 10–15%. Everything downstream uses effective numbers.
 
 How much each campaign draws from the inventory. L2 is the sum across all campaigns — not yet viewed from any specific campaign's perspective.
 
+**Projection mode**: P = total planned plays for the period.  
+**Live mode**: P = remaining plays = planned_plays − actual_plays_to_date. D = remaining campaign days = total_days − elapsed_days.
+
 ### Campaigns — demand per campaign
 
 | First-in-slot mode | Minutes drawn | First-slot breaks drawn |
@@ -76,8 +96,8 @@ How much each campaign draws from the inventory. L2 is the sum across all campai
 | Every play | P × duration | P |
 | Once per day | P × duration | D |
 
-- **P** = number of plays in the period
-- **D** = number of campaign days in the period
+- **P** = plays in the relevant window (planned or remaining, per mode)
+- **D** = campaign days in the relevant window (total or remaining, per mode)
 - **duration** = spot duration
 
 **Minutes are always P × duration regardless of first-in-slot mode.**
@@ -88,7 +108,8 @@ For once-per-day campaigns the minutes decompose as D × duration (first-slot ai
 
 Promos have no first-in-slot condition, no non-compete, and no break-level constraint. Their demand is purely:
 
-- **Minutes drawn** = plays_per_day × duration × days_in_interval
+- **Projection**: plays_per_day × duration × days_in_interval
+- **Live**: plays_per_day × duration × remaining_days_in_interval
 
 No break dimension. Promos are not counted against the break budget.
 
@@ -101,6 +122,8 @@ Each campaign is scoped to exactly one of: **global**, **interval**, or **show**
 ## Layer 3 — Available Budget
 
 L3 = L1 − L2. One global remaining budget. What varies is which slice each campaign checks against.
+
+In live mode, L3 answers: "how much room is physically left in the schedule for what hasn't aired yet?"
 
 ### Simple campaign (no constraints)
 
@@ -128,6 +151,8 @@ Both dimensions are reduced by the footprint of the non-compete partner(s). Comp
 - Available minutes for A = L3 minutes − sum(partner plays × partner duration)
 
 Non-compete is symmetric: if A excludes B, B's breaks are off-limits to A even if B did not declare it.
+
+In live mode, partner play counts and durations use remaining plays, not planned plays.
 
 ### Combined constraints (first-in-slot + non-compete)
 
@@ -165,7 +190,7 @@ For a coarser approximation, `B.play_count × B.spot_duration` (the partner's di
 
 ## Pacing (Per Campaign)
 
-Whether a campaign is on pace to meet its play target by end of period.
+Pacing uses live mode inputs. It answers whether a campaign is on track to complete its plays by end of period.
 
 ```
 expected_plays_to_date = total_plays × (elapsed_days / total_days)
@@ -173,3 +198,5 @@ pacing_delta           = actual_plays_to_date − expected_plays_to_date
 ```
 
 Positive = ahead of pace. Negative = behind.
+
+The supervisor uses pacing delta alongside live L3 to decide whether to schedule a play: the campaign must be within budget (live L3) AND on pace or behind (pacing_delta ≤ 0 or within tolerance).
