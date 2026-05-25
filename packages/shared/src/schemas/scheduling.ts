@@ -842,3 +842,76 @@ export const UserPatchSchema = z.object({
   title: z.string().nullable().optional(),
 });
 export type UserPatch = z.infer<typeof UserPatchSchema>;
+
+// ============ SPOT BUDGET ============
+
+export const BudgetModeSchema = z.enum(['projection', 'live']);
+export type BudgetMode = z.infer<typeof BudgetModeSchema>;
+
+export const BudgetSchema = z.object({
+  minutes: z.number(),
+  breaks: z.number(),
+});
+export type Budget = z.infer<typeof BudgetSchema>;
+
+export const BudgetCutsSchema = z.object({
+  global: BudgetSchema,
+  byInterval: z.record(z.string(), BudgetSchema),
+  byShow: z.record(z.string(), BudgetSchema),
+});
+export type BudgetCuts = z.infer<typeof BudgetCutsSchema>;
+
+export const SpotBudgetInventorySchema = z.object({
+  raw: BudgetCutsSchema,
+  effective: BudgetCutsSchema,
+  promoMargin: z.number(),
+});
+export type SpotBudgetInventory = z.infer<typeof SpotBudgetInventorySchema>;
+
+export const CampaignDemandEntrySchema = z.object({
+  campaignId: z.string(),
+  minutes: z.number(),
+  firstSlotBreaks: z.number(),
+  scope: z.union([
+    z.literal('global'),
+    z.object({ intervalId: z.string() }),
+    z.object({ showId: z.string() }),
+  ]),
+});
+export type CampaignDemandEntry = z.infer<typeof CampaignDemandEntrySchema>;
+
+export const SpotBudgetDemandSchema = z.object({
+  totals: BudgetCutsSchema,
+  byCampaign: z.array(CampaignDemandEntrySchema),
+});
+export type SpotBudgetDemand = z.infer<typeof SpotBudgetDemandSchema>;
+
+export const SpotBudgetOverviewSchema = z.object({
+  inventory: SpotBudgetInventorySchema,
+  demand: SpotBudgetDemandSchema,
+  available: BudgetCutsSchema,
+});
+export type SpotBudgetOverview = z.infer<typeof SpotBudgetOverviewSchema>;
+
+export const CampaignAvailableSchema = z.object({
+  available: BudgetSchema,
+  firstSlotAvailable: z.number().optional(),
+  nonCompeteReduction: BudgetSchema.optional(),
+  pacing: z.object({
+    expectedToDate: z.number(),
+    actualToDate: z.number(),
+    delta: z.number(),
+    totalPlanned: z.number(),
+    remaining: z.number(),
+  }),
+});
+export type CampaignAvailable = z.infer<typeof CampaignAvailableSchema>;
+
+export const CampaignPacingDetailSchema = z.object({
+  expectedToDate: z.number(),
+  actualToDate: z.number(),
+  delta: z.number(),
+  totalPlanned: z.number(),
+  remaining: z.number(),
+});
+export type CampaignPacingDetail = z.infer<typeof CampaignPacingDetailSchema>;

@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@radio/shared';
 import { db } from '../db/index.js';
 import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows, playHistory } from '../db/schema.js';
+import { invalidateInventory } from '../services/spotBudget.js';
 
 // slot_count = all template weekly entries + per-hour grid slots + individual calendar overrides
 const usedExpr = sql<number>`(
@@ -88,6 +89,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
       jingle_playlist_id: parsed.data.jingle_playlist_id ?? null,
       ...(parsed.data.join_policy && { join_policy: parsed.data.join_policy }),
     }).returning();
+    invalidateInventory();
     return reply.status(201).send(clock);
   });
 
@@ -142,6 +144,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .where(eq(clocks.id, id))
       .returning();
     if (!updated) return reply.status(404).send({ error: 'Clock not found' });
+    invalidateInventory();
     return reply.send(updated);
   });
 
@@ -171,6 +174,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
     }
     await db.delete(clockSegments).where(eq(clockSegments.clock_id, id));
     await db.delete(clocks).where(eq(clocks.id, id));
+    invalidateInventory();
     return reply.status(204).send();
   });
 
@@ -281,6 +285,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
     const rows = await db.select().from(clockSegments)
       .where(eq(clockSegments.clock_id, id))
       .orderBy(asc(clockSegments.sort_order));
+    invalidateInventory();
     return reply.send(rows);
   });
 }

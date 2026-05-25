@@ -10,6 +10,7 @@ import {
 } from '@radio/shared';
 import { db } from '../db/index.js';
 import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments, clocks } from '../db/schema.js';
+import { invalidateInventory } from '../services/spotBudget.js';
 
 // ─── Clock scheduling validation ──────────────────────────────────────────────
 
@@ -203,6 +204,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       clock_id: parsed.data.clock_id ?? null,
       is_override: parsed.data.is_override ?? false,
     }).returning();
+    invalidateInventory();
     return reply.status(201).send(entry);
   });
 
@@ -286,6 +288,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       return entry;
     });
 
+    invalidateInventory();
     return reply.send(updated);
   });
 
@@ -320,6 +323,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       }
       await tx.delete(calendarEntries).where(eq(calendarEntries.id, id));
     });
+    invalidateInventory();
     return reply.status(204).send();
   });
 
@@ -330,6 +334,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       await tx.delete(rundownShowContent);
       await tx.delete(calendarEntries);
     });
+    invalidateInventory();
     return reply.status(204).send();
   });
 
