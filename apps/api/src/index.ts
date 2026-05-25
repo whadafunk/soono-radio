@@ -63,7 +63,7 @@ fastify.register(intervalRoutes);
 fastify.register(promoRoutes);
 fastify.register(musicCampaignRoutes);
 fastify.register(rundownRoutes);
-fastify.register(spotBudgetRoutes, { prefix: '/api' });
+fastify.register(spotBudgetRoutes);
 fastify.register(stationSettingsRoutes);
 
 fastify.get('/', async () => {

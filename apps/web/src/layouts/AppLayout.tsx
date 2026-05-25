@@ -16,7 +16,7 @@ const navItems = [
   { label: 'Library',      path: '/library',      icon: Music2          },
   { label: 'Playlists',    path: '/playlists',    icon: ListMusic       },
   { label: 'Rotations',    path: '/rotations',    icon: Repeat          },
-  { label: 'Customers',    path: '/customers',    icon: Users           },
+  { label: 'Advertising',  path: '/customers',    icon: Users           },
   { label: 'Promos',       path: '/promo',        icon: Megaphone       },
   { label: 'Settings',     path: '/settings',     icon: Settings        },
   { label: 'Users',        path: '/users',        icon: UserCog         },

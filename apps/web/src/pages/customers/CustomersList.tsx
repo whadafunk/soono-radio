@@ -176,7 +176,7 @@ function SpotPacingCell({ campaignId }: { campaignId: number }) {
   if (!data) return null;
 
   const { delta } = data;
-  const abs = Math.abs(delta);
+  const abs = Math.round(Math.abs(delta) * 10) / 10;
 
   if (delta >= 0) {
     return (
@@ -1893,7 +1893,12 @@ function CampaignTableRow({
         {campaign.starts_on} → {campaign.ends_on}
       </td>
       <td className="px-6 py-3 border-r border-zinc-800/60">
-        {campaign.active && <SpotPacingCell campaignId={campaign.id} />}
+        {campaign.active && (() => {
+          const today = new Date().toISOString().slice(0, 10);
+          if (campaign.starts_on > today) return null;
+          if (campaign.starts_on === today) return <span className="text-xs text-zinc-600">Not enough data</span>;
+          return <SpotPacingCell campaignId={campaign.id} />;
+        })()}
       </td>
       <td className="px-6 py-3" onClick={(e) => e.stopPropagation()}>
         <input

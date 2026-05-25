@@ -548,7 +548,7 @@ export function RotationsPage() {
                     <label className="block text-xs font-semibold text-zinc-400 uppercase tracking-wider">
                       Heavy rotation
                     </label>
-                    <HelpTooltip text="When enabled, this rotation prioritizes tracks from active music campaigns (managed under Customers → Music Campaigns) by per-day pacing before drawing from its normal pool. Contracted songs that are behind their daily target play first." />
+                    <HelpTooltip text="When enabled, this rotation prioritizes tracks from active music campaigns (managed under Advertising → Music Campaigns) by per-day pacing before drawing from its normal pool. Contracted songs that are behind their daily target play first." />
                   </div>
                   <label className="flex items-center gap-2 text-sm text-zinc-200 cursor-pointer">
                     <input
