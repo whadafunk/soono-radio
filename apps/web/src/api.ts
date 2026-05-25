@@ -1290,3 +1290,34 @@ export function updateStationSettings(data: Partial<StationSettings>): Promise<S
   return patch('/settings/station', data);
 }
 
+// ─── Spot Budget ──────────────────────────────────────────────────────────────
+
+import type {
+  SpotBudgetOverview,
+  CampaignAvailable,
+  CampaignPacingDetail,
+} from '@radio/shared';
+
+export function fetchSpotBudget(
+  start: string,
+  end: string,
+  mode: 'projection' | 'live' = 'projection',
+): Promise<SpotBudgetOverview> {
+  const qs = new URLSearchParams({ mode, start, end });
+  return apiFetch(`/spot-budget?${qs}`);
+}
+
+export function fetchCampaignBudget(
+  campaignId: number,
+  start: string,
+  end: string,
+  mode: 'projection' | 'live' = 'projection',
+): Promise<CampaignAvailable> {
+  const qs = new URLSearchParams({ mode, start, end });
+  return apiFetch(`/spot-budget/campaign/${campaignId}?${qs}`);
+}
+
+export function fetchSpotBudgetPacing(campaignId: number): Promise<CampaignPacingDetail> {
+  return apiFetch(`/spot-budget/campaign/${campaignId}/pacing`);
+}
+

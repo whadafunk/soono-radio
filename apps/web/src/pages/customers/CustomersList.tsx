@@ -11,6 +11,9 @@ import {
   Pencil,
   X,
   UserPlus,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from 'lucide-react';
 import {
   Customer,
@@ -67,7 +70,197 @@ import {
   fetchUsers,
   fetchShows,
   fetchIntervals,
+  fetchSpotBudget,
+  fetchSpotBudgetPacing,
+  fetchCampaignBudget,
 } from '../../api';
+
+// ─── Spot budget helpers ──────────────────────────────────────────────────────
+
+function isoToday(): string {
+  return new Date().toISOString().slice(0, 10);
+}
+
+function isoOffsetDays(base: string, days: number): string {
+  const d = new Date(base);
+  d.setDate(d.getDate() + days);
+  return d.toISOString().slice(0, 10);
+}
+
+function fmtMinutes(mins: number): string {
+  return mins.toFixed(1);
+}
+
+// ─── Global Budget Panel ──────────────────────────────────────────────────────
+
+function GlobalBudgetPanel() {
+  const today = isoToday();
+  const end30 = isoOffsetDays(today, 30);
+
+  const { data, isLoading, isError } = useQuery({
+    queryKey: ['spot-budget', today, end30],
+    queryFn: () => fetchSpotBudget(today, end30, 'projection'),
+    staleTime: 5 * 60 * 1000,
+  });
+
+  if (isLoading) {
+    return (
+      <div className="px-4 py-3 bg-zinc-900/60 border border-zinc-800 rounded-lg flex items-center gap-2 text-zinc-400 text-xs">
+        <Loader className="w-3.5 h-3.5 animate-spin" />
+        Loading spot budget…
+      </div>
+    );
+  }
+
+  if (isError || !data) {
+    return (
+      <div className="px-4 py-3 bg-zinc-900/60 border border-zinc-800 rounded-lg text-xs text-zinc-500">
+        Spot budget unavailable
+      </div>
+    );
+  }
+
+  const available = data.available.global.minutes;
+  const used = data.demand.totals.global.minutes;
+  const total = data.inventory.effective.global.minutes;
+  const breaksAvailable = data.available.global.breaks;
+  const breaksUsed = data.demand.totals.global.breaks;
+  const breaksTotal = data.inventory.effective.global.breaks;
+
+  const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  const barColor = pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-indigo-500';
+
+  return (
+    <div className="px-4 py-3 bg-zinc-900/60 border border-zinc-800 rounded-lg space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+          30-Day Spot Budget
+        </span>
+        <span className="text-xs text-zinc-400">
+          {fmtMinutes(used)} / {fmtMinutes(total)} min used ({pct}%)
+        </span>
+      </div>
+      <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
+        <div
+          className={`h-full rounded-full transition-all ${barColor}`}
+          style={{ width: `${pct}%` }}
+        />
+      </div>
+      <div className="flex items-center gap-6 text-xs">
+        <span>
+          <span className="text-zinc-400">Available: </span>
+          <span className="text-zinc-300 font-medium">{fmtMinutes(available)} min</span>
+        </span>
+        <span>
+          <span className="text-zinc-400">First-slot breaks: </span>
+          <span className="text-zinc-300 font-medium">{breaksAvailable} of {breaksTotal} free</span>
+          {breaksUsed > 0 && (
+            <span className="text-zinc-500 ml-1">({breaksUsed} used)</span>
+          )}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// ─── Per-campaign pacing cell ─────────────────────────────────────────────────
+
+function SpotPacingCell({ campaignId }: { campaignId: number }) {
+  const { data, isLoading } = useQuery({
+    queryKey: ['spot-budget-pacing', campaignId],
+    queryFn: () => fetchSpotBudgetPacing(campaignId),
+    staleTime: 2 * 60 * 1000,
+  });
+
+  if (isLoading) return <span className="text-zinc-600 text-xs">…</span>;
+  if (!data) return null;
+
+  const { delta } = data;
+  const abs = Math.abs(delta);
+
+  if (delta >= 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-green-400">
+        <TrendingUp className="w-3 h-3" />
+        {delta === 0 ? 'On pace' : `Ahead +${abs}`}
+      </span>
+    );
+  }
+  if (abs <= 3) {
+    return (
+      <span className="inline-flex items-center gap-1 text-xs text-amber-400">
+        <Minus className="w-3 h-3" />
+        {`Behind −${abs}`}
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 text-xs text-red-400">
+      <TrendingDown className="w-3 h-3" />
+      {`Behind −${abs}`}
+    </span>
+  );
+}
+
+// ─── Budget impact summary (used in create/edit forms) ────────────────────────
+
+function BudgetImpactRow({
+  startsOn,
+  endsOn,
+  playsPerMonth,
+  firstInSlot,
+  campaignId,
+}: {
+  startsOn: string;
+  endsOn: string;
+  playsPerMonth: number;
+  firstInSlot: boolean;
+  campaignId?: number;
+}) {
+  const isValid = startsOn.length === 10 && endsOn.length === 10 && playsPerMonth > 0;
+
+  const { data, isLoading } = useQuery({
+    queryKey: ['spot-budget', startsOn, endsOn, campaignId],
+    queryFn: () => fetchSpotBudget(startsOn, endsOn, 'projection'),
+    enabled: isValid,
+    staleTime: 30 * 1000,
+  });
+
+  if (!isValid) return null;
+
+  // Rough estimate: assume 30-second average spot
+  const estimatedMinutes = (playsPerMonth * 30) / 60;
+
+  const remaining = data ? data.available.global.minutes : null;
+  const afterThis = remaining !== null ? remaining - estimatedMinutes : null;
+
+  return (
+    <div className="rounded-lg bg-zinc-800/40 border border-zinc-700/50 px-3 py-2 space-y-1">
+      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Budget Impact</p>
+      <div className="flex flex-wrap gap-x-6 gap-y-0.5 text-xs">
+        <span>
+          <span className="text-zinc-400">Est. draw: </span>
+          <span className="text-zinc-300">{fmtMinutes(estimatedMinutes)} min/mo</span>
+          {firstInSlot && (
+            <span className="text-zinc-500 ml-1">(+1 first-slot break/day target)</span>
+          )}
+        </span>
+        {isLoading && <span className="text-zinc-500">Checking availability…</span>}
+        {afterThis !== null && !isLoading && (
+          <span>
+            <span className="text-zinc-400">Remaining after: </span>
+            <span className={afterThis < 0 ? 'text-red-400' : 'text-zinc-300'}>
+              {fmtMinutes(afterThis)} min
+            </span>
+            {afterThis < 0 && (
+              <span className="text-red-400 ml-1">(over budget)</span>
+            )}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
 
 type SortConfig = { column: string; direction: 'asc' | 'desc' } | null;
 
@@ -593,6 +786,9 @@ export function CustomersList() {
           </div>
         </div>
       )}
+
+      {/* Global Spot Budget Panel */}
+      <GlobalBudgetPanel />
 
       {/* TOP: Customers Table */}
       <div className="flex-1 min-h-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
@@ -1317,6 +1513,9 @@ function CreateCampaignForm({
   const firstInSlot    = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId = useWatch({ control, name: 'show_id' });
   const selectedIntervalId = useWatch({ control, name: 'interval_id' });
+  const watchedStartsOn = useWatch({ control, name: 'starts_on' }) ?? '';
+  const watchedEndsOn   = useWatch({ control, name: 'ends_on' }) ?? '';
+  const watchedPlays    = useWatch({ control, name: 'plays_per_month' }) ?? 0;
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
@@ -1552,6 +1751,13 @@ function CreateCampaignForm({
           <label className={LABEL}>Notes</label>
           <textarea {...register('notes')} disabled={isLoading} rows={2} className={INPUT} />
         </div>
+
+        <BudgetImpactRow
+          startsOn={watchedStartsOn}
+          endsOn={watchedEndsOn}
+          playsPerMonth={watchedPlays}
+          firstInSlot={firstInSlot}
+        />
       </div>
       <div className="px-6 py-4 border-t border-zinc-700 flex justify-end gap-2 bg-zinc-800/50 rounded-b-xl">
         <button type="button" onClick={onCancel} disabled={isLoading} className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
@@ -1659,11 +1865,6 @@ function CampaignTableRow({
   onEdit: () => void;
   onToggleActive: (active: boolean) => void;
 }) {
-  const { data: pacing } = useQuery({
-    queryKey: ['campaign-pacing', campaign.id],
-    queryFn: () => fetchCampaignPacing(campaign.id),
-  });
-
   return (
     <tr
       onClick={onRowClick}
@@ -1692,14 +1893,7 @@ function CampaignTableRow({
         {campaign.starts_on} → {campaign.ends_on}
       </td>
       <td className="px-6 py-3 border-r border-zinc-800/60">
-        {pacing && (
-          <div className="flex items-center gap-2">
-            <div className="text-xs font-medium text-white">{pacing.pct}%</div>
-            <span className={`text-xs ${pacing.on_track ? 'text-green-400' : 'text-amber-400'}`}>
-              {pacing.on_track ? '✓' : '⚠'}
-            </span>
-          </div>
-        )}
+        {campaign.active && <SpotPacingCell campaignId={campaign.id} />}
       </td>
       <td className="px-6 py-3" onClick={(e) => e.stopPropagation()}>
         <input
@@ -2317,6 +2511,9 @@ function CampaignEditForm({
   const firstInSlot        = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId     = useWatch({ control, name: 'show_id' });
   const selectedIntervalId = useWatch({ control, name: 'interval_id' });
+  const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? campaign.starts_on;
+  const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? campaign.ends_on;
+  const watchedPlays       = useWatch({ control, name: 'plays_per_month' }) ?? campaign.plays_per_month;
   const [mediaError, setMediaError] = useState<string | null>(null);
 
   // Clear media error whenever clips change (user added/removed a clip)
@@ -2610,6 +2807,14 @@ function CampaignEditForm({
         <SectionDivider label="Billing" />
         <PlaceholderSection label="Campaign Total" description="Price calculation based on spots × rate card. Coming soon." />
       </div>
+
+      <BudgetImpactRow
+        startsOn={watchedStartsOn}
+        endsOn={watchedEndsOn}
+        playsPerMonth={watchedPlays}
+        firstInSlot={firstInSlot ?? false}
+        campaignId={campaign.id}
+      />
 
       <div>
         <label className={LABEL}>Notes</label>
