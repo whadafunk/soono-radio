@@ -15,11 +15,11 @@ async function ensureRow() {
 }
 
 export async function stationSettingsRoutes(fastify: FastifyInstance) {
-  fastify.get('/api/settings/station', async () => {
+  fastify.get('/settings/station', async () => {
     return ensureRow();
   });
 
-  fastify.patch('/api/settings/station', async (request, reply) => {
+  fastify.patch('/settings/station', async (request, reply) => {
     const parsed = StationSettingsSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ error: parsed.error.flatten() });
 
