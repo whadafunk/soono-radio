@@ -23,6 +23,7 @@ import {
   playHistory as playHistoryTable,
   templateEntries as templateEntriesTable,
   templateClockEntries as templateClockEntriesTable,
+  stationSettings as stationSettingsTable,
 } from '../db/schema.js';
 import type {
   Budget,
@@ -36,9 +37,12 @@ import type {
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
-// Fraction of inventory reserved for promos (operator-set station constant).
-// No DB config yet — use 0 until a settings table is added.
-const PROMO_MARGIN = 0.0;
+async function getPromoMargin(): Promise<number> {
+  const [row] = await db.select({ promo_margin: stationSettingsTable.promo_margin })
+    .from(stationSettingsTable)
+    .where(eq(stationSettingsTable.id, 1));
+  return row?.promo_margin ?? 0.10;
+}
 
 // ─── Internal types ──────────────────────────────────────────────────────────
 
@@ -290,7 +294,7 @@ async function computeInventory(
   // Also accumulate global separately for show-scoped items (shows are subsets
   // of global, not separate — already handled by addToCuts which always adds to global).
 
-  const margin = PROMO_MARGIN;
+  const margin = await getPromoMargin();
   const effective = applyMarginToCuts(raw, margin);
 
   const inventory: SpotBudgetInventory = {

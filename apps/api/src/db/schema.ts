@@ -1060,4 +1060,13 @@ export const rundownPlaybackCursors = sqliteTable(
 );
 
 export type RundownPlaybackCursor = typeof rundownPlaybackCursors.$inferSelect;
+
+// ─── Station Settings ─────────────────────────────────────────────────────────
+
+export const stationSettings = sqliteTable('station_settings', {
+  id:           integer('id').primaryKey().default(1),
+  promo_margin: real('promo_margin').notNull().default(0.10),
+});
+
+export type StationSettings = typeof stationSettings.$inferSelect;
 export type RundownPlaybackCursorInsert = typeof rundownPlaybackCursors.$inferInsert;

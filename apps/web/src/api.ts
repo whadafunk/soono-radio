@@ -32,6 +32,7 @@ import {
   PromoCreate,
   PromoPatch,
   PromoMediaWithMedia,
+  StationSettings,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -1277,5 +1278,15 @@ export function applyTemplate(data: {
   mode: 'fill' | 'override';
 }): Promise<{ created: number; skipped: number; deleted: number }> {
   return post('/apply-template', data);
+}
+
+// ─── Station Settings ─────────────────────────────────────────────────────────
+
+export function fetchStationSettings(): Promise<StationSettings> {
+  return apiFetch('/settings/station');
+}
+
+export function updateStationSettings(data: Partial<StationSettings>): Promise<StationSettings> {
+  return patch('/settings/station', data);
 }
 

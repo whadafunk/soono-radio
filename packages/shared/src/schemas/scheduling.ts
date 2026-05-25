@@ -915,3 +915,10 @@ export const CampaignPacingDetailSchema = z.object({
   remaining: z.number(),
 });
 export type CampaignPacingDetail = z.infer<typeof CampaignPacingDetailSchema>;
+
+// ─── Station Settings ─────────────────────────────────────────────────────────
+
+export const StationSettingsSchema = z.object({
+  promo_margin: z.number().min(0).max(0.5),
+});
+export type StationSettings = z.infer<typeof StationSettingsSchema>;
