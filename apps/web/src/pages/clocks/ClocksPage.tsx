@@ -2082,9 +2082,9 @@ function StopSetSlot({
           onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
           className="px-2 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500 w-36"
         >
-          <option value="" className="bg-zinc-900">Default</option>
-          <option value="round_robin" className="bg-zinc-900">Round robin</option>
-          <option value="random" className="bg-zinc-900">Random</option>
+          <option value="">Default</option>
+          <option value="round_robin">Round robin</option>
+          <option value="random">Random</option>
         </select>
       </div>
     </div>
