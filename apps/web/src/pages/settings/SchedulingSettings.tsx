@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, AlertCircle, Loader } from 'lucide-react';
 import { fetchStationSettings, updateStationSettings } from '../../api';
@@ -7,11 +7,16 @@ import { HelpTooltip } from '../../components/HelpTooltip';
 export function SchedulingSettings() {
   const queryClient = useQueryClient();
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [localPct, setLocalPct] = useState(10);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['station-settings'],
     queryFn: fetchStationSettings,
   });
+
+  useEffect(() => {
+    if (data) setLocalPct(Math.round(data.promo_margin * 100));
+  }, [data]);
 
   const mutation = useMutation({
     mutationFn: updateStationSettings,
@@ -41,8 +46,6 @@ export function SchedulingSettings() {
       </div>
     );
   }
-
-  const [localPct, setLocalPct] = useState(Math.round(data.promo_margin * 100));
 
   return (
     <div className="space-y-6 max-w-3xl">
