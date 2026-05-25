@@ -2043,12 +2043,10 @@ function StopSetSourcesEditor({
 }) {
   const state = classifyStopSetSources(sources);
 
-  const buildSources = (next: typeof state): SegmentSourceEntry[] => {
-    const out: SegmentSourceEntry[] = [];
-    if (next.campaignsEnabled) out.push({ type: 'campaigns', rotation: next.campaignsRotation });
-    if (next.promosEnabled)    out.push({ type: 'promos', weight: 1, rotation: next.promosRotation });
-    return out;
-  };
+  const buildSources = (next: typeof state): SegmentSourceEntry[] => [
+    { type: 'campaigns', rotation: next.campaignsRotation },
+    { type: 'promos', weight: 1, rotation: next.promosRotation },
+  ];
 
   const updateState = (patch: Partial<typeof state>) => onChange(buildSources({ ...state, ...patch }));
 
@@ -2056,16 +2054,12 @@ function StopSetSourcesEditor({
     <div className="space-y-3">
       <StopSetSlot
         title="Campaigns"
-        enabled={state.campaignsEnabled}
         rotation={state.campaignsRotation}
-        onToggle={(v) => updateState({ campaignsEnabled: v })}
         onRotationChange={(r) => updateState({ campaignsRotation: r })}
       />
       <StopSetSlot
         title="Promos"
-        enabled={state.promosEnabled}
         rotation={state.promosRotation}
-        onToggle={(v) => updateState({ promosEnabled: v })}
         onRotationChange={(r) => updateState({ promosRotation: r })}
       />
     </div>
@@ -2073,41 +2067,28 @@ function StopSetSourcesEditor({
 }
 
 function StopSetSlot({
-  title, enabled, rotation,
-  onToggle, onRotationChange,
+  title, rotation, onRotationChange,
 }: {
   title: string;
-  enabled: boolean;
   rotation: SimpleRotationType | undefined;
-  onToggle: (v: boolean) => void;
   onRotationChange: (r: SimpleRotationType | undefined) => void;
 }) {
   return (
     <div className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
       <div className="flex items-center gap-2 px-3 py-2">
-        <label className="flex items-center gap-2 cursor-pointer select-none flex-1">
-          <input
-            type="checkbox"
-            checked={enabled}
-            onChange={(e) => onToggle(e.target.checked)}
-            className="w-3.5 h-3.5 rounded accent-indigo-500 cursor-pointer"
-          />
-          <span className="text-xs font-medium text-zinc-300">{title}</span>
-        </label>
-        {enabled && (
-          <div className="flex items-center gap-1.5">
-            <span className="text-xs text-zinc-500">Rotation</span>
-            <select
-              value={rotation ?? ''}
-              onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
-              className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-            >
-              <option value="" className="bg-zinc-900">Default</option>
-              <option value="round_robin" className="bg-zinc-900">Round robin</option>
-              <option value="random" className="bg-zinc-900">Random</option>
-            </select>
-          </div>
-        )}
+        <span className="text-xs font-medium text-zinc-300 flex-1">{title}</span>
+        <div className="flex items-center gap-1.5">
+          <span className="text-xs text-zinc-500">Rotation</span>
+          <select
+            value={rotation ?? ''}
+            onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
+            className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+          >
+            <option value="" className="bg-zinc-900">Default</option>
+            <option value="round_robin" className="bg-zinc-900">Round robin</option>
+            <option value="random" className="bg-zinc-900">Random</option>
+          </select>
+        </div>
       </div>
     </div>
   );
