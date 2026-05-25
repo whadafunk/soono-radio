@@ -2074,8 +2074,7 @@ function StopSetSlot({
   onRotationChange: (r: SimpleRotationType | undefined) => void;
 }) {
   return (
-    <div className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
-      <div className="flex items-center gap-3 px-3 py-2">
+    <div className="flex items-center gap-3 py-1">
         <span className="text-xs font-medium text-zinc-300 w-36 shrink-0">{title}</span>
         <select
           value={rotation ?? ''}
@@ -2086,7 +2085,6 @@ function StopSetSlot({
           <option value="round_robin">Round robin</option>
           <option value="random">Random</option>
         </select>
-      </div>
     </div>
   );
 }
