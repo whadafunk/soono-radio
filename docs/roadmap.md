@@ -75,6 +75,17 @@ This is the largest remaining piece. The schema is complete; the logic needs to 
 - [ ] Ingest: re-transcode on demand fully wired
 - [ ] Dashboard: LiquidSoap health card (currently just Icecast)
 
+### Distribution & Deployment
+- [ ] Automatic updates (self-update mechanism for deployed instances)
+- [ ] Packaging as a VM image (OVA/OVF for easy station deployment)
+- [ ] Packaging as a .deb package (native install on Ubuntu/Debian)
+
+### Operations
+- [ ] Remote assist console (web-based terminal or remote control for off-site support)
+
+### Mobile
+- [ ] Mobile app (operator controls: now playing, skip, alerts, dashboard stats)
+
 ---
 
 ## Design Intent & Priorities
