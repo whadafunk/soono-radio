@@ -2053,12 +2053,12 @@ function StopSetSourcesEditor({
   return (
     <div className="space-y-3">
       <StopSetSlot
-        title="Campaigns"
+        title="Campaigns rotation"
         rotation={state.campaignsRotation}
         onRotationChange={(r) => updateState({ campaignsRotation: r })}
       />
       <StopSetSlot
-        title="Promos"
+        title="Promos rotation"
         rotation={state.promosRotation}
         onRotationChange={(r) => updateState({ promosRotation: r })}
       />
@@ -2075,20 +2075,17 @@ function StopSetSlot({
 }) {
   return (
     <div className="bg-zinc-900 rounded border border-zinc-800 overflow-hidden">
-      <div className="flex items-center gap-2 px-3 py-2">
-        <span className="text-xs font-medium text-zinc-300 flex-1">{title}</span>
-        <div className="flex items-center gap-1.5">
-          <span className="text-xs text-zinc-500">Rotation</span>
-          <select
-            value={rotation ?? ''}
-            onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
-            className="px-1.5 py-0.5 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
-          >
-            <option value="" className="bg-zinc-900">Default</option>
-            <option value="round_robin" className="bg-zinc-900">Round robin</option>
-            <option value="random" className="bg-zinc-900">Random</option>
-          </select>
-        </div>
+      <div className="flex items-center gap-3 px-3 py-2">
+        <span className="text-xs font-medium text-zinc-300 w-36 shrink-0">{title}</span>
+        <select
+          value={rotation ?? ''}
+          onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
+          className="px-2 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500 w-36"
+        >
+          <option value="" className="bg-zinc-900">Default</option>
+          <option value="round_robin" className="bg-zinc-900">Round robin</option>
+          <option value="random" className="bg-zinc-900">Random</option>
+        </select>
       </div>
     </div>
   );
