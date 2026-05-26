@@ -124,12 +124,14 @@ function LibraryPickerModal({
   onRemove,
   onClose,
   isPending,
+  durationBracket,
 }: {
   clips: CampaignMediaWithMedia[];
   onAdd: (data: CampaignMediaAdd) => void;
   onRemove: (attachmentId: number) => void;
   onClose: () => void;
   isPending: boolean;
+  durationBracket: number | null | undefined;
 }) {
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
@@ -189,11 +191,12 @@ function LibraryPickerModal({
           {items.map((mediaItem) => {
             const attachmentId = attachedByMediaId.get(mediaItem.id);
             const isAttached = attachmentId !== undefined;
+            const tooLong = !isAttached && durationBracket != null && (mediaItem.duration_seconds ?? 0) > durationBracket;
             return (
               <button
                 key={mediaItem.id}
                 type="button"
-                disabled={isPending}
+                disabled={isPending || tooLong}
                 onClick={() => {
                   if (isAttached) {
                     onRemove(attachmentId);
@@ -212,6 +215,8 @@ function LibraryPickerModal({
                 className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors disabled:opacity-50 ${
                   isAttached
                     ? 'bg-indigo-600/10 hover:bg-indigo-600/20'
+                    : tooLong
+                    ? 'opacity-50 cursor-not-allowed'
                     : 'hover:bg-zinc-800/60'
                 }`}
               >
@@ -228,9 +233,11 @@ function LibraryPickerModal({
                 <span className="text-xs text-zinc-500 font-mono flex-shrink-0 w-10 text-right">
                   {formatDuration(mediaItem.duration_seconds)}
                 </span>
-                <span className={`flex items-center gap-1 text-xs flex-shrink-0 w-20 justify-end ${isAttached ? 'text-indigo-400' : 'text-zinc-600'}`}>
+                <span className={`flex items-center gap-1 text-xs flex-shrink-0 w-20 justify-end ${isAttached ? 'text-indigo-400' : tooLong ? 'text-amber-500' : 'text-zinc-600'}`}>
                   {isAttached ? (
                     <><Check className="w-3.5 h-3.5" /> Added</>
+                  ) : tooLong ? (
+                    <>Too long ({mediaItem.duration_seconds}s)</>
                   ) : (
                     <><Plus className="w-3.5 h-3.5" /> Add</>
                   )}
@@ -251,9 +258,11 @@ function LibraryPickerModal({
 export function CampaignMediaSection({
   campaignId,
   sweepsPerMonth,
+  durationBracket,
 }: {
   campaignId: number;
   sweepsPerMonth: number | null | undefined;
+  durationBracket: number | null | undefined;
 }) {
   const queryClient = useQueryClient();
   const [showPicker, setShowPicker] = useState(false);
@@ -343,6 +352,7 @@ export function CampaignMediaSection({
           onRemove={(id) => removeMutation.mutate(id)}
           onClose={() => setShowPicker(false)}
           isPending={isPending}
+          durationBracket={durationBracket}
         />
       )}
     </>

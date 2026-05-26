@@ -16,10 +16,8 @@ import { createHash } from 'node:crypto';
 import { db } from '../db/index.js';
 import {
   campaigns as campaignsTable,
-  campaignMedia as campaignMediaTable,
   calendarEntries as calendarEntriesTable,
   clockSegments as clockSegmentsTable,
-  media as mediaTable,
   playHistory as playHistoryTable,
   templateEntries as templateEntriesTable,
   templateClockEntries as templateClockEntriesTable,
@@ -433,36 +431,6 @@ async function computeDemand(
 
   const campaignIds = activeCampaigns.map((c) => c.id);
 
-  // ── Load average spot duration per campaign (from campaign_media) ─────────
-  const mediaRows = campaignIds.length > 0
-    ? await db
-        .select({
-          campaign_id: campaignMediaTable.campaign_id,
-          duration_seconds: mediaTable.duration_seconds,
-        })
-        .from(campaignMediaTable)
-        .innerJoin(mediaTable, eq(campaignMediaTable.media_id, mediaTable.id))
-        .where(
-          and(
-            eq(campaignMediaTable.play_as_spot, true),
-            inArray(campaignMediaTable.campaign_id, campaignIds),
-          ),
-        )
-    : [];
-
-  // Average duration per campaign (default 30s if no media attached)
-  const durationsByCampaign = new Map<number, number[]>();
-  for (const r of mediaRows) {
-    const list = durationsByCampaign.get(r.campaign_id) ?? [];
-    list.push(r.duration_seconds);
-    durationsByCampaign.set(r.campaign_id, list);
-  }
-  const avgDuration = (campaignId: number): number => {
-    const durs = durationsByCampaign.get(campaignId);
-    if (!durs || durs.length === 0) return 30;
-    return durs.reduce((a, b) => a + b, 0) / durs.length;
-  };
-
   // ── Actual plays to date per campaign (live mode only) ───────────────────
   const actualPlaysByCampaign = new Map<number, number>();
   if (mode === 'remaining') {
@@ -533,7 +501,7 @@ async function computeDemand(
       D = daysInPeriod;
     }
 
-    const duration = avgDuration(c.id) / 60; // in minutes
+    const duration = c.duration_bracket / 60; // in minutes
 
     // First-in-slot breaks demand.
     let firstSlotBreaks = 0;
@@ -716,30 +684,6 @@ export async function getCampaignAvailable(
         ),
       );
 
-    // Load average durations for partners.
-    const partnerMediaRows = partnerIds.length > 0
-      ? await db
-          .select({
-            campaign_id: campaignMediaTable.campaign_id,
-            duration_seconds: mediaTable.duration_seconds,
-          })
-          .from(campaignMediaTable)
-          .innerJoin(mediaTable, eq(campaignMediaTable.media_id, mediaTable.id))
-          .where(
-            and(
-              eq(campaignMediaTable.play_as_spot, true),
-              inArray(campaignMediaTable.campaign_id, partnerIds),
-            ),
-          )
-      : [];
-
-    const partnerDursByid = new Map<number, number[]>();
-    for (const r of partnerMediaRows) {
-      const list = partnerDursByid.get(r.campaign_id) ?? [];
-      list.push(r.duration_seconds);
-      partnerDursByid.set(r.campaign_id, list);
-    }
-
     // Actual plays to date for partners (live mode).
     const partnerActuals = new Map<number, number>();
     if (mode === 'remaining') {
@@ -766,11 +710,6 @@ export async function getCampaignAvailable(
     for (const partner of partnerCampaigns) {
       if (partner.ends_on < periodStartStr || partner.starts_on > periodEndStr) continue;
 
-      const partnerDurs = partnerDursByid.get(partner.id);
-      const avgDurSec = partnerDurs && partnerDurs.length > 0
-        ? partnerDurs.reduce((a, b) => a + b, 0) / partnerDurs.length
-        : 30;
-
       let partnerP: number;
       if (mode === 'remaining') {
         const actual = partnerActuals.get(partner.id) ?? 0;
@@ -785,7 +724,7 @@ export async function getCampaignAvailable(
       }
 
       totalPartnerBreaks += partnerP;
-      totalPartnerMinutes += (partnerP * avgDurSec) / 60;
+      totalPartnerMinutes += (partnerP * partner.duration_bracket) / 60;
     }
 
     if (totalPartnerBreaks > 0 || totalPartnerMinutes > 0) {

@@ -755,6 +755,7 @@ export const campaigns = sqliteTable(
     starts_on: text('starts_on').notNull(),       // ISO date "2026-01-01"
     ends_on: text('ends_on').notNull(),
     plays_per_month: integer('plays_per_month').notNull(),
+    duration_bracket: integer('duration_bracket').notNull().default(30),
     max_plays_per_day: integer('max_plays_per_day'),
     sweeps_per_month: integer('sweeps_per_month'),
     max_sweeps_per_day: integer('max_sweeps_per_day'),

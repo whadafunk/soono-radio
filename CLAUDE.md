@@ -201,6 +201,7 @@ When in doubt: if you'd squint to read it, it's too dark.
 3. LiquidSoap control panel
 4. Playlist management
 5. Jingle organization
+6. Billing: rate card and invoice generation based on campaign duration_bracket x plays_per_month
 
 **Iteration Size** 
 - Each iteration should be shippable in 1-3 commits

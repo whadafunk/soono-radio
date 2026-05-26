@@ -302,6 +302,13 @@
       "when": 1779715767417,
       "tag": "0042_special_thunderbolt_ross",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "6",
+      "when": 1779794121672,
+      "tag": "0043_broken_living_lightning",
+      "breakpoints": true
     }
   ]
 }

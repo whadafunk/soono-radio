@@ -269,6 +269,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       starts_on: parsed.data.starts_on,
       ends_on: parsed.data.ends_on,
       plays_per_month: parsed.data.plays_per_month,
+      duration_bracket: parsed.data.duration_bracket,
       max_plays_per_day: parsed.data.max_plays_per_day ?? null,
       sweeps_per_month: parsed.data.sweeps_per_month ?? null,
       max_sweeps_per_day: parsed.data.max_sweeps_per_day ?? null,

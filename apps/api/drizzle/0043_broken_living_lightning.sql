@@ -1,0 +1,1 @@
+ALTER TABLE `campaigns` ADD `duration_bracket` integer DEFAULT 30 NOT NULL;

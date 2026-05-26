@@ -1570,6 +1570,19 @@ function CreateCampaignForm({
 
         <div className="space-y-2">
           <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Spot Pacing</p>
+          <div>
+            <label className={LABEL}>
+              Duration Bracket *
+              <HelpTooltip text="The sold slot length for this campaign. Clips longer than this bracket cannot be attached." />
+            </label>
+            <select {...register('duration_bracket', { valueAsNumber: true })} disabled={isLoading} className={INPUT}>
+              <option value="" className="bg-zinc-900">— Select —</option>
+              {[10,20,30,40,50,60,70,80,90].map((s) => (
+                <option key={s} value={s} className="bg-zinc-900">{s}s</option>
+              ))}
+            </select>
+            {formState.errors.duration_bracket && <p className="text-red-400 text-xs mt-1">{formState.errors.duration_bracket.message}</p>}
+          </div>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={LABEL}>
@@ -2508,6 +2521,7 @@ function CampaignEditForm({
       starts_on: campaign.starts_on,
       ends_on: campaign.ends_on,
       plays_per_month: campaign.plays_per_month,
+      duration_bracket: campaign.duration_bracket,
       max_plays_per_day: campaign.max_plays_per_day ?? undefined,
       sweeps_per_month: campaign.sweeps_per_month ?? undefined,
       max_sweeps_per_day: campaign.max_sweeps_per_day ?? undefined,
@@ -2614,6 +2628,18 @@ function CampaignEditForm({
 
       <div className="space-y-2">
         <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Spot Pacing</p>
+        <div>
+          <label className={LABEL}>
+            Duration Bracket *
+            <HelpTooltip text="The sold slot length for this campaign. Clips longer than this bracket cannot be attached." />
+          </label>
+          <select {...register('duration_bracket', { valueAsNumber: true })} disabled={isLoading} className={INPUT}>
+            {[10,20,30,40,50,60,70,80,90].map((s) => (
+              <option key={s} value={s} className="bg-zinc-900">{s}s</option>
+            ))}
+          </select>
+          {formState.errors.duration_bracket && <p className="text-red-400 text-xs mt-1">{formState.errors.duration_bracket.message}</p>}
+        </div>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={LABEL}>
@@ -2820,7 +2846,7 @@ function CampaignEditForm({
 
       <div className="space-y-3">
         <SectionDivider label="Media" />
-        <CampaignMediaSection campaignId={campaign.id} sweepsPerMonth={sweepsPerMonth ?? null} />
+        <CampaignMediaSection campaignId={campaign.id} sweepsPerMonth={sweepsPerMonth ?? null} durationBracket={campaign.duration_bracket} />
         {mediaError && (
           <p className="text-red-400 text-xs">{mediaError}</p>
         )}
