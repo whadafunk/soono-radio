@@ -2600,7 +2600,7 @@ function CampaignEditForm({
             End Date *
             <HelpTooltip text="The last date this campaign is eligible to air. No plays are scheduled after this date." />
           </label>
-          <input type="date" {...register('ends_on')} disabled={isLoading} className={INPUT} />
+          <input type="date" {...register('ends_on')} min={new Date().toISOString().slice(0, 10)} disabled={isLoading} className={INPUT} />
         </div>
       </div>
 
