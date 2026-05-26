@@ -7,6 +7,8 @@ build/
 .env.local
 pnpm-lock.yaml
 .playwright-mcp/
+memory/
+*.png
 icecast/logs/
 data/certs/*.pem
 liquidsoap/supervisor.json
