@@ -22,6 +22,8 @@ import {
   templateEntries as templateEntriesTable,
   templateClockEntries as templateClockEntriesTable,
   stationSettings as stationSettingsTable,
+  broadcastIntervals as broadcastIntervalsTable,
+  broadcastIntervalSlots as broadcastIntervalSlotsTable,
 } from '../db/schema.js';
 import type {
   Budget,
@@ -52,10 +54,18 @@ interface DateRange {
 /** One materialised stop-set occurrence from the calendar projection. */
 interface StopSetOccurrence {
   date: string;       // "YYYY-MM-DD"
+  dow: number;        // 1=Mon … 7=Sun
+  timeStart: string;  // "HH:MM" — used to match broadcast interval windows
   durationSeconds: number;
   showId: number | null;
-  intervalId: number | null; // from campaign scope — populated at demand time
   clockSegmentId: number;
+}
+
+/** Resolved time window for one interval on one day-of-week (minutes from midnight). */
+interface IntervalWindow {
+  id: number;
+  startMin: number;
+  endMin: number;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -102,6 +112,17 @@ function scaleBudget(b: Budget, factor: number): Budget {
 
 function addToCuts(cuts: BudgetCuts, scopeKey: string, value: Budget): void {
   cuts.global = addBudget(cuts.global, value);
+  if (scopeKey.startsWith('interval:')) {
+    const id = scopeKey.slice('interval:'.length);
+    cuts.byInterval[id] = addBudget(cuts.byInterval[id] ?? emptyBudget(), value);
+  } else if (scopeKey.startsWith('show:')) {
+    const id = scopeKey.slice('show:'.length);
+    cuts.byShow[id] = addBudget(cuts.byShow[id] ?? emptyBudget(), value);
+  }
+}
+
+/** Add to a sub-scope (show or interval) without bumping global — caller already did that. */
+function addToSubScope(cuts: BudgetCuts, scopeKey: string, value: Budget): void {
   if (scopeKey.startsWith('interval:')) {
     const id = scopeKey.slice('interval:'.length);
     cuts.byInterval[id] = addBudget(cuts.byInterval[id] ?? emptyBudget(), value);
@@ -209,8 +230,16 @@ async function computeInventory(
     calByDate.set(r.date, list);
   }
 
-  // ── Load template entries + per-hour clock overrides ─────────────────────
-  const [templateRows, templateClockRows] = await Promise.all([
+  // ── Load template entries + per-hour generic clock slots ─────────────────
+  // Two clock types exist in the schedule:
+  //   Show clock    — a template/calendar entry with show_id set. Stop-sets count
+  //                   toward that show's scoped budget pool.
+  //   Generic clock — a templateClockEntry (hour-level, no show_id) or any entry
+  //                   with show_id = null. Stop-sets fall into the global pool.
+  // When expandTemplateEntry splits a show-block at a generic-clock hour, it
+  // correctly sets show_id = null for that sub-slot — the hour belongs to the
+  // generic clock, not the surrounding show.
+  const [templateRows, templateClockRows, intervalRows, intervalSlotRows] = await Promise.all([
     db.select({
       day_of_week: templateEntriesTable.day_of_week,
       time_start: templateEntriesTable.time_start,
@@ -223,9 +252,20 @@ async function computeInventory(
       hour: templateClockEntriesTable.hour,
       clock_id: templateClockEntriesTable.clock_id,
     }).from(templateClockEntriesTable),
+    db.select({
+      id: broadcastIntervalsTable.id,
+      default_start_time: broadcastIntervalsTable.default_start_time,
+      default_end_time: broadcastIntervalsTable.default_end_time,
+    }).from(broadcastIntervalsTable),
+    db.select({
+      interval_id: broadcastIntervalSlotsTable.interval_id,
+      day_of_week: broadcastIntervalSlotsTable.day_of_week,
+      start_time: broadcastIntervalSlotsTable.start_time,
+      end_time: broadcastIntervalSlotsTable.end_time,
+    }).from(broadcastIntervalSlotsTable),
   ]);
 
-  // Per day-of-week, map hour → override clock_id
+  // Per day-of-week, map hour → generic clock_id
   const clockOverrideByDow = new Map<number, Map<number, number>>();
   for (const tc of templateClockRows) {
     const m = clockOverrideByDow.get(tc.day_of_week) ?? new Map<number, number>();
@@ -239,6 +279,24 @@ async function computeInventory(
     const list = templateByDow.get(te.day_of_week) ?? [];
     list.push(te);
     templateByDow.set(te.day_of_week, list);
+  }
+
+  // Build per-dow interval windows. Per-day slots override the interval default times.
+  // intervalWindowsByDow: dow → list of {id, startMin, endMin}
+  const slotByIntervalDow = new Map<string, { start_time: string; end_time: string }>();
+  for (const s of intervalSlotRows) {
+    slotByIntervalDow.set(`${s.interval_id}:${s.day_of_week}`, s);
+  }
+  const intervalWindowsByDow = new Map<number, IntervalWindow[]>();
+  for (let dow = 1; dow <= 7; dow++) {
+    const windows: IntervalWindow[] = [];
+    for (const iv of intervalRows) {
+      const slot = slotByIntervalDow.get(`${iv.id}:${dow}`);
+      const start = slot ? slot.start_time : iv.default_start_time;
+      const end   = slot ? slot.end_time   : iv.default_end_time;
+      windows.push({ id: iv.id, startMin: timeToMin(start), endMin: timeToMin(end) });
+    }
+    intervalWindowsByDow.set(dow, windows);
   }
 
   // ── Walk each date in [effectiveStart, period.end) ────────────────────────
@@ -264,9 +322,10 @@ async function computeInventory(
         for (const seg of stopSets) {
           occurrences.push({
             date: dateStr,
+            dow,
+            timeStart: ce.time_start,
             durationSeconds: seg.duration_seconds,
             showId: ce.show_id,
-            intervalId: null,
             clockSegmentId: seg.id,
           });
         }
@@ -277,7 +336,7 @@ async function computeInventory(
       const clockOverrides = clockOverrideByDow.get(dow) ?? new Map<number, number>();
 
       for (const te of templateEntries) {
-        // Expand template entry into per-hour slots if clock overrides exist.
+        // Expand template entry into per-hour slots if generic clock entries exist.
         const slots = expandTemplateEntry(te, clockOverrides);
         for (const slot of slots) {
           if (!slot.clock_id) continue;
@@ -286,9 +345,10 @@ async function computeInventory(
           for (const seg of stopSets) {
             occurrences.push({
               date: dateStr,
+              dow,
+              timeStart: slot.time_start,
               durationSeconds: seg.duration_seconds,
               showId: slot.show_id,
-              intervalId: null,
               clockSegmentId: seg.id,
             });
           }
@@ -300,16 +360,23 @@ async function computeInventory(
   }
 
   // ── Build raw budget cuts from occurrences ────────────────────────────────
+  // Each occurrence contributes to global always, to byShow if inside a show slot,
+  // and to byInterval for every interval whose time window contains the occurrence.
+  // Show and interval pools are overlapping subsets of global — campaigns pick one scope.
   const raw = emptyBudgetCuts();
   for (const occ of occurrences) {
-    const scopeKey = occ.showId != null ? `show:${occ.showId}` : 'global';
-    addToCuts(raw, scopeKey, {
-      minutes: occ.durationSeconds / 60,
-      breaks: 1,
-    });
+    const budget = { minutes: occ.durationSeconds / 60, breaks: 1 };
+    raw.global = addBudget(raw.global, budget);
+    if (occ.showId != null) {
+      addToSubScope(raw, `show:${occ.showId}`, budget);
+    }
+    const tMin = timeToMin(occ.timeStart);
+    for (const w of intervalWindowsByDow.get(occ.dow) ?? []) {
+      if (tMin >= w.startMin && tMin < w.endMin) {
+        addToSubScope(raw, `interval:${w.id}`, budget);
+      }
+    }
   }
-  // Also accumulate global separately for show-scoped items (shows are subsets
-  // of global, not separate — already handled by addToCuts which always adds to global).
 
   const margin = await getPromoMargin();
   const effective = applyMarginToCuts(raw, margin);
