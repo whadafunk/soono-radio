@@ -131,6 +131,25 @@ export function invalidateInventory(): void {
   inventoryCache.clear();
 }
 
+// ─── Demand Cache ──────────────────────────────────────────────────────────────
+
+// L2 demand is keyed by today's date + mode. The date acts as a natural 24-hour
+// TTL — yesterday's entry is never matched again. Invalidated on campaign save.
+const demandCache = new Map<string, SpotBudgetDemand>();
+
+function makeDemandCacheKey(period: DateRange, mode: BudgetMode): string {
+  return `${dateToString(period.start)}:${dateToString(period.end)}:${mode}`;
+}
+
+export function invalidateDemand(): void {
+  demandCache.clear();
+}
+
+export function invalidateAll(): void {
+  inventoryCache.clear();
+  demandCache.clear();
+}
+
 // ─── L1 — Inventory ──────────────────────────────────────────────────────────
 
 /**
@@ -352,16 +371,19 @@ function minToTime(min: number): string {
 
 function applyMarginToCuts(raw: BudgetCuts, margin: number): BudgetCuts {
   const factor = 1 - margin;
+  // Promo margin reserves time within breaks — it reduces minutes only.
+  // Break slots themselves are not eliminated; the count stays the same.
+  const minutesOnly = (b: Budget): Budget => ({ minutes: b.minutes * factor, breaks: b.breaks });
   const effective: BudgetCuts = {
-    global: scaleBudget(raw.global, factor),
+    global: minutesOnly(raw.global),
     byInterval: {},
     byShow: {},
   };
   for (const [k, v] of Object.entries(raw.byInterval)) {
-    effective.byInterval[k] = scaleBudget(v, factor);
+    effective.byInterval[k] = minutesOnly(v);
   }
   for (const [k, v] of Object.entries(raw.byShow)) {
-    effective.byShow[k] = scaleBudget(v, factor);
+    effective.byShow[k] = minutesOnly(v);
   }
   return effective;
 }
@@ -610,7 +632,12 @@ export async function getDemand(
   period: DateRange,
   mode: BudgetMode,
 ): Promise<SpotBudgetDemand> {
-  return computeDemand(period, mode);
+  const key = makeDemandCacheKey(period, mode);
+  const cached = demandCache.get(key);
+  if (cached) return cached;
+  const result = await computeDemand(period, mode);
+  demandCache.set(key, result);
+  return result;
 }
 
 export async function getAvailable(

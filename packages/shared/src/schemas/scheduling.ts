@@ -356,7 +356,10 @@ export type Campaign = z.infer<typeof CampaignSchema>;
 export const CampaignCreateSchema = z.object({
   customer_id: z.number().int().positive(),
   name: z.string().min(1, 'Campaign name is required'),
-  starts_on: z.string().min(1, 'Start date required'),
+  starts_on: z.string().min(1, 'Start date required').refine(
+    (v) => v >= new Date().toISOString().slice(0, 10),
+    'Start date cannot be in the past',
+  ),
   ends_on: z.string().min(1, 'End date required'),
   plays_per_month: z.number().int().positive('Must be at least 1'),
   max_plays_per_day: z.number().int().positive().nullable().optional(),

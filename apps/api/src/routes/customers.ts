@@ -18,7 +18,7 @@ import {
   campaignMedia,
   media,
 } from '../db/schema.js';
-import { invalidateInventory } from '../services/spotBudget.js';
+import { invalidateInventory, invalidateDemand } from '../services/spotBudget.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -288,6 +288,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       await syncExclusions(campaign.id, campaign.competing_exclusions as number[]);
     }
     invalidateInventory();
+    invalidateDemand();
     return reply.status(201).send(campaign);
   });
 
@@ -311,6 +312,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       .returning();
     if (!updated) return reply.status(404).send({ error: 'Campaign not found' });
     invalidateInventory();
+    invalidateDemand();
     return reply.send(updated);
   });
 
@@ -318,6 +320,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
     const id = Number(request.params.id);
     await db.delete(campaigns).where(eq(campaigns.id, id));
     invalidateInventory();
+    invalidateDemand();
     return reply.status(204).send();
   });
 

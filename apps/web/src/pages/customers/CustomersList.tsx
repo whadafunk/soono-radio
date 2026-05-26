@@ -209,40 +209,50 @@ function BudgetImpactRow({
   endsOn,
   playsPerMonth,
   firstInSlot,
-  campaignId,
 }: {
   startsOn: string;
   endsOn: string;
   playsPerMonth: number;
   firstInSlot: boolean;
-  campaignId?: number;
 }) {
   const isValid = startsOn.length === 10 && endsOn.length === 10 && playsPerMonth > 0;
 
+  // Always use the 30-day rolling reference window, not the campaign's own dates.
+  const today = new Date().toISOString().slice(0, 10);
+  const windowEnd = new Date();
+  windowEnd.setDate(windowEnd.getDate() + 30);
+  const windowEndStr = windowEnd.toISOString().slice(0, 10);
+
   const { data, isLoading } = useQuery({
-    queryKey: ['spot-budget', startsOn, endsOn, campaignId],
-    queryFn: () => fetchSpotBudget(startsOn, endsOn, 'projection'),
+    queryKey: ['spot-budget-30d'],
+    queryFn: () => fetchSpotBudget(today, windowEndStr, 'projection'),
     enabled: isValid,
-    staleTime: 30 * 1000,
+    staleTime: 5 * 60 * 1000,
   });
 
   if (!isValid) return null;
 
-  // Rough estimate: assume 30-second average spot
-  const estimatedMinutes = (playsPerMonth * 30) / 60;
+  // Pro-rate the campaign's draw to its overlap with the 30-day window.
+  const overlapStart = startsOn > today ? startsOn : today;
+  const overlapEnd = endsOn < windowEndStr ? endsOn : windowEndStr;
+  const overlapDays = Math.max(0, Math.ceil(
+    (new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000,
+  ));
+  const playsInWindow = (overlapDays / 30) * playsPerMonth;
+  const estimatedMinutes = (playsInWindow * 30) / 60; // assume 30s avg spot
 
   const remaining = data ? data.available.global.minutes : null;
   const afterThis = remaining !== null ? remaining - estimatedMinutes : null;
 
   return (
     <div className="rounded-lg bg-zinc-800/40 border border-zinc-700/50 px-3 py-2 space-y-1">
-      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Budget Impact</p>
+      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Budget Impact (next 30 days)</p>
       <div className="flex flex-wrap gap-x-6 gap-y-0.5 text-xs">
         <span>
           <span className="text-zinc-400">Est. draw: </span>
-          <span className="text-zinc-300">{fmtMinutes(estimatedMinutes)} min/mo</span>
+          <span className="text-zinc-300">{fmtMinutes(estimatedMinutes)} min</span>
           {firstInSlot && (
-            <span className="text-zinc-500 ml-1">(+1 first-slot break/day target)</span>
+            <span className="text-zinc-500 ml-1">· {overlapDays} first-slot breaks</span>
           )}
         </span>
         {isLoading && <span className="text-zinc-500">Checking availability…</span>}
@@ -1541,7 +1551,7 @@ function CreateCampaignForm({
               Start Date *
               <HelpTooltip text="The first date this campaign is eligible to air." />
             </label>
-            <input type="date" {...register('starts_on')} disabled={isLoading} className={INPUT} />
+            <input type="date" {...register('starts_on')} min={new Date().toISOString().slice(0, 10)} disabled={isLoading} className={INPUT} />
             {formState.errors.starts_on && <p className="text-red-400 text-xs mt-1">{formState.errors.starts_on.message}</p>}
           </div>
           <div>
@@ -2580,10 +2590,10 @@ function CampaignEditForm({
       <div className="grid grid-cols-2 gap-3">
         <div>
           <label className={LABEL}>
-            Start Date *
-            <HelpTooltip text="The first date this campaign is eligible to air." />
+            Start Date
+            <HelpTooltip text="Start date is locked once a campaign is created. Only the end date can be extended." />
           </label>
-          <input type="date" {...register('starts_on')} disabled={isLoading} className={INPUT} />
+          <input type="date" {...register('starts_on')} disabled className={INPUT} />
         </div>
         <div>
           <label className={LABEL}>
@@ -2818,7 +2828,6 @@ function CampaignEditForm({
         endsOn={watchedEndsOn}
         playsPerMonth={watchedPlays}
         firstInSlot={firstInSlot ?? false}
-        campaignId={campaign.id}
       />
 
       <div>
