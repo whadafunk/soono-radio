@@ -16,7 +16,7 @@ import {
 } from '../services/spotBudget.js';
 
 const QuerySchema = z.object({
-  mode: BudgetModeSchema.default('projection'),
+  mode: BudgetModeSchema.default('estimated'),
   start: z.string().min(1),
   end: z.string().min(1),
 });

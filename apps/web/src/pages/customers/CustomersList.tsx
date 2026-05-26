@@ -99,7 +99,7 @@ function GlobalBudgetPanel() {
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['spot-budget', today, end30],
-    queryFn: () => fetchSpotBudget(today, end30, 'projection'),
+    queryFn: () => fetchSpotBudget(today, end30, 'estimated'),
     staleTime: 5 * 60 * 1000,
   });
 
@@ -225,7 +225,7 @@ function BudgetImpactRow({
 
   const { data, isLoading } = useQuery({
     queryKey: ['spot-budget-30d'],
-    queryFn: () => fetchSpotBudget(today, windowEndStr, 'projection'),
+    queryFn: () => fetchSpotBudget(today, windowEndStr, 'estimated'),
     enabled: isValid,
     staleTime: 5 * 60 * 1000,
   });

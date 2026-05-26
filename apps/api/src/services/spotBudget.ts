@@ -164,7 +164,7 @@ async function computeInventory(
   mode: BudgetMode,
 ): Promise<{ inventory: SpotBudgetInventory; occurrences: StopSetOccurrence[] }> {
   const now = new Date();
-  const effectiveStart = mode === 'live' && now > period.start ? now : period.start;
+  const effectiveStart = mode === 'remaining' && now > period.start ? now : period.start;
   const effectiveStartStr = dateToString(effectiveStart);
   const endStr = dateToString(period.end);
 
@@ -413,7 +413,7 @@ async function computeDemand(
   mode: BudgetMode,
 ): Promise<SpotBudgetDemand> {
   const now = new Date();
-  const effectiveStart = mode === 'live' && now > period.start ? now : period.start;
+  const effectiveStart = mode === 'remaining' && now > period.start ? now : period.start;
   const periodStartStr = dateToString(effectiveStart);
   const periodEndStr = dateToString(period.end);
 
@@ -465,7 +465,7 @@ async function computeDemand(
 
   // ── Actual plays to date per campaign (live mode only) ───────────────────
   const actualPlaysByCampaign = new Map<number, number>();
-  if (mode === 'live') {
+  if (mode === 'remaining') {
     const playRows = campaignIds.length > 0
       ? await db
           .select({
@@ -516,7 +516,7 @@ async function computeDemand(
     let P: number;
     let D: number; // campaign days in period
 
-    if (mode === 'live') {
+    if (mode === 'remaining') {
       const actualPlays = actualPlaysByCampaign.get(c.id) ?? 0;
       const plannedTotal = (c.plays_per_month / DAYS_PER_MONTH) * totalDays;
       const remaining = Math.max(0, plannedTotal - actualPlays);
@@ -661,7 +661,7 @@ export async function getCampaignAvailable(
   mode: BudgetMode,
 ): Promise<Omit<CampaignAvailable, 'pacing'>> {
   const now = new Date();
-  const effectiveStart = mode === 'live' && now > period.start ? now : period.start;
+  const effectiveStart = mode === 'remaining' && now > period.start ? now : period.start;
   const periodStartStr = dateToString(effectiveStart);
   const periodEndStr = dateToString(period.end);
 
@@ -742,7 +742,7 @@ export async function getCampaignAvailable(
 
     // Actual plays to date for partners (live mode).
     const partnerActuals = new Map<number, number>();
-    if (mode === 'live') {
+    if (mode === 'remaining') {
       const partnerPlayRows = partnerIds.length > 0
         ? await db
             .select({ campaign_id: playHistoryTable.campaign_id })
@@ -772,7 +772,7 @@ export async function getCampaignAvailable(
         : 30;
 
       let partnerP: number;
-      if (mode === 'live') {
+      if (mode === 'remaining') {
         const actual = partnerActuals.get(partner.id) ?? 0;
         const fullStart2 = new Date(partner.starts_on);
         const fullEnd2 = new Date(partner.ends_on);

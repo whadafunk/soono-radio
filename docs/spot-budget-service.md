@@ -8,17 +8,17 @@ See `docs/spot-budget-algorithm.md` for the full algorithm behind these calculat
 
 ## Two Modes
 
-- **projection** — uses full period inventory and planned plays. UI planning and campaign creation.
-- **live** — uses future-only inventory and remaining plays (planned − aired). UI live dashboard and supervisor.
+- **estimated** — full planned demand for the window based on campaign configs. Used by the UI for planning (budget panel, campaign creation form).
+- **remaining** — remaining demand only (planned − already aired). Used by the supervisor when making real-time scheduling decisions.
 
-Live mode: the service clamps `start` to `max(start, now)` internally. Callers always pass the campaign's full date range.
+The service clamps `start` to `max(start, now)` internally in remaining mode. Callers always pass the full date range.
 
 ---
 
 ## Types
 
 ```typescript
-type BudgetMode = 'projection' | 'live'
+type BudgetMode = 'estimated' | 'remaining'
 
 // The two budget dimensions
 interface Budget {
@@ -46,7 +46,7 @@ interface DateRange {
 ```typescript
 interface SpotBudgetService {
 
-  // L1 — raw + effective inventory (after promo margin).
+  // L1 — raw + effective inventory (after promo margin on minutes only).
   // Cached. Invalidated on clock or calendar change.
   getInventory(period: DateRange, mode: BudgetMode): Promise<{
     raw: BudgetCuts
@@ -55,7 +55,7 @@ interface SpotBudgetService {
   }>
 
   // L2 — aggregate demand across all campaigns + per-campaign breakdown.
-  // Always computed fresh (cheap: just sums campaign fields).
+  // Cached by date + mode (24h TTL). Invalidated on campaign save.
   getDemand(period: DateRange, mode: BudgetMode): Promise<{
     totals: BudgetCuts
     byCampaign: Array<{
@@ -82,7 +82,7 @@ interface SpotBudgetService {
     nonCompeteReduction?: Budget // how much was deducted due to partners
   }>
 
-  // Pacing — always live mode, no period arg (uses campaign's own date range).
+  // Pacing — always uses campaign's own date range (not the 30-day window).
   getPacing(campaignId: string): Promise<{
     expectedToDate: number
     actualToDate: number
@@ -93,6 +93,7 @@ interface SpotBudgetService {
 
   // Cache control
   invalidateInventory(): void
+  invalidateDemand(): void
 }
 ```
 
@@ -102,30 +103,30 @@ interface SpotBudgetService {
 
 ```
 GET /api/spot-budget
-  ?mode=projection|live
+  ?mode=estimated|remaining
   &start=ISO&end=ISO
 
   → { inventory, demand, available }
-  Used by: dashboard, campaign list
+  Used by: dashboard budget panel, campaign list
 
 GET /api/spot-budget/campaign/:id
-  ?mode=projection|live
+  ?mode=estimated|remaining
   &start=ISO&end=ISO
 
   → { available, firstSlotAvailable?, nonCompeteReduction?, pacing }
-  Used by: campaign detail page, create form estimate
+  Used by: campaign detail page, create/edit form budget impact
 
 GET /api/spot-budget/campaign/:id/pacing
   → { expectedToDate, actualToDate, delta, totalPlanned, remaining }
-  Used by: supervisor before each play, live dashboard per-campaign row
+  Used by: supervisor before each play, per-campaign pacing column
 ```
 
 ---
 
 ## Implementation Notes
 
-- `getInventory` is the only expensive call — it projects clocks over the calendar for the period. Cache aggressively; invalidate on clock segment save, calendar entry save, or campaign scope change.
-- `getDemand` is always computed fresh. It only sums campaign configuration fields — fast enough to skip caching.
-- `getCampaignAvailable` is the heaviest on non-compete campaigns: it must resolve each partner campaign and compute their remaining footprint before reducing the available pool.
-- The supervisor only calls `getCampaignAvailable` (live) + `getPacing`. It never needs the full inventory/demand breakdown.
-- `invalidateInventory` must be called on: clock segment save, calendar entry save, campaign save (scope changes affect which L1 cut is relevant).
+- `getInventory` is the only expensive call — it projects clocks over the calendar for the period. Cached by SHA-256 of period + mode; invalidated on clock segment save, calendar entry save, or station settings change.
+- `getDemand` is cached by window-start date + mode (24h natural TTL); invalidated on campaign create/update/delete.
+- `getCampaignAvailable` is heavier on non-compete campaigns: resolves each partner and computes their remaining footprint before reducing the available pool.
+- The supervisor calls `getCampaignAvailable` (remaining mode) + `getPacing`. It never needs the full inventory/demand breakdown.
+- The UI always calls in `estimated` mode. The supervisor always calls in `remaining` mode.

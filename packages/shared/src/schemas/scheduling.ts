@@ -848,7 +848,7 @@ export type UserPatch = z.infer<typeof UserPatchSchema>;
 
 // ============ SPOT BUDGET ============
 
-export const BudgetModeSchema = z.enum(['projection', 'live']);
+export const BudgetModeSchema = z.enum(['estimated', 'remaining']);
 export type BudgetMode = z.infer<typeof BudgetModeSchema>;
 
 export const BudgetSchema = z.object({

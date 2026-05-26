@@ -1301,7 +1301,7 @@ import type {
 export function fetchSpotBudget(
   start: string,
   end: string,
-  mode: 'projection' | 'live' = 'projection',
+  mode: 'estimated' | 'remaining' = 'estimated',
 ): Promise<SpotBudgetOverview> {
   const qs = new URLSearchParams({ mode, start, end });
   return apiFetch(`/spot-budget?${qs}`);
@@ -1311,7 +1311,7 @@ export function fetchCampaignBudget(
   campaignId: number,
   start: string,
   end: string,
-  mode: 'projection' | 'live' = 'projection',
+  mode: 'estimated' | 'remaining' = 'estimated',
 ): Promise<CampaignAvailable> {
   const qs = new URLSearchParams({ mode, start, end });
   return apiFetch(`/spot-budget/campaign/${campaignId}?${qs}`);

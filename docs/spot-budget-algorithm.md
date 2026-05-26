@@ -22,15 +22,16 @@ The service supports two modes. The reference window is the same; what differs i
 |---|---|---|
 | **L2 input** | planned plays in the window | remaining plays per campaign (planned − aired so far) |
 | **Used by** | UI planning (campaign creation, budget panel) | Supervisor scheduling decisions |
+| **Mode value** | `estimated` | `remaining` |
 
-Because the window always starts from today, projection and live are nearly identical for the UI. The distinction matters for the supervisor making real-time decisions about what to schedule next.
+Because the window always starts from today, estimated and remaining are nearly identical for the UI. The distinction matters for the supervisor making real-time decisions about what to schedule next.
 
 ---
 
 ## Three Layers
 
 ```
-L1  inventory (clock/calendar projection for the 30-day window)
+L1  inventory (clock/calendar estimated for the 30-day window)
   × (1 − promo_margin)  [minutes only — break count is unchanged]
   = effective inventory
 
@@ -118,7 +119,7 @@ Promos have no first-in-slot condition and no break-level constraint. Their dema
 
 Each campaign is scoped to exactly one of: **global**, **interval**, or **show**. Demand is attributed to that scope's budget cut only.
 
-**Caching:** L2 is cached in memory keyed by the window start date + mode (e.g. `"2026-05-26:projection"`). The date acts as a natural 24-hour TTL. Invalidated immediately on any campaign create/update/delete.
+**Caching:** L2 is cached in memory keyed by the window start date + mode (e.g. `"2026-05-26:estimated"`). The date acts as a natural 24-hour TTL. Invalidated immediately on any campaign create/update/delete.
 
 ---
 
