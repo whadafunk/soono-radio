@@ -208,11 +208,13 @@ function BudgetImpactRow({
   startsOn,
   endsOn,
   playsPerMonth,
+  durationBracket,
   firstInSlot,
 }: {
   startsOn: string;
   endsOn: string;
   playsPerMonth: number;
+  durationBracket: number;
   firstInSlot: boolean;
 }) {
   const isValid = startsOn.length === 10 && endsOn.length === 10 && playsPerMonth > 0;
@@ -239,7 +241,7 @@ function BudgetImpactRow({
     (new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000,
   ));
   const playsInWindow = (overlapDays / 30) * playsPerMonth;
-  const estimatedMinutes = (playsInWindow * 30) / 60; // assume 30s avg spot
+  const estimatedMinutes = (playsInWindow * durationBracket) / 60;
 
   const remaining = data ? data.available.global.minutes : null;
   const afterThis = remaining !== null ? remaining - estimatedMinutes : null;
@@ -1523,9 +1525,10 @@ function CreateCampaignForm({
   const firstInSlot    = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId = useWatch({ control, name: 'show_id' });
   const selectedIntervalId = useWatch({ control, name: 'interval_id' });
-  const watchedStartsOn = useWatch({ control, name: 'starts_on' }) ?? '';
-  const watchedEndsOn   = useWatch({ control, name: 'ends_on' }) ?? '';
-  const watchedPlays    = useWatch({ control, name: 'plays_per_month' }) ?? 0;
+  const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? '';
+  const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? '';
+  const watchedPlays       = useWatch({ control, name: 'plays_per_month' }) ?? 0;
+  const watchedDuration    = useWatch({ control, name: 'duration_bracket' }) ?? 30;
 
   // Broadcast Interval and Associated Show are mutually exclusive
   useEffect(() => { if (selectedIntervalId) { setValue('show_id', null); setValue('plays_per_show', null); } }, [selectedIntervalId]);
@@ -1783,6 +1786,7 @@ function CreateCampaignForm({
           startsOn={watchedStartsOn}
           endsOn={watchedEndsOn}
           playsPerMonth={watchedPlays}
+          durationBracket={watchedDuration}
           firstInSlot={firstInSlot}
         />
       </div>
@@ -2551,6 +2555,7 @@ function CampaignEditForm({
   const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? campaign.starts_on;
   const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? campaign.ends_on;
   const watchedPlays       = useWatch({ control, name: 'plays_per_month' }) ?? campaign.plays_per_month;
+  const watchedDuration    = useWatch({ control, name: 'duration_bracket' }) ?? campaign.duration_bracket;
   const [mediaError, setMediaError] = useState<string | null>(null);
 
   // Clear media error whenever clips change (user added/removed a clip)
@@ -2861,6 +2866,7 @@ function CampaignEditForm({
         startsOn={watchedStartsOn}
         endsOn={watchedEndsOn}
         playsPerMonth={watchedPlays}
+        durationBracket={watchedDuration}
         firstInSlot={firstInSlot ?? false}
       />
 
