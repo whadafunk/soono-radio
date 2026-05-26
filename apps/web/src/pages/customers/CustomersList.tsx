@@ -1504,7 +1504,7 @@ function CreateCampaignForm({
   const { data: shows = [] }     = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
   const { data: intervals = [] } = useQuery<BroadcastInterval[]>({ queryKey: ['intervals'], queryFn: fetchIntervals });
 
-  const { control, register, handleSubmit, formState } = useForm<CampaignCreate>({
+  const { control, register, handleSubmit, formState, setValue } = useForm<CampaignCreate>({
     resolver: zodResolver(CampaignCreateSchema),
     defaultValues: {
       customer_id: defaultCustomerId,
@@ -1526,6 +1526,10 @@ function CreateCampaignForm({
   const watchedStartsOn = useWatch({ control, name: 'starts_on' }) ?? '';
   const watchedEndsOn   = useWatch({ control, name: 'ends_on' }) ?? '';
   const watchedPlays    = useWatch({ control, name: 'plays_per_month' }) ?? 0;
+
+  // Broadcast Interval and Associated Show are mutually exclusive
+  useEffect(() => { if (selectedIntervalId) { setValue('show_id', null); setValue('plays_per_show', null); } }, [selectedIntervalId]);
+  useEffect(() => { if (selectedShowId) { setValue('interval_id', null); setValue('interval_plays_per_week', null); } }, [selectedShowId]);
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
@@ -1630,14 +1634,14 @@ function CreateCampaignForm({
           <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Interval</p>
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL}>
+              <label className={LABEL + (selectedShowId ? ' opacity-40' : '')}>
                 Broadcast Interval
-                <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window." />
+                <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window. Mutually exclusive with Associated Show." />
               </label>
               <select
                 {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
-                disabled={isLoading}
-                className={INPUT}
+                disabled={isLoading || !!selectedShowId}
+                className={INPUT + (selectedShowId ? ' opacity-40' : '')}
               >
                 <option value="">No interval</option>
                 {intervals.map((iv) => (
@@ -1646,7 +1650,7 @@ function CreateCampaignForm({
               </select>
             </div>
             <div>
-              <label className={LABEL + (!selectedIntervalId ? ' opacity-40' : '')}>
+              <label className={LABEL + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}>
                 Plays / Day (interval)
                 <HelpTooltip text="How many times this campaign must air within the selected interval per day." />
               </label>
@@ -1655,8 +1659,8 @@ function CreateCampaignForm({
                 min={1}
                 placeholder="—"
                 {...register('interval_plays_per_week', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-                disabled={isLoading || !selectedIntervalId}
-                className={INPUT + (!selectedIntervalId ? ' opacity-40' : '')}
+                disabled={isLoading || !selectedIntervalId || !!selectedShowId}
+                className={INPUT + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}
               />
             </div>
           </div>
@@ -1672,8 +1676,8 @@ function CreateCampaignForm({
                 <HelpTooltip text="Hard: the scheduler must hit the monthly play target, bumping best-effort campaigns when there isn't room. Best Effort: plays are distributed opportunistically." />
               </label>
               <select {...register('priority')} disabled={isLoading} className={INPUT}>
-                <option value="best_effort">Best Effort</option>
                 <option value="hard">Hard</option>
+                <option value="best_effort">Best Effort</option>
               </select>
             </div>
             <div>
@@ -1687,14 +1691,14 @@ function CreateCampaignForm({
 
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className={LABEL}>
+              <label className={LABEL + (selectedIntervalId ? ' opacity-40' : '')}>
                 Associated Show
-                <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots." />
+                <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots. Mutually exclusive with Broadcast Interval." />
               </label>
               <select
                 {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
-                disabled={isLoading}
-                className={INPUT}
+                disabled={isLoading || !!selectedIntervalId}
+                className={INPUT + (selectedIntervalId ? ' opacity-40' : '')}
               >
                 <option value="">Any show</option>
                 {shows.map((s) => (
@@ -1703,7 +1707,7 @@ function CreateCampaignForm({
               </select>
             </div>
             <div>
-              <label className={LABEL + (!selectedShowId ? ' opacity-40' : '')}>
+              <label className={LABEL + (!selectedShowId || selectedIntervalId ? ' opacity-40' : '')}>
                 Plays per Show
                 <HelpTooltip text="Target number of spot airings per show occurrence. Works alongside the monthly target." />
               </label>
@@ -1712,8 +1716,8 @@ function CreateCampaignForm({
                 min={1}
                 placeholder="—"
                 {...register('plays_per_show', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-                disabled={isLoading || !selectedShowId}
-                className={INPUT + (!selectedShowId ? ' opacity-40' : '')}
+                disabled={isLoading || !selectedShowId || !!selectedIntervalId}
+                className={INPUT + (!selectedShowId || selectedIntervalId ? ' opacity-40' : '')}
               />
             </div>
           </div>
@@ -2497,7 +2501,7 @@ function CampaignEditForm({
   const { data: shows = [] }     = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
   const { data: intervals = [] } = useQuery<BroadcastInterval[]>({ queryKey: ['intervals'], queryFn: fetchIntervals });
 
-  const { control, register, handleSubmit, formState } = useForm<CampaignPatch>({
+  const { control, register, handleSubmit, formState, setValue } = useForm<CampaignPatch>({
     resolver: zodResolver(CampaignPatchSchema),
     defaultValues: {
       name: campaign.name,
@@ -2526,6 +2530,10 @@ function CampaignEditForm({
   const firstInSlot        = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId     = useWatch({ control, name: 'show_id' });
   const selectedIntervalId = useWatch({ control, name: 'interval_id' });
+
+  // Broadcast Interval and Associated Show are mutually exclusive
+  useEffect(() => { if (selectedIntervalId) { setValue('show_id', null); setValue('plays_per_show', null); } }, [selectedIntervalId]);
+  useEffect(() => { if (selectedShowId) { setValue('interval_id', null); setValue('interval_plays_per_week', null); } }, [selectedShowId]);
   const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? campaign.starts_on;
   const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? campaign.ends_on;
   const watchedPlays       = useWatch({ control, name: 'plays_per_month' }) ?? campaign.plays_per_month;
@@ -2683,14 +2691,14 @@ function CampaignEditForm({
         <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Interval</p>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className={LABEL}>
+            <label className={LABEL + (selectedShowId ? ' opacity-40' : '')}>
               Broadcast Interval
-              <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window." />
+              <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window. Mutually exclusive with Associated Show." />
             </label>
             <select
               {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
-              disabled={isLoading}
-              className={INPUT}
+              disabled={isLoading || !!selectedShowId}
+              className={INPUT + (selectedShowId ? ' opacity-40' : '')}
             >
               <option value="">No interval</option>
               {intervals.map((iv) => (
@@ -2699,7 +2707,7 @@ function CampaignEditForm({
             </select>
           </div>
           <div>
-            <label className={LABEL + (!selectedIntervalId ? ' opacity-40' : '')}>
+            <label className={LABEL + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}>
               Plays / Day (interval)
               <HelpTooltip text="How many times this campaign must air within the selected interval per day." />
             </label>
@@ -2708,8 +2716,8 @@ function CampaignEditForm({
               min={1}
               placeholder="—"
               {...register('interval_plays_per_week', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-              disabled={isLoading || !selectedIntervalId}
-              className={INPUT + (!selectedIntervalId ? ' opacity-40' : '')}
+              disabled={isLoading || !selectedIntervalId || !!selectedShowId}
+              className={INPUT + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}
             />
           </div>
         </div>
@@ -2725,8 +2733,8 @@ function CampaignEditForm({
               <HelpTooltip text="Hard: the scheduler must hit the monthly play target, bumping best-effort campaigns when there isn't room. Best Effort: plays are distributed opportunistically." />
             </label>
             <select {...register('priority')} disabled={isLoading} className={INPUT}>
-              <option value="best_effort">Best Effort</option>
               <option value="hard">Hard</option>
+              <option value="best_effort">Best Effort</option>
             </select>
           </div>
           <div>
@@ -2740,14 +2748,14 @@ function CampaignEditForm({
 
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <label className={LABEL}>
+            <label className={LABEL + (selectedIntervalId ? ' opacity-40' : '')}>
               Associated Show
-              <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots." />
+              <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots. Mutually exclusive with Broadcast Interval." />
             </label>
             <select
               {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
-              disabled={isLoading}
-              className={INPUT}
+              disabled={isLoading || !!selectedIntervalId}
+              className={INPUT + (selectedIntervalId ? ' opacity-40' : '')}
             >
               <option value="">Any show</option>
               {shows.map((s) => (
@@ -2756,7 +2764,7 @@ function CampaignEditForm({
             </select>
           </div>
           <div>
-            <label className={LABEL + (!selectedShowId ? ' opacity-40' : '')}>
+            <label className={LABEL + (!selectedShowId || selectedIntervalId ? ' opacity-40' : '')}>
               Plays per Show
               <HelpTooltip text="Target number of spot airings per show occurrence. Works alongside the monthly target." />
             </label>
@@ -2765,8 +2773,8 @@ function CampaignEditForm({
               min={1}
               placeholder="—"
               {...register('plays_per_show', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
-              disabled={isLoading || !selectedShowId}
-              className={INPUT + (!selectedShowId ? ' opacity-40' : '')}
+              disabled={isLoading || !selectedShowId || !!selectedIntervalId}
+              className={INPUT + (!selectedShowId || selectedIntervalId ? ' opacity-40' : '')}
             />
           </div>
         </div>
