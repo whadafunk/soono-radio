@@ -18,7 +18,7 @@
 //   Decision 27 — DRIFT_EVENT_TYPES vocabulary.
 
 import { randomUUID } from 'crypto';
-import { and, asc, eq } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -317,7 +317,12 @@ export class SupervisorProcess {
     }
 
     // --- Drift correction ---
-    await this.maybeApplyDriftCorrection(nowMs);
+    // Don't correct before any plan content has played: the initial calendar lag
+    // is already baked into the plan's targetDuration, so skipping items here
+    // would create unnecessary gaps.
+    if (consumedSeconds > 0) {
+      await this.maybeApplyDriftCorrection(nowMs);
+    }
   }
 
   // ─── Segment cache ───────────────────────────────────────────────────────────
@@ -406,6 +411,19 @@ export class SupervisorProcess {
       try {
         await stampStarted(this.db, currentPhid, onAirMs);
         await closeOpenRowsBefore(this.db, currentPhid, onAirMs);
+        // Mark plan_items whose play_history completed as 'played'. Any item
+        // with play_history_id < currentPhid was pushed before the current
+        // track and has now finished playing.
+        await this.db
+          .update(planItemsTable)
+          .set({ status: 'played' })
+          .where(
+            and(
+              eq(planItemsTable.status, 'playing'),
+              isNotNull(planItemsTable.play_history_id),
+              lt(planItemsTable.play_history_id, currentPhid),
+            ),
+          );
       } catch (err) {
         this.logger?.error(
           { err, process: 'supervisor', event: 'PLAY_HISTORY_STAMP_FAILED', play_history_id: currentPhid },
@@ -598,6 +616,31 @@ export class SupervisorProcess {
       return;
     }
     this.draftedForSegmentInstance = key;
+
+    // Don't request a new draft if a plan already exists for this segment/instance.
+    // This happens when the supervisor restarts mid-segment: the clock-instance
+    // comparison fires isNewSegment but the planner already produced a plan.
+    const [existingPlan] = await this.db
+      .select({ id: plansTable.id, status: plansTable.status })
+      .from(plansTable)
+      .where(
+        and(
+          eq(plansTable.segment_id, key.segmentId),
+          eq(plansTable.clock_instance_started_at, key.instanceMs),
+          inArray(plansTable.status, ['draft', 'finalized', 'active']),
+        ),
+      )
+      .limit(1);
+    if (existingPlan) {
+      this.logger?.info(
+        {
+          process: 'supervisor', event: 'DRAFT_SKIPPED_EXISTING',
+          existing_plan_id: existingPlan.id, status: existingPlan.status,
+        },
+        'supervisor: plan already exists for segment instance, skipping draft request',
+      );
+      return;
+    }
 
     const driftAdjustment = -this.currentDriftSeconds;
     const targetDuration = Math.max(

@@ -9,7 +9,7 @@
 // active=true; the Queue Feeder remembers this and stops pushing until the
 // matching active=false message arrives.
 
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, count, eq, sql } from 'drizzle-orm';
 import type { FastifyBaseLogger } from 'fastify';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -117,12 +117,44 @@ export class QueueFeederProcess {
       return;
     }
 
+    // Queue-depth cap: allow at most 1 item actually playing + 1 pre-queued.
+    // Both states share 'playing' status until LS_TRACK_STARTED transitions
+    // the finished item to 'played'. Capping at 2 prevents cascade over-push
+    // when a safety-fill track plays while plan items are being staged.
+    const [countRow] = await this.db
+      .select({ c: count() })
+      .from(planItemsTable)
+      .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')));
+    const playingCount = countRow?.c ?? 0;
+    if (playingCount >= 2) {
+      this.logger?.debug(
+        { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'queue_full', playing_count: playingCount, source },
+        'queueFeeder: queue full (2 items in playing state), skipping push',
+      );
+      return;
+    }
+
     const nextItem = await this.findNextPendingItem(activePlanId);
     if (!nextItem) {
-      this.logger?.info(
-        { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'no_pending_items', source },
-        'queueFeeder: no pending items in plan, skipping push',
-      );
+      // No pending items. If nothing is 'playing' either (queue truly empty),
+      // fall back to safety fill so the stream doesn't go silent.
+      const [playingItem] = await this.db
+        .select({ id: planItemsTable.id })
+        .from(planItemsTable)
+        .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')))
+        .limit(1);
+      if (!playingItem) {
+        this.logger?.info(
+          { process: 'queueFeeder', event: 'PLAN_EXHAUSTED', plan_id: activePlanId, source },
+          'queueFeeder: plan exhausted, falling back to safety fill',
+        );
+        await this.safetyFill('plan_exhausted', activePlanId);
+      } else {
+        this.logger?.debug(
+          { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'no_pending_items', source },
+          'queueFeeder: no pending items, last queued item still in LS',
+        );
+      }
       return;
     }
 
