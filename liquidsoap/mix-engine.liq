@@ -30,7 +30,7 @@ live = input.harbor(
 harbor.http.register(
   port=8005,
   method="POST",
-  uri="/push",
+  "/push",
   fun (req) ->
     begin
       body = req.body
@@ -60,7 +60,7 @@ harbor.http.register(
 harbor.http.register(
   port=8005,
   method="GET",
-  uri="/queue",
+  "/queue",
   fun (_req) ->
     begin
       ids = list.map(fun (r) -> string_of(request.id(r)), queue.queue())
@@ -76,7 +76,7 @@ harbor.http.register(
 harbor.http.register(
   port=8005,
   method="POST",
-  uri="/skip",
+  "/skip",
   fun (_req) ->
     begin
       queue.skip()
@@ -91,7 +91,7 @@ harbor.http.register(
 harbor.http.register(
   port=8005,
   method="GET",
-  uri="/live-status",
+  "/live-status",
   fun (_req) ->
     begin
       connected = live.is_connected()
