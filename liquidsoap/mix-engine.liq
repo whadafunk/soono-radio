@@ -77,7 +77,7 @@ harbor.http.register(
   "/live-status",
   fun (_req, res) ->
     begin
-      connected = live.is_connected()
+      connected = null.defined(live.connected_client())
       res.json({connected = connected})
     end
 )
