@@ -41,8 +41,6 @@ import {
   stampStarted,
 } from '../playHistoryService.js';
 
-// How far ahead of the segment boundary we trigger finalization.
-const FINALIZATION_LEAD_SECONDS = 60;
 // Drift thresholds (Decision 20).
 const DRIFT_CORRECTION_THRESHOLD_SECONDS = 10;
 const COASTING_CORRECTION_THRESHOLD_SECONDS = 5;
@@ -138,15 +136,12 @@ export class SupervisorProcess {
     );
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PLAN_DRAFT_READY' }>('PLAN_DRAFT_READY', (msg) => {
-        this.logger?.info(
-          {
-            process: 'supervisor',
-            event: 'PLAN_DRAFT_READY_OBSERVED',
-            plan_id: msg.plan_id,
-            segment_id: msg.segment_id,
-          },
-          'supervisor: planner produced draft plan',
-        );
+        void this.handlePlanDraftReady(msg).catch((err) => {
+          this.logger?.error(
+            { err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PLAN_DRAFT_READY' },
+            'supervisor: PLAN_DRAFT_READY handler failed',
+          );
+        });
       }),
     );
     this.unsubscribers.push(
@@ -560,6 +555,33 @@ export class SupervisorProcess {
 
   // ─── Draft / finalize ───────────────────────────────────────────────────────
 
+  // When the planner signals a draft is ready for the current segment,
+  // finalize it immediately rather than waiting for the 60s-before-end gate.
+  // Plans for future segments are left as drafts until their segment starts.
+  private async handlePlanDraftReady(
+    msg: BusMessage & { type: 'PLAN_DRAFT_READY' },
+  ): Promise<void> {
+    this.logger?.info(
+      { process: 'supervisor', event: 'PLAN_DRAFT_READY', plan_id: msg.plan_id, segment_id: msg.segment_id },
+      'supervisor: planner produced draft plan',
+    );
+
+    if (msg.segment_id !== this.currentSegmentId) {
+      // Draft is for a future segment — let maybeFinalize handle it at segment start.
+      return;
+    }
+
+    if (this.finalizedForPlanId === msg.plan_id) return;
+    this.finalizedForPlanId = msg.plan_id;
+
+    const requestId = randomUUID();
+    this.logger?.info(
+      { process: 'supervisor', event: 'PLAN_FINALIZE_REQUESTED', plan_id: msg.plan_id, request_id: requestId },
+      'supervisor: immediately finalizing draft for current segment',
+    );
+    this._bus.emit({ type: 'PLAN_FINALIZE_REQUESTED', request_id: requestId, plan_id: msg.plan_id, now_ms: Date.now() });
+  }
+
   private async requestDraftForSegment(
     resolved: ResolvedSegment,
     nowMs: number,
@@ -621,8 +643,10 @@ export class SupervisorProcess {
     if (!draft) return;
 
     if (this.finalizedForPlanId === draft.id) return;
-    if (nowMs < this.currentSegmentEndMs - FINALIZATION_LEAD_SECONDS * 1000) return;
 
+    // Finalize immediately — handlePlanDraftReady covers the live path; this
+    // covers restart where PLAN_DRAFT_READY won't re-fire for an existing draft.
+    void nowMs;
     this.finalizedForPlanId = draft.id;
     const requestId = randomUUID();
     this.logger?.info(
