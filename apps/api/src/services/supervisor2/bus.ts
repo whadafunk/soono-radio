@@ -91,6 +91,61 @@ export type BusMessage =
       // ids the planner is removing from a previously-finalized plan; the
       // content process should reverse any state update CONFIRM_USED applied
       dropped_ids: number[];
+    }
+  // ─── Phase 3: Supervisor ↔ Planner protocol ─────────────────────────────────
+  //
+  // The Supervisor drives planning. It signals the Planner at segment start
+  // (draft), 30–60s before the boundary (finalize), and any time drift
+  // requires the remaining items to be rebuilt (replan).
+  | {
+      // Supervisor → Planner: request a draft plan for the next segment.
+      type: 'PLAN_DRAFT_REQUESTED';
+      request_id: string;
+      segment_id: number;
+      // Unix ms — identifies this clock-instance of the segment, scopes
+      // per-instance lookups (rundown assignments etc.).
+      clock_instance_started_at: number;
+      // Segment duration already adjusted for drift by the Supervisor.
+      target_duration_seconds: number;
+      now_ms: number;
+    }
+  | {
+      // Planner → Supervisor + Queue Feeder: draft plan written to SQLite.
+      type: 'PLAN_DRAFT_READY';
+      request_id: string;
+      plan_id: number;
+      segment_id: number;
+    }
+  | {
+      // Supervisor → Planner: finalize the draft (fresh pacing, operator edits).
+      type: 'PLAN_FINALIZE_REQUESTED';
+      request_id: string;
+      plan_id: number;
+      now_ms: number;
+    }
+  | {
+      // Planner → Supervisor + Queue Feeder: plan finalized, queue feeder may
+      // start executing.
+      type: 'PLAN_FINALIZED';
+      request_id: string;
+      plan_id: number;
+    }
+  | {
+      // Supervisor → Planner: replan the remaining items in an active plan
+      // (drift correction). Items at positions ≥ from_position are eligible
+      // for replacement; everything before is already played or in-flight.
+      type: 'PLAN_REPLAN_REQUESTED';
+      request_id: string;
+      plan_id: number;
+      from_position: number;
+      remaining_seconds: number;
+      now_ms: number;
+    }
+  | {
+      // Planner → Supervisor: replan complete.
+      type: 'PLAN_REPLANNED';
+      request_id: string;
+      plan_id: number;
     };
 
 const emitter = new EventEmitter();
