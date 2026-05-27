@@ -31,7 +31,7 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/push",
-  fun (~protocol=_, ~data, ~headers=_, _) ->
+  fun (_headers, data) ->
     begin
       parsed = json.parse(default={uri = ""}, data)
       ann_uri = parsed.uri
@@ -50,7 +50,7 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/queue",
-  fun (~protocol=_, ~data=_, ~headers=_, _) ->
+  fun (_headers, _data) ->
     begin
       ids = list.map(fun (r) -> "#{request.id(r)}", queue.queue())
       depth = list.length(ids)
@@ -62,7 +62,7 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/skip",
-  fun (~protocol=_, ~data=_, ~headers=_, _) ->
+  fun (_headers, _data) ->
     begin
       queue.skip()
       (200, [("Content-Type", "application/json")], json.stringify({ok = true}))
@@ -73,7 +73,7 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/live-status",
-  fun (~protocol=_, ~data=_, ~headers=_, _) ->
+  fun (_headers, _data) ->
     begin
       connected = live.is_connected()
       (200, [("Content-Type", "application/json")], json.stringify({connected = connected}))
