@@ -43,7 +43,10 @@ import {
 
 // Drift thresholds (Decision 20).
 const DRIFT_CORRECTION_THRESHOLD_SECONDS = 10;
-const COASTING_CORRECTION_THRESHOLD_SECONDS = 5;
+// Coasting threshold deliberately high: a -5s baseline was triggering replans
+// every few seconds when items were dropped (LS down on startup), creating a
+// runaway 100+ item replan spiral. 30s gives real coasting time to stabilise.
+const COASTING_CORRECTION_THRESHOLD_SECONDS = 30;
 
 // Maps DriftEventType vocabulary to the plan_items.content_type values used
 // when filtering items for catching_up_order skipping.
@@ -388,7 +391,10 @@ export class SupervisorProcess {
       .where(eq(planItemsTable.plan_id, this.activePlanId))
       .orderBy(asc(planItemsTable.position));
 
-    const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
+    // 'dropped' is NOT counted — a dropped item was not played; it consumed 0s
+    // of actual airtime. Counting it inflates consumedSeconds and creates false
+    // negative drift that triggers runaway coasting replans.
+    const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped']);
     let consumedSeconds = 0;
     let expectedEndMs: number | null = null;
 
@@ -467,9 +473,20 @@ export class SupervisorProcess {
       }
       this.currentPlayHistoryId = currentPhid;
     } else {
+      // No play_history_id in LS metadata (silence/blank or unmapped track).
+      // Close the most recent open play_history row and mark its plan_item as 'played'.
       const closed = await closeMostRecentOpenRow(this.db, onAirMs).catch(() => null);
       this.currentPlayHistoryId = null;
       if (closed != null) {
+        await this.db
+          .update(planItemsTable)
+          .set({ status: 'played' })
+          .where(
+            and(
+              eq(planItemsTable.status, 'playing'),
+              eq(planItemsTable.play_history_id, closed),
+            ),
+          );
         this.logger?.info(
           { process: 'supervisor', event: 'PLAY_HISTORY_CLOSE_FALLBACK', closed_id: closed },
           'supervisor: closed open play_history without phid match',

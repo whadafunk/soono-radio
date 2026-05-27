@@ -199,6 +199,10 @@ export class QueueFeederProcess {
     try {
       await HarborClient.push(annotated);
     } catch (err) {
+      // Harbor unavailable (LS not yet running, network error, etc.).
+      // Leave the plan_item as 'pending' so it will be retried on the
+      // next push trigger. Dropping it would inflate consumedSeconds with
+      // 0-airtime content and trigger a runaway coasting replan spiral.
       this.logger?.error(
         {
           err,
@@ -206,11 +210,10 @@ export class QueueFeederProcess {
           event: 'PUSH_ERROR',
           plan_item_id: item.id,
           play_history_id: playHistoryId,
+          note: 'item left pending for retry',
         },
-        'queueFeeder: harbor push failed',
+        'queueFeeder: harbor push failed — item kept pending for retry',
       );
-      // Mark the item dropped so we don't loop on the same broken row.
-      await this.markPlanItemDropped(item.id);
       return;
     }
 

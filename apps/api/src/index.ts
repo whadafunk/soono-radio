@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
 import Fastify from 'fastify';
@@ -42,8 +42,24 @@ import { PlannerProcess } from './services/supervisor2/processes/planner.js';
 import { QueueFeederProcess } from './services/supervisor2/processes/queueFeeder.js';
 import { SupervisorProcess } from './services/supervisor2/processes/supervisor.js';
 
+// Write structured JSON logs to a rotating file so supervisor events can be
+// reviewed after the fact with: tail -f logs/api.log | jq 'select(.event)'
+const LOG_DIR = join(fileURLToPath(new URL('../../..', import.meta.url)), 'logs');
+try { mkdirSync(LOG_DIR, { recursive: true }); } catch { /* already exists */ }
+const LOG_FILE = join(LOG_DIR, 'api.log');
+
 const fastify = Fastify({
-  logger: true,
+  logger: {
+    level: 'debug',
+    transport: {
+      targets: [
+        // Human-readable stdout for the dev terminal
+        { target: 'pino/file', options: { destination: 1 }, level: 'info' },
+        // Full debug JSON to file for post-hoc analysis
+        { target: 'pino/file', options: { destination: LOG_FILE }, level: 'debug' },
+      ],
+    },
+  },
 });
 
 fastify.register(helmet);
