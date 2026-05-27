@@ -31,7 +31,7 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/push",
-  fun (_headers, data, reply) ->
+  fun (reply, _headers, data) ->
     begin
       parsed = json.parse(default={uri = ""}, data())
       ann_uri = parsed.uri
