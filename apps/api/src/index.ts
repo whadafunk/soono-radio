@@ -24,6 +24,7 @@ import { rundownRoutes } from './routes/rundown.js';
 import { spotBudgetRoutes } from './routes/spotBudget.js';
 import { stationSettingsRoutes } from './routes/stationSettings.js';
 import { supervisorStatusRoutes } from './routes/supervisorStatus.js';
+import { supervisorControlRoutes } from './routes/supervisorControl.js';
 import { db, runMigrations } from './db/index.js';
 import { supervisorState as supervisorStateTable } from './db/schema.js';
 import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
@@ -77,6 +78,7 @@ fastify.register(rundownRoutes);
 fastify.register(spotBudgetRoutes);
 fastify.register(stationSettingsRoutes);
 fastify.register(supervisorStatusRoutes);
+fastify.register(supervisorControlRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Radio API Server' };
@@ -103,7 +105,7 @@ const start = async () => {
     // tries to read/update it.
     await db
       .insert(supervisorStateTable)
-      .values({ id: 1, current_drift_seconds: 0 })
+      .values({ id: 1, current_drift_seconds: 0, paused: false })
       .onConflictDoNothing();
 
     // Instantiate and start all seven Supervisor V2 processes (Level 1 — all

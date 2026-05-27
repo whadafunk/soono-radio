@@ -167,7 +167,8 @@ export type BusMessage =
       // the Queue Feeder doesn't need to interpret LS-specific events.
       type: 'LIVE_STATUS_CHANGED';
       active: boolean;
-    };
+    }
+  | { type: 'PUSH_NEXT_REQUESTED'; reason: string };
 
 const emitter = new EventEmitter();
 // Prevent Node from printing spurious MaxListenersExceededWarning during

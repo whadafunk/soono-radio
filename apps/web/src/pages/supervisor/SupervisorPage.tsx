@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   Activity,
   AlertTriangle,
@@ -12,9 +12,17 @@ import {
   Volume2,
   Layers,
   Loader,
+  SkipForward,
+  PauseCircle,
+  PlayCircle,
 } from 'lucide-react';
 import type { SupervisorV2PlanItem, SupervisorV2StopSetEstimate } from '@radio/shared';
-import { fetchSupervisorV2Status } from '../../api';
+import {
+  fetchSupervisorV2Status,
+  postSupervisorSkip,
+  postSupervisorPause,
+  postSupervisorResume,
+} from '../../api';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
@@ -43,17 +51,17 @@ function fmtRelativeTime(unixMs: number | null): string {
 
 const CONTENT_TYPE_META: Record<
   string,
-  { label: string; Icon: React.ElementType; color: string }
+  { label: string; Icon: React.ElementType; color: string; barColor: string }
 > = {
-  music:      { label: 'Music',      Icon: Music2,    color: 'text-indigo-400'  },
-  jingle:     { label: 'Jingle',     Icon: Volume2,   color: 'text-cyan-400'    },
-  branding:   { label: 'Branding',   Icon: Radio,     color: 'text-violet-400'  },
-  station_id: { label: 'Station ID', Icon: Radio,     color: 'text-violet-400'  },
-  campaign:   { label: 'Campaign',   Icon: Megaphone, color: 'text-amber-400'   },
-  promo:      { label: 'Promo',      Icon: Megaphone, color: 'text-orange-400'  },
-  rundown:    { label: 'Rundown',    Icon: FileText,  color: 'text-teal-400'    },
-  voice_track: { label: 'Voice',     Icon: Mic2,      color: 'text-pink-400'    },
-  filler:     { label: 'Filler',     Icon: Layers,    color: 'text-zinc-400'    },
+  music:       { label: 'Music',      Icon: Music2,    color: 'text-indigo-400',  barColor: 'bg-indigo-500'  },
+  jingle:      { label: 'Jingle',     Icon: Volume2,   color: 'text-cyan-400',    barColor: 'bg-cyan-500'    },
+  branding:    { label: 'Branding',   Icon: Radio,     color: 'text-violet-400',  barColor: 'bg-violet-500'  },
+  station_id:  { label: 'Station ID', Icon: Radio,     color: 'text-violet-400',  barColor: 'bg-violet-500'  },
+  campaign:    { label: 'Campaign',   Icon: Megaphone, color: 'text-amber-400',   barColor: 'bg-amber-500'   },
+  promo:       { label: 'Promo',      Icon: Megaphone, color: 'text-orange-400',  barColor: 'bg-orange-500'  },
+  rundown:     { label: 'Rundown',    Icon: FileText,  color: 'text-teal-400',    barColor: 'bg-teal-500'    },
+  voice_track: { label: 'Voice',      Icon: Mic2,      color: 'text-pink-400',    barColor: 'bg-pink-500'    },
+  filler:      { label: 'Filler',     Icon: Layers,    color: 'text-zinc-400',    barColor: 'bg-zinc-500'    },
 };
 
 function ContentTypeCell({ type }: { type: string }) {
@@ -61,6 +69,7 @@ function ContentTypeCell({ type }: { type: string }) {
     label: type,
     Icon: Circle,
     color: 'text-zinc-400',
+    barColor: 'bg-zinc-500',
   };
   const { label, Icon, color } = meta;
   return (
@@ -75,19 +84,235 @@ function ContentTypeCell({ type }: { type: string }) {
 
 function StatusBadge({ status }: { status: string }) {
   const cfg: Record<string, { cls: string; label: string }> = {
-    pending:           { cls: 'bg-zinc-800 text-zinc-400',              label: 'pending'    },
-    playing:           { cls: 'bg-indigo-600/60 text-indigo-200',       label: 'playing'    },
-    played:            { cls: 'bg-zinc-800/60 text-zinc-500',           label: 'played'     },
-    dropped:           { cls: 'bg-red-900/40 text-red-400',             label: 'dropped'    },
-    skipped:           { cls: 'bg-zinc-800/60 text-zinc-500',           label: 'skipped'    },
-    supervisor_skipped:{ cls: 'bg-amber-900/40 text-amber-400',         label: 'sv-skipped' },
-    operator_skipped:  { cls: 'bg-orange-900/40 text-orange-400',       label: 'op-skipped' },
+    pending:            { cls: 'bg-zinc-800 text-zinc-400',              label: 'pending'    },
+    playing:            { cls: 'bg-indigo-600/60 text-indigo-200',       label: 'playing'    },
+    played:             { cls: 'bg-zinc-800/60 text-zinc-500',           label: 'played'     },
+    dropped:            { cls: 'bg-red-900/40 text-red-400',             label: 'dropped'    },
+    skipped:            { cls: 'bg-zinc-800/60 text-zinc-500',           label: 'skipped'    },
+    supervisor_skipped: { cls: 'bg-amber-900/40 text-amber-400',         label: 'sv-skipped' },
+    operator_skipped:   { cls: 'bg-orange-900/40 text-orange-400',       label: 'op-skipped' },
   };
   const { cls, label } = cfg[status] ?? { cls: 'bg-zinc-800 text-zinc-400', label: status };
   return (
     <span className={`inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-medium uppercase ${cls}`}>
       {label}
     </span>
+  );
+}
+
+// ─── Control bar ──────────────────────────────────────────────────────────────
+
+function ControlBar({
+  paused,
+  hasActivePlan,
+  liveTakeoverActive,
+}: {
+  paused: boolean;
+  hasActivePlan: boolean;
+  liveTakeoverActive: boolean;
+}) {
+  const queryClient = useQueryClient();
+
+  const skipMutation = useMutation({
+    mutationFn: postSupervisorSkip,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
+  });
+
+  const pauseMutation = useMutation({
+    mutationFn: postSupervisorPause,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
+  });
+
+  const resumeMutation = useMutation({
+    mutationFn: postSupervisorResume,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
+  });
+
+  const skipDisabled = !hasActivePlan || liveTakeoverActive || skipMutation.isPending;
+  const toggleDisabled = pauseMutation.isPending || resumeMutation.isPending;
+
+  return (
+    <div className="flex items-center gap-3">
+      <button
+        onClick={() => skipMutation.mutate()}
+        disabled={skipDisabled}
+        className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
+          ${skipDisabled
+            ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
+            : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'
+          }`}
+      >
+        <SkipForward className="w-4 h-4" />
+        Skip
+      </button>
+
+      {paused ? (
+        <button
+          onClick={() => resumeMutation.mutate()}
+          disabled={toggleDisabled}
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
+            ${toggleDisabled
+              ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
+              : 'bg-green-900/40 text-green-300 border border-green-800 hover:bg-green-900/60 hover:text-green-200'
+            }`}
+        >
+          <PlayCircle className="w-4 h-4" />
+          Resume
+        </button>
+      ) : (
+        <button
+          onClick={() => pauseMutation.mutate()}
+          disabled={toggleDisabled}
+          className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
+            ${toggleDisabled
+              ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
+              : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'
+            }`}
+        >
+          <PauseCircle className="w-4 h-4" />
+          Pause
+        </button>
+      )}
+    </div>
+  );
+}
+
+// ─── Segment timeline ─────────────────────────────────────────────────────────
+
+function SegmentTimeline({
+  segmentStartedAtMs,
+  segmentDurationSeconds,
+  planConsumedSeconds,
+  planItems,
+  expectedCurrentItemEndMs,
+}: {
+  segmentStartedAtMs: number | null;
+  segmentDurationSeconds: number | null;
+  planConsumedSeconds: number;
+  planItems: SupervisorV2PlanItem[];
+  expectedCurrentItemEndMs: number | null;
+}) {
+  if (segmentStartedAtMs == null || segmentDurationSeconds == null || segmentDurationSeconds <= 0) {
+    return (
+      <section>
+        <h2 className="text-base font-semibold text-white mb-3">Segment Timeline</h2>
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 text-zinc-500 text-sm italic">
+          No active segment
+        </div>
+      </section>
+    );
+  }
+
+  const nowMs = Date.now();
+  const calendarElapsed = Math.max(0, (nowMs - segmentStartedAtMs) / 1000);
+  const remaining = Math.max(0, segmentDurationSeconds - calendarElapsed);
+
+  const drift = calendarElapsed - planConsumedSeconds;
+  const absDrift = Math.abs(drift);
+  const driftCursorColor =
+    absDrift < 5 ? 'bg-green-400' : absDrift < 10 ? 'bg-amber-400' : 'bg-red-400';
+
+  // Build item positions: cumulative offset from segment start
+  const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
+  let cursor = 0;
+  const itemBlocks: Array<{
+    left: number;
+    width: number;
+    barColor: string;
+    isTerminal: boolean;
+    label: string;
+  }> = [];
+
+  for (const item of planItems) {
+    const dur = item.planned_duration_seconds ?? 0;
+    const left = (cursor / segmentDurationSeconds) * 100;
+    const width = (dur / segmentDurationSeconds) * 100;
+    const meta = CONTENT_TYPE_META[item.content_type] ?? { barColor: 'bg-zinc-500', label: item.content_type };
+    itemBlocks.push({
+      left,
+      width,
+      barColor: meta.barColor,
+      isTerminal: terminalStatuses.has(item.status),
+      label: item.media_title ?? item.content_type,
+    });
+    cursor += dur;
+  }
+
+  const calendarCursorLeft = Math.min(100, (calendarElapsed / segmentDurationSeconds) * 100);
+  const planCursorLeft = Math.min(100, (planConsumedSeconds / segmentDurationSeconds) * 100);
+
+  const expectedEndLeft =
+    expectedCurrentItemEndMs != null
+      ? Math.min(100, ((expectedCurrentItemEndMs - segmentStartedAtMs) / 1000 / segmentDurationSeconds) * 100)
+      : null;
+
+  return (
+    <section>
+      <h2 className="text-base font-semibold text-white mb-3">Segment Timeline</h2>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+        {/* Header stats */}
+        <div className="flex items-center gap-6 mb-3 text-xs text-zinc-400">
+          <span>
+            <span className="text-zinc-300 font-mono">{fmtMmSs(calendarElapsed)}</span>
+            {' '}elapsed
+          </span>
+          <span>
+            <span className="text-zinc-300 font-mono">{fmtMmSs(remaining)}</span>
+            {' '}remaining
+          </span>
+          <span>
+            drift{' '}
+            <span className={`font-mono font-semibold ${
+              absDrift < 5 ? 'text-green-400' : absDrift < 10 ? 'text-amber-400' : 'text-red-400'
+            }`}>
+              {fmtDriftSign(drift)}
+            </span>
+          </span>
+        </div>
+
+        {/* Timeline bar */}
+        <div className="relative h-10 bg-zinc-800 rounded overflow-hidden">
+          {/* Plan item blocks */}
+          {itemBlocks.map((block, i) => (
+            <div
+              key={i}
+              className={`absolute top-1 bottom-1 rounded-sm ${block.barColor} ${block.isTerminal ? 'opacity-30' : 'opacity-70'}`}
+              style={{ left: `${block.left}%`, width: `${Math.max(0.3, block.width)}%` }}
+              title={block.label}
+            />
+          ))}
+
+          {/* Plan cursor (colored by drift) */}
+          <div
+            className={`absolute top-0 bottom-0 w-0.5 ${driftCursorColor}`}
+            style={{ left: `${planCursorLeft}%` }}
+            title={`Plan: ${fmtMmSs(planConsumedSeconds)}`}
+          />
+
+          {/* Expected end of current item */}
+          {expectedEndLeft != null && (
+            <div
+              className="absolute top-0 bottom-0 w-px bg-zinc-500 opacity-60"
+              style={{ left: `${expectedEndLeft}%` }}
+              title="Expected end of current item"
+            />
+          )}
+
+          {/* Calendar cursor (white, always on top) */}
+          <div
+            className="absolute top-0 bottom-0 w-0.5 bg-white"
+            style={{ left: `${calendarCursorLeft}%` }}
+            title={`Clock: ${fmtMmSs(calendarElapsed)}`}
+          />
+        </div>
+
+        {/* Legend */}
+        <div className="flex items-center gap-4 mt-2 text-[10px] text-zinc-500">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-white inline-block" />wall clock</span>
+          <span className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${driftCursorColor} inline-block`} />plan position</span>
+        </div>
+      </div>
+    </section>
   );
 }
 
@@ -98,6 +323,15 @@ function LiveTakeoverBanner() {
     <div className="flex items-center gap-3 px-4 py-3 bg-red-900/30 border border-red-700 rounded-lg">
       <Mic2 className="w-5 h-5 text-red-400 flex-shrink-0" />
       <span className="text-red-300 font-semibold">Live takeover in progress</span>
+    </div>
+  );
+}
+
+function PausedBanner() {
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 bg-amber-900/30 border border-amber-700 rounded-lg">
+      <PauseCircle className="w-5 h-5 text-amber-400 flex-shrink-0" />
+      <span className="text-amber-300 font-semibold">Automation paused</span>
     </div>
   );
 }
@@ -376,7 +610,7 @@ export function SupervisorPage() {
             Live visibility into the automation engine
           </p>
         </div>
-        <div className="flex items-center gap-2 mt-1">
+        <div className="flex items-center gap-4 mt-1">
           {isLoading && (
             <span className="flex items-center gap-1.5 text-xs text-zinc-400">
               <Loader className="w-3 h-3 animate-spin" />
@@ -389,6 +623,11 @@ export function SupervisorPage() {
               Polling every 3s
             </span>
           )}
+          <ControlBar
+            paused={data?.paused ?? false}
+            hasActivePlan={data?.active_plan_id != null}
+            liveTakeoverActive={data?.live_takeover_active ?? false}
+          />
         </div>
       </div>
 
@@ -403,12 +642,22 @@ export function SupervisorPage() {
 
       {data?.live_takeover_active && <LiveTakeoverBanner />}
 
-      {!data?.live_takeover_active && data?.active_plan_id === null && !isLoading && (
+      {data?.paused && <PausedBanner />}
+
+      {!data?.live_takeover_active && !data?.paused && data?.active_plan_id === null && !isLoading && (
         <div className="flex items-center gap-3 px-4 py-3 bg-zinc-800/40 border border-zinc-700 rounded-lg">
           <CheckCircle className="w-4 h-4 text-zinc-400 flex-shrink-0" />
           <span className="text-zinc-400 text-sm">No active plan — supervisor is idle.</span>
         </div>
       )}
+
+      <SegmentTimeline
+        segmentStartedAtMs={data?.segment_started_at_ms ?? null}
+        segmentDurationSeconds={data?.segment_duration_seconds ?? null}
+        planConsumedSeconds={data?.plan_consumed_seconds ?? 0}
+        planItems={data?.plan_items ?? []}
+        expectedCurrentItemEndMs={data?.expected_current_item_end_ms ?? null}
+      />
 
       <DriftPanel
         driftSeconds={data?.current_drift_seconds ?? 0}

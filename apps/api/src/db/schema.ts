@@ -1196,6 +1196,7 @@ export const supervisorState = sqliteTable('supervisor_state', {
   current_drift_seconds: real('current_drift_seconds').notNull().default(0),
   last_heartbeat_at: integer('last_heartbeat_at'),
   active_plan_id: integer('active_plan_id').references(() => plans.id, { onDelete: 'set null' }),
+  paused: integer('paused', { mode: 'boolean' }).notNull().default(false),
 });
 
 export type SupervisorStateRow = typeof supervisorState.$inferSelect;

@@ -1,14 +1,9 @@
 // Queue Feeder — Phase 4.
 //
-// Triggered by the LS_TRACK_ENDING bus event, which originates from the
-// LiquidSoap `on_end` webhook a few seconds before the current track ends.
-// The Queue Feeder reads the next pending plan_item from the active plan,
-// writes a play_history row, and pushes an annotated URI to the LS harbor.
-//
-// The Queue Feeder is intentionally dumb: it has no opinions about pacing,
-// drift, or scheduling. It executes the plan the Supervisor / Planner laid
-// out. The only fallback is the safety fill — if the plan is exhausted or
-// missing, push a random music track so the station doesn't go silent.
+// Listens for PUSH_NEXT_REQUESTED (clock-loop driven) and LS_TRACK_ENDING
+// (LiquidSoap backup webhook) to keep the harbor queue populated. The
+// pushInFlight guard prevents concurrent pushes when both triggers fire close
+// together.
 //
 // During live takeover the Supervisor emits LIVE_STATUS_CHANGED with
 // active=true; the Queue Feeder remembers this and stops pushing until the
@@ -36,6 +31,9 @@ export class QueueFeederProcess {
   // Supervisor via LIVE_STATUS_CHANGED so the Queue Feeder doesn't have to
   // share mutable state with another process module.
   private liveActive = false;
+  // Prevents concurrent pushes when PUSH_NEXT_REQUESTED and LS_TRACK_ENDING
+  // fire close together.
+  private pushInFlight = false;
 
   constructor(
     private readonly _bus: typeof bus,
@@ -44,11 +42,25 @@ export class QueueFeederProcess {
   ) {}
 
   start(): void {
+    // Primary trigger: clock-loop driven push requests from the Supervisor.
     this.unsubscribers.push(
-      this._bus.on<BusMessage & { type: 'LS_TRACK_ENDING' }>('LS_TRACK_ENDING', (msg) => {
-        void this.handleTrackEnding(msg).catch((err) => {
+      this._bus.on<BusMessage & { type: 'PUSH_NEXT_REQUESTED' }>('PUSH_NEXT_REQUESTED', (msg) => {
+        void this.handlePushRequest(msg.reason).catch((err) => {
           this.logger?.error(
-            { err, process: 'queueFeeder', event: 'HANDLER_FAILED' },
+            { err, process: 'queueFeeder', event: 'HANDLER_FAILED', source: 'PUSH_NEXT_REQUESTED' },
+            'queueFeeder: unhandled error in PUSH_NEXT_REQUESTED handler',
+          );
+        });
+      }),
+    );
+    // Backup trigger: LiquidSoap on_end webhook, fires a few seconds before
+    // current track ends. Kept as a safety net for cases where the clock loop
+    // doesn't emit in time.
+    this.unsubscribers.push(
+      this._bus.on<BusMessage & { type: 'LS_TRACK_ENDING' }>('LS_TRACK_ENDING', (_msg) => {
+        void this.handlePushRequest('ls_track_ending').catch((err) => {
+          this.logger?.error(
+            { err, process: 'queueFeeder', event: 'HANDLER_FAILED', source: 'LS_TRACK_ENDING' },
             'queueFeeder: unhandled error in LS_TRACK_ENDING handler',
           );
         });
@@ -78,17 +90,25 @@ export class QueueFeederProcess {
     return this.liveActive;
   }
 
-  private async handleTrackEnding(
-    _msg: BusMessage & { type: 'LS_TRACK_ENDING' },
-  ): Promise<void> {
-    if (this.liveActive) {
-      this.logger?.info(
-        { process: 'queueFeeder', event: 'PUSH_SUPPRESSED', reason: 'live_takeover' },
-        'queueFeeder: skipping push, live takeover active',
-      );
+  private async handlePushRequest(source: string): Promise<void> {
+    if (this.liveActive || this.pushInFlight) {
+      if (this.liveActive) {
+        this.logger?.info(
+          { process: 'queueFeeder', event: 'PUSH_SUPPRESSED', reason: 'live_takeover', source },
+          'queueFeeder: skipping push, live takeover active',
+        );
+      }
       return;
     }
+    this.pushInFlight = true;
+    try {
+      await this.doPush(source);
+    } finally {
+      this.pushInFlight = false;
+    }
+  }
 
+  private async doPush(source: string): Promise<void> {
     const state = await this.loadSupervisorState();
     const activePlanId = state?.active_plan_id ?? null;
 
@@ -99,7 +119,10 @@ export class QueueFeederProcess {
 
     const nextItem = await this.findNextPendingItem(activePlanId);
     if (!nextItem) {
-      await this.safetyFill('plan_exhausted', activePlanId);
+      this.logger?.info(
+        { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'no_pending_items', source },
+        'queueFeeder: no pending items in plan, skipping push',
+      );
       return;
     }
 

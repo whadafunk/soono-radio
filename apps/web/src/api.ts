@@ -35,6 +35,8 @@ import {
   StationSettings,
   SupervisorV2Status,
   SupervisorV2StatusSchema,
+  SupervisorV2ControlResponse,
+  SupervisorV2ControlResponseSchema,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -1327,5 +1329,23 @@ export async function fetchSupervisorV2Status(): Promise<SupervisorV2Status> {
   const res = await fetch(`${API_BASE}/supervisor/v2/status`);
   if (!res.ok) throw new Error(`Failed to fetch supervisor v2 status: ${res.statusText}`);
   return SupervisorV2StatusSchema.parse(await res.json());
+}
+
+export async function postSupervisorSkip(): Promise<SupervisorV2ControlResponse> {
+  const res = await fetch(`${API_BASE}/supervisor/v2/skip`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Skip failed: ${res.statusText}`);
+  return SupervisorV2ControlResponseSchema.parse(await res.json());
+}
+
+export async function postSupervisorPause(): Promise<SupervisorV2ControlResponse> {
+  const res = await fetch(`${API_BASE}/supervisor/v2/pause`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Pause failed: ${res.statusText}`);
+  return SupervisorV2ControlResponseSchema.parse(await res.json());
+}
+
+export async function postSupervisorResume(): Promise<SupervisorV2ControlResponse> {
+  const res = await fetch(`${API_BASE}/supervisor/v2/resume`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Resume failed: ${res.statusText}`);
+  return SupervisorV2ControlResponseSchema.parse(await res.json());
 }
 

@@ -179,5 +179,13 @@ export const SupervisorV2StatusSchema = z.object({
   live_takeover_active: z.boolean(),
   plan_items: z.array(SupervisorV2PlanItemSchema),
   stop_set_estimates: z.array(SupervisorV2StopSetEstimateSchema),
+  paused: z.boolean(),
+  segment_started_at_ms: z.number().nullable(),
+  segment_duration_seconds: z.number().nullable(),
+  plan_consumed_seconds: z.number(),
+  expected_current_item_end_ms: z.number().nullable(),
 });
 export type SupervisorV2Status = z.infer<typeof SupervisorV2StatusSchema>;
+
+export const SupervisorV2ControlResponseSchema = z.object({ ok: z.boolean() });
+export type SupervisorV2ControlResponse = z.infer<typeof SupervisorV2ControlResponseSchema>;

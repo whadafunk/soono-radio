@@ -1,10 +1,14 @@
-// Supervisor — Phase 4.
+// Supervisor — Phase 4 (clock-loop rewrite).
 //
-// Central orchestration hub. Receives every LiquidSoap webhook event, drives
-// the Planner at segment boundaries, accumulates drift, applies drift
-// correction via catching_up_order / coasting_order, and manages live
-// takeover. Owns the `supervisor_state` row (id=1) for crash-resilient
-// runtime state.
+// Drives all scheduling proactively via a 500ms setInterval tick instead of
+// relying solely on LiquidSoap webhooks. This eliminates the bootstrap
+// deadlock (empty queue → no webhooks → no plan → empty queue).
+//
+// Two playheads are tracked each tick:
+//   Calendar playhead: (nowMs - segmentStartMs) / 1000
+//   Plan playhead:     sum of planned_duration_seconds for terminal items +
+//                      elapsed time of the currently-playing item
+//   Drift = calendarElapsed − planConsumed (positive = running late)
 //
 // Design references:
 //   Decision 17 — Supervisor as central hub; Deviation Monitor folded in.
@@ -22,6 +26,7 @@ import {
   liveEvents as liveEventsTable,
   planItems as planItemsTable,
   plans as plansTable,
+  playHistory as playHistoryTable,
   supervisorState as supervisorStateTable,
   type PlanItem,
   type PlanItemContentType,
@@ -33,18 +38,14 @@ import { resolveCurrentSegment, type ResolvedSegment } from '../clockResolver.js
 import {
   closeMostRecentOpenRow,
   closeOpenRowsBefore,
-  closeRow,
   stampStarted,
 } from '../playHistoryService.js';
-import { playHistory as playHistoryTable } from '../../../db/schema.js';
 
 // How far ahead of the segment boundary we trigger finalization.
 const FINALIZATION_LEAD_SECONDS = 60;
 // Drift thresholds (Decision 20).
 const DRIFT_CORRECTION_THRESHOLD_SECONDS = 10;
 const COASTING_CORRECTION_THRESHOLD_SECONDS = 5;
-// Safety-net heartbeat period.
-const SAFETY_NET_INTERVAL_MS = 30_000;
 
 // Maps DriftEventType vocabulary to the plan_items.content_type values used
 // when filtering items for catching_up_order skipping.
@@ -58,7 +59,7 @@ const DRIFT_TYPE_TO_CONTENT_TYPES: Record<DriftEventType, PlanItemContentType[]>
 
 export class SupervisorProcess {
   private readonly unsubscribers: Array<() => void> = [];
-  private safetyNetTimer: NodeJS.Timeout | null = null;
+  private tickTimer: NodeJS.Timeout | null = null;
 
   // In-memory state. The DB still holds the durable copy; these are caches
   // populated on first read and kept current on each event.
@@ -83,6 +84,20 @@ export class SupervisorProcess {
   // Bookkeeping for replan request_ids so we can correlate PLAN_REPLANNED
   // responses with the segment they were issued for.
   private pendingReplanForPlanId: number | null = null;
+  // Paused flag — read from DB each tick so the control endpoint's writes
+  // take effect immediately.
+  private isPaused = false;
+
+  // Segment cache — avoids a DB round-trip on every 500ms tick.
+  private cachedSegment: ResolvedSegment | null = null;
+  private cachedSegmentValidUntilMs = 0;
+
+  // Heartbeat throttle — write at most once per 2.5s even though we tick at 500ms.
+  private lastHeartbeatWriteMs = 0;
+  private readonly TICK_INTERVAL_MS = 500;
+  // How many milliseconds before expectedEndMs we emit PUSH_NEXT_REQUESTED.
+  private readonly PUSH_LEAD_MS = 8_000;
+  private readonly HEARTBEAT_WRITE_INTERVAL_MS = 2_500;
 
   constructor(
     private readonly _bus: typeof bus,
@@ -97,16 +112,6 @@ export class SupervisorProcess {
           this.logger?.error(
             { err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'LS_TRACK_STARTED' },
             'supervisor: LS_TRACK_STARTED handler failed',
-          );
-        });
-      }),
-    );
-    this.unsubscribers.push(
-      this._bus.on<BusMessage & { type: 'LS_TRACK_ENDING' }>('LS_TRACK_ENDING', (msg) => {
-        void this.handleTrackEnding(msg).catch((err) => {
-          this.logger?.error(
-            { err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'LS_TRACK_ENDING' },
-            'supervisor: LS_TRACK_ENDING handler failed',
           );
         });
       }),
@@ -174,21 +179,29 @@ export class SupervisorProcess {
     // fails we keep the in-memory defaults.
     void this.hydrateFromDb();
 
-    // Safety-net heartbeat.
-    this.safetyNetTimer = setInterval(() => {
-      void this.safetyNetTick().catch((err) => {
+    // Start the clock loop — this is the primary driver of all scheduling.
+    this.tickTimer = setInterval(() => {
+      void this.tick().catch((err) => {
         this.logger?.error(
-          { err, process: 'supervisor', event: 'SAFETY_NET_FAILED' },
-          'supervisor: safety net tick failed',
+          { err, process: 'supervisor', event: 'TICK_FAILED' },
+          'supervisor: clock tick failed',
         );
       });
-    }, SAFETY_NET_INTERVAL_MS);
+    }, this.TICK_INTERVAL_MS);
+
+    // Immediate first tick so we don't wait 500ms before the first check.
+    void this.tick().catch((err) => {
+      this.logger?.error(
+        { err, process: 'supervisor', event: 'TICK_FAILED' },
+        'supervisor: initial tick failed',
+      );
+    });
   }
 
   stop(): void {
-    if (this.safetyNetTimer) {
-      clearInterval(this.safetyNetTimer);
-      this.safetyNetTimer = null;
+    if (this.tickTimer) {
+      clearInterval(this.tickTimer);
+      this.tickTimer = null;
     }
     for (const unsub of this.unsubscribers) unsub();
     this.unsubscribers.length = 0;
@@ -217,6 +230,7 @@ export class SupervisorProcess {
       this.currentSegmentId = row.current_segment_id ?? null;
       this.currentDriftSeconds = row.current_drift_seconds ?? 0;
       this.activePlanId = row.active_plan_id ?? null;
+      this.isPaused = row.paused ?? false;
     } catch (err) {
       this.logger?.error(
         { err, process: 'supervisor', event: 'HYDRATE_FAILED' },
@@ -225,18 +239,170 @@ export class SupervisorProcess {
     }
   }
 
+  // ─── Clock loop ─────────────────────────────────────────────────────────────
+
+  private async tick(): Promise<void> {
+    // Re-read paused flag from DB — control endpoint writes it directly.
+    const [stateRow] = await this.db
+      .select({ paused: supervisorStateTable.paused })
+      .from(supervisorStateTable)
+      .where(eq(supervisorStateTable.id, 1));
+    this.isPaused = stateRow?.paused ?? false;
+
+    if (this.isPaused) return;
+
+    const nowMs = Date.now();
+
+    // --- Heartbeat (throttled to once per 2.5s) ---
+    if (nowMs - this.lastHeartbeatWriteMs >= this.HEARTBEAT_WRITE_INTERVAL_MS) {
+      await this.updateHeartbeat(nowMs);
+      this.lastHeartbeatWriteMs = nowMs;
+    }
+
+    // --- Calendar playhead ---
+    const resolved = await this.getCachedSegment(nowMs);
+    if (!resolved) return;
+
+    // --- Segment boundary detection ---
+    const isNewSegment =
+      resolved.segment.id !== this.currentSegmentId ||
+      resolved.clockInstanceStartedAt !== this.currentClockInstanceMs;
+
+    if (isNewSegment) {
+      const previousId = this.currentSegmentId;
+      this.currentSegmentId = resolved.segment.id;
+      this.currentSegmentEndMs = resolved.segmentEndMs;
+      this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
+
+      await this.db
+        .update(supervisorStateTable)
+        .set({ current_segment_id: resolved.segment.id })
+        .where(eq(supervisorStateTable.id, 1));
+
+      this.logger?.info({
+        process: 'supervisor', event: 'SEGMENT_START',
+        segment_id: resolved.segment.id, previous_segment_id: previousId,
+        clock_instance_started_at: resolved.clockInstanceStartedAt,
+      }, 'supervisor: segment boundary crossed');
+
+      await this.requestDraftForSegment(resolved, nowMs);
+    }
+
+    // --- Finalization ---
+    await this.maybeFinalize(nowMs);
+
+    if (this.activePlanId == null) return;
+
+    // --- Plan playhead ---
+    const { consumedSeconds, expectedEndMs } = await this.computePlanPlayhead(nowMs);
+
+    // --- Drift ---
+    const calendarElapsed = (nowMs - resolved.segmentStartMs) / 1000;
+    const drift = calendarElapsed - consumedSeconds;
+    if (Math.abs(drift - this.currentDriftSeconds) > 0.5) {
+      this.currentDriftSeconds = drift;
+      await this.db
+        .update(supervisorStateTable)
+        .set({ current_drift_seconds: drift })
+        .where(eq(supervisorStateTable.id, 1));
+      this.logger?.info({
+        process: 'supervisor', event: 'DRIFT_UPDATE',
+        drift_seconds: drift, calendar_elapsed: calendarElapsed,
+        plan_consumed: consumedSeconds,
+      }, 'supervisor: drift updated from playheads');
+    }
+
+    // --- Push timing ---
+    const shouldPush =
+      (expectedEndMs != null && expectedEndMs - nowMs <= this.PUSH_LEAD_MS) ||
+      (expectedEndMs == null && await this.hasPendingItems(this.activePlanId));
+
+    if (shouldPush) {
+      this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
+    }
+
+    // --- Drift correction ---
+    await this.maybeApplyDriftCorrection(nowMs);
+  }
+
+  // ─── Segment cache ───────────────────────────────────────────────────────────
+
+  private async getCachedSegment(nowMs: number): Promise<ResolvedSegment | null> {
+    if (this.cachedSegment != null && nowMs < this.cachedSegmentValidUntilMs) {
+      return this.cachedSegment;
+    }
+    const resolved = await resolveCurrentSegment(nowMs, this.db);
+    this.cachedSegment = resolved;
+    this.cachedSegmentValidUntilMs = resolved
+      ? resolved.segmentEndMs - 100
+      : nowMs + 30_000;
+    return resolved;
+  }
+
+  // ─── Plan playhead ───────────────────────────────────────────────────────────
+
+  private async computePlanPlayhead(nowMs: number): Promise<{
+    consumedSeconds: number;
+    expectedEndMs: number | null;
+  }> {
+    if (this.activePlanId == null) return { consumedSeconds: 0, expectedEndMs: null };
+
+    const items = await this.db
+      .select()
+      .from(planItemsTable)
+      .where(eq(planItemsTable.plan_id, this.activePlanId))
+      .orderBy(asc(planItemsTable.position));
+
+    const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
+    let consumedSeconds = 0;
+    let expectedEndMs: number | null = null;
+
+    for (const item of items) {
+      if (terminalStatuses.has(item.status)) {
+        consumedSeconds += item.planned_duration_seconds ?? 0;
+      } else if (item.status === 'playing') {
+        let startedAtMs: number;
+        if (item.play_history_id != null) {
+          const [ph] = await this.db
+            .select({ started_at: playHistoryTable.started_at })
+            .from(playHistoryTable)
+            .where(eq(playHistoryTable.id, item.play_history_id));
+          // play_history.started_at is stored as a Date by Drizzle (timestamp mode).
+          startedAtMs = ph?.started_at ? new Date(ph.started_at).getTime() : nowMs - 5_000;
+        } else {
+          startedAtMs = nowMs - 5_000;
+        }
+        consumedSeconds += (nowMs - startedAtMs) / 1000;
+        expectedEndMs = startedAtMs + (item.planned_duration_seconds ?? 0) * 1_000;
+        break;
+      } else {
+        // pending — nothing more consumed
+        break;
+      }
+    }
+
+    return { consumedSeconds, expectedEndMs };
+  }
+
+  private async hasPendingItems(planId: number): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: planItemsTable.id })
+      .from(planItemsTable)
+      .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')))
+      .limit(1);
+    return row != null;
+  }
+
   // ─── LS_TRACK_STARTED ───────────────────────────────────────────────────────
 
   private async handleTrackStarted(
     msg: BusMessage & { type: 'LS_TRACK_STARTED' },
   ): Promise<void> {
-    const nowMs = Date.now();
     const onAirMs = Math.floor(msg.on_air_timestamp * 1000);
 
     // (1) Stamp started_at + close any previously-open play_history row.
     let currentPhid = msg.play_history_id;
     if (currentPhid == null) {
-      // Try to recover the id from the annotated URI metadata.
       const fromMeta = parsePhidFromMetadata(msg.metadata);
       if (fromMeta != null) currentPhid = fromMeta;
     }
@@ -253,8 +419,6 @@ export class SupervisorProcess {
       }
       this.currentPlayHistoryId = currentPhid;
     } else {
-      // Untagged play — close whatever was previously open so it doesn't
-      // hang forever, then leave currentPlayHistoryId null.
       const closed = await closeMostRecentOpenRow(this.db, onAirMs).catch(() => null);
       this.currentPlayHistoryId = null;
       if (closed != null) {
@@ -265,33 +429,17 @@ export class SupervisorProcess {
       }
     }
 
-    // (2) Heartbeat.
-    await this.updateHeartbeat(nowMs);
+    // (2) Invalidate segment cache so tick() re-resolves on next run.
+    this.cachedSegment = null;
+    this.cachedSegmentValidUntilMs = 0;
 
-    // (3) Drift update — only meaningful when the started track has a
-    //     plan_item we can compare against the planned start time.
-    if (currentPhid != null) {
-      await this.updateDriftFromPlayHistory(currentPhid, msg.on_air_timestamp);
-    }
-
-    // (4) Segment boundary check.
-    await this.maybeAdvanceSegmentState(nowMs);
-
-    // (5) Finalization check — if the active plan is still in draft status
-    //     and the boundary is within the finalization window.
-    await this.maybeFinalize(nowMs);
-
-    // (6) Drift correction decisions.
-    await this.maybeApplyDriftCorrection(nowMs);
-  }
-
-  // ─── LS_TRACK_ENDING ────────────────────────────────────────────────────────
-
-  private async handleTrackEnding(
-    _msg: BusMessage & { type: 'LS_TRACK_ENDING' },
-  ): Promise<void> {
-    await this.updateHeartbeat(Date.now());
-    // Queue Feeder handles the push. No further work in the Supervisor.
+    this.logger?.info(
+      {
+        process: 'supervisor', event: 'TRACK_STARTED',
+        play_history_id: currentPhid, on_air_ms: onAirMs,
+      },
+      'supervisor: track started',
+    );
   }
 
   // ─── Live takeover ──────────────────────────────────────────────────────────
@@ -382,10 +530,6 @@ export class SupervisorProcess {
   private async handlePlanFinalized(
     msg: BusMessage & { type: 'PLAN_FINALIZED' },
   ): Promise<void> {
-    // Promote the finalized plan to active when it covers the *next* segment
-    // boundary. The plan was created with status='draft' by the Planner and
-    // is now status='finalized'. We set status='active' and update
-    // supervisor_state.active_plan_id so the Queue Feeder picks from it.
     const [plan] = await this.db
       .select()
       .from(plansTable)
@@ -414,42 +558,7 @@ export class SupervisorProcess {
     );
   }
 
-  // ─── Segment boundary handling ──────────────────────────────────────────────
-
-  // Whenever we observe a new track start, we may have crossed into a new
-  // segment. If so, we request a draft plan for that segment from the Planner.
-  private async maybeAdvanceSegmentState(nowMs: number): Promise<void> {
-    const resolved = await resolveCurrentSegment(nowMs, this.db);
-    if (!resolved) return;
-
-    const becameNewSegment = this.currentSegmentId !== resolved.segment.id;
-    this.currentSegmentEndMs = resolved.segmentEndMs;
-    this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
-
-    if (becameNewSegment) {
-      const previousId = this.currentSegmentId;
-      this.currentSegmentId = resolved.segment.id;
-      await this.db
-        .update(supervisorStateTable)
-        .set({ current_segment_id: resolved.segment.id })
-        .where(eq(supervisorStateTable.id, 1));
-
-      this.logger?.info(
-        {
-          process: 'supervisor',
-          event: 'SEGMENT_START',
-          segment_id: resolved.segment.id,
-          previous_segment_id: previousId,
-          segment_type: resolved.segment.type,
-          clock_id: resolved.clock_id,
-          clock_instance_started_at: resolved.clockInstanceStartedAt,
-        },
-        'supervisor: segment boundary crossed',
-      );
-
-      await this.requestDraftForSegment(resolved, nowMs);
-    }
-  }
+  // ─── Draft / finalize ───────────────────────────────────────────────────────
 
   private async requestDraftForSegment(
     resolved: ResolvedSegment,
@@ -495,18 +604,10 @@ export class SupervisorProcess {
     });
   }
 
-  // Finalize the draft plan that covers the *current* segment when we are
-  // close enough to the boundary, and the plan still has status='draft'.
-  //
-  // The active plan model the supervisor follows in Phase 4: a draft is
-  // requested at segment start (above). The same draft becomes the active
-  // plan after finalization, since Phase 4 plans only one segment ahead of
-  // the queue feeder.
   private async maybeFinalize(nowMs: number): Promise<void> {
     if (this.currentSegmentId == null || this.currentSegmentEndMs == null) return;
     if (this.currentClockInstanceMs == null) return;
 
-    // Find the draft plan for the current segment instance.
     const [draft] = await this.db
       .select()
       .from(plansTable)
@@ -542,69 +643,6 @@ export class SupervisorProcess {
     });
   }
 
-  // ─── Drift accounting ───────────────────────────────────────────────────────
-
-  // Compares the on-air timestamp of the just-started track against the plan's
-  // expected start time for that item. Updates supervisor_state.
-  private async updateDriftFromPlayHistory(
-    playHistoryId: number,
-    onAirSeconds: number,
-  ): Promise<void> {
-    const [phRow] = await this.db
-      .select({ plan_item_id: playHistoryTable.plan_item_id })
-      .from(playHistoryTable)
-      .where(eq(playHistoryTable.id, playHistoryId));
-    if (!phRow?.plan_item_id) return;
-
-    const [planItem] = await this.db
-      .select()
-      .from(planItemsTable)
-      .where(eq(planItemsTable.id, phRow.plan_item_id));
-    if (!planItem) return;
-
-    const [plan] = await this.db
-      .select()
-      .from(plansTable)
-      .where(eq(plansTable.id, planItem.plan_id));
-    if (!plan) return;
-
-    // Sum planned durations of every prior item in this plan (by position).
-    const priors = await this.db
-      .select({
-        position: planItemsTable.position,
-        planned_duration_seconds: planItemsTable.planned_duration_seconds,
-      })
-      .from(planItemsTable)
-      .where(eq(planItemsTable.plan_id, plan.id));
-    let sumBefore = 0;
-    for (const row of priors) {
-      if (row.position < planItem.position) {
-        sumBefore += row.planned_duration_seconds ?? 0;
-      }
-    }
-    const expectedStartUnixSeconds =
-      plan.clock_instance_started_at / 1000 + sumBefore;
-    const driftSeconds = onAirSeconds - expectedStartUnixSeconds;
-
-    this.currentDriftSeconds = driftSeconds;
-    await this.db
-      .update(supervisorStateTable)
-      .set({ current_drift_seconds: driftSeconds })
-      .where(eq(supervisorStateTable.id, 1));
-
-    this.logger?.info(
-      {
-        process: 'supervisor',
-        event: 'DRIFT_UPDATE',
-        drift_seconds: driftSeconds,
-        plan_item_id: planItem.id,
-        plan_id: plan.id,
-        segment_id: plan.segment_id,
-      },
-      'supervisor: drift updated',
-    );
-  }
-
   // ─── Drift correction ───────────────────────────────────────────────────────
 
   private async maybeApplyDriftCorrection(nowMs: number): Promise<void> {
@@ -620,12 +658,10 @@ export class SupervisorProcess {
     }
   }
 
-  // Walk catching_up_order on the current segment and skip pending plan_items
-  // by content type until drift is absorbed.
   private async correctRunningBehind(nowMs: number): Promise<void> {
-    const segment = await this.loadCurrentSegment();
-    if (!segment) return;
-    const order = parseDriftOrder(segment.catching_up_order);
+    const resolved = await this.getCachedSegment(nowMs);
+    if (!resolved) return;
+    const order = parseDriftOrder(resolved.segment.catching_up_order);
     if (order.length === 0) return;
 
     const driftBefore = this.currentDriftSeconds;
@@ -635,7 +671,7 @@ export class SupervisorProcess {
       if (remainingDrift <= DRIFT_CORRECTION_THRESHOLD_SECONDS) break;
       const planItem = await this.findSkipCandidate(this.activePlanId!, type);
       if (!planItem) continue;
-      if (planItem.mandatory) continue; // never skip mandatory items
+      if (planItem.mandatory) continue;
 
       const isCurrentlyPlaying =
         this.currentPlayHistoryId != null &&
@@ -674,11 +710,9 @@ export class SupervisorProcess {
     void nowMs;
   }
 
-  // Running ahead — request a replan to inject filler. The Planner handles
-  // the actual coasting_order content selection.
   private async correctRunningAhead(nowMs: number): Promise<void> {
     if (this.activePlanId == null) return;
-    if (this.pendingReplanForPlanId === this.activePlanId) return; // already in flight
+    if (this.pendingReplanForPlanId === this.activePlanId) return;
 
     const fromPosition = await this.firstPendingPosition(this.activePlanId);
     const baseRemainingSeconds =
@@ -717,9 +751,6 @@ export class SupervisorProcess {
   ): Promise<PlanItem | null> {
     const contentTypes = DRIFT_TYPE_TO_CONTENT_TYPES[type];
     if (!contentTypes || contentTypes.length === 0) return null;
-    // We look at status='pending' AND status='playing' so the Supervisor can
-    // also pull the on-air item via skip(). dropping / supervisor_skipped /
-    // played are not eligible.
     const rows = await this.db
       .select()
       .from(planItemsTable)
@@ -734,26 +765,6 @@ export class SupervisorProcess {
     return null;
   }
 
-  private async loadCurrentSegment(): Promise<
-    | {
-        catching_up_order: unknown;
-        coasting_order: unknown;
-        id: number;
-      }
-    | null
-  > {
-    if (this.currentSegmentId == null) return null;
-    // Lightweight read — we only need the two ordering columns.
-    const resolved = await resolveCurrentSegment(Date.now(), this.db);
-    if (!resolved) return null;
-    if (resolved.segment.id !== this.currentSegmentId) return null;
-    return {
-      id: resolved.segment.id,
-      catching_up_order: resolved.segment.catching_up_order,
-      coasting_order: resolved.segment.coasting_order,
-    };
-  }
-
   private async firstPendingPosition(planId: number): Promise<number> {
     const [row] = await this.db
       .select({ position: planItemsTable.position })
@@ -764,42 +775,6 @@ export class SupervisorProcess {
       .orderBy(asc(planItemsTable.position))
       .limit(1);
     return row?.position ?? 0;
-  }
-
-  // ─── Safety net ─────────────────────────────────────────────────────────────
-
-  private async safetyNetTick(): Promise<void> {
-    if (this.liveTakeoverActive) return;
-    try {
-      const queue = await HarborClient.getQueue();
-      if (queue.depth === 0) {
-        this.logger?.warn(
-          {
-            process: 'supervisor',
-            event: 'SAFETY_NET_TRIGGERED',
-            queue_depth: queue.depth,
-          },
-          'supervisor: safety net detected empty queue',
-        );
-        // The Queue Feeder normally recovers on the next LS_TRACK_ENDING.
-        // We don't push directly here — instead we lean on a fresh emit so
-        // the QueueFeeder runs its handler off-track. This mirrors what the
-        // LS on_end webhook would have produced.
-        this._bus.emit({
-          type: 'LS_TRACK_ENDING',
-          remaining_seconds: 0,
-          uri: '',
-          play_history_id: null,
-          metadata: { safety_net: 'true' },
-        });
-      }
-    } catch (err) {
-      // Harbor not reachable — log and move on.
-      this.logger?.warn(
-        { err, process: 'supervisor', event: 'SAFETY_NET_HARBOR_UNREACHABLE' },
-        'supervisor: safety net could not reach harbor',
-      );
-    }
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -813,8 +788,7 @@ export class SupervisorProcess {
 }
 
 // Pulls a play_history_id out of LS metadata when the webhook body didn't
-// include it as a top-level field (e.g. the LS script chose to surface only
-// title/artist).
+// include it as a top-level field.
 function parsePhidFromMetadata(meta: Record<string, string>): number | null {
   const raw = meta['play_history_id'];
   if (typeof raw !== 'string' || raw === '') return null;
@@ -848,4 +822,3 @@ function parseDriftOrder(raw: unknown): DriftEventType[] {
   }
   return out;
 }
-

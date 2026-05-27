@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, isNull } from 'drizzle-orm';
+import { asc, eq, isNull } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   supervisorState,
@@ -8,7 +8,9 @@ import {
   media,
   stopSetEstimates,
   liveEvents,
+  playHistory,
 } from '../db/schema.js';
+import { resolveCurrentSegment } from '../services/supervisor2/clockResolver.js';
 
 export async function supervisorStatusRoutes(fastify: FastifyInstance) {
   fastify.get('/supervisor/v2/status', async (_request, reply) => {
@@ -65,7 +67,6 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
       }
 
       // Resolve today's stop-set estimates (latest per segment_id)
-      // We join with plans to filter by today's plans (created_at on the plan row)
       const todayStart = new Date();
       todayStart.setHours(0, 0, 0, 0);
       const todayEnd = new Date();
@@ -90,7 +91,6 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
         .from(stopSetEstimates)
         .innerJoin(plans, eq(stopSetEstimates.plan_id, plans.id));
 
-      // Filter to today and keep only the latest per segment_id
       const latestBySegment = new Map<
         number,
         {
@@ -149,6 +149,42 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
 
       const liveTakeoverActive = activeLiveRows.length > 0;
 
+      // Resolve current segment for playhead data
+      const nowMs = Date.now();
+      const resolvedSegment = await resolveCurrentSegment(nowMs, db);
+      const segmentStartedAtMs = resolvedSegment?.segmentStartMs ?? null;
+      const segmentDurationSeconds = resolvedSegment?.segment.duration_seconds ?? null;
+
+      // Compute plan_consumed_seconds and expected_current_item_end_ms
+      let planConsumedSeconds = 0;
+      let expectedCurrentItemEndMs: number | null = null;
+
+      if (activePlanId !== null) {
+        const allItems = await db
+          .select()
+          .from(planItems)
+          .where(eq(planItems.plan_id, activePlanId))
+          .orderBy(asc(planItems.position));
+
+        const terminal = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
+        for (const item of allItems) {
+          if (terminal.has(item.status)) {
+            planConsumedSeconds += item.planned_duration_seconds ?? 0;
+          } else if (item.status === 'playing' && item.play_history_id != null) {
+            const [ph] = await db
+              .select({ started_at: playHistory.started_at })
+              .from(playHistory)
+              .where(eq(playHistory.id, item.play_history_id));
+            const startedMs = ph?.started_at ? new Date(ph.started_at).getTime() : nowMs - 5000;
+            planConsumedSeconds += (nowMs - startedMs) / 1000;
+            expectedCurrentItemEndMs = startedMs + (item.planned_duration_seconds ?? 0) * 1000;
+            break;
+          } else {
+            break;
+          }
+        }
+      }
+
       return reply.send({
         active_plan_id: activePlanId,
         current_drift_seconds: stateRow?.current_drift_seconds ?? 0,
@@ -156,6 +192,11 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
         live_takeover_active: liveTakeoverActive,
         plan_items: resolvedPlanItems,
         stop_set_estimates: resolvedEstimates,
+        paused: stateRow?.paused ?? false,
+        segment_started_at_ms: segmentStartedAtMs,
+        segment_duration_seconds: segmentDurationSeconds,
+        plan_consumed_seconds: planConsumedSeconds,
+        expected_current_item_end_ms: expectedCurrentItemEndMs,
       });
     } catch (err) {
       fastify.log.error(err, 'supervisor v2 status failed');
