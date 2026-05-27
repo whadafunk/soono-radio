@@ -1,3 +1,6 @@
+import { readFileSync } from 'fs';
+import { fileURLToPath } from 'url';
+import { join } from 'path';
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
@@ -84,7 +87,27 @@ fastify.get('/', async () => {
   return { message: 'Radio API Server' };
 });
 
+// Load .env from the repo root (written by start-liquidsoap.sh with
+// LS_MEDIA_DIR=/media). Runs before any process reads env vars so lazy
+// readers like lsMediaPathForSha() see the correct value.
+function loadDotEnv(): void {
+  try {
+    const envPath = join(fileURLToPath(new URL('../../../.env', import.meta.url)));
+    const content = readFileSync(envPath, 'utf-8');
+    for (const line of content.split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#')) continue;
+      const eq = trimmed.indexOf('=');
+      if (eq < 1) continue;
+      const k = trimmed.slice(0, eq).trim();
+      const v = trimmed.slice(eq + 1).trim();
+      if (!(k in process.env)) process.env[k] = v;
+    }
+  } catch { /* no .env file — fine */ }
+}
+
 const start = async () => {
+  loadDotEnv();
   try {
     await runMigrations();
     fastify.log.info('Database migrations applied');
