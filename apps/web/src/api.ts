@@ -33,6 +33,8 @@ import {
   PromoPatch,
   PromoMediaWithMedia,
   StationSettings,
+  SupervisorV2Status,
+  SupervisorV2StatusSchema,
 } from '@radio/shared';
 
 const API_BASE = '/api';
@@ -1319,5 +1321,11 @@ export function fetchCampaignBudget(
 
 export function fetchSpotBudgetPacing(campaignId: number): Promise<CampaignPacingDetail> {
   return apiFetch(`/spot-budget/campaign/${campaignId}/pacing`);
+}
+
+export async function fetchSupervisorV2Status(): Promise<SupervisorV2Status> {
+  const res = await fetch(`${API_BASE}/supervisor/v2/status`);
+  if (!res.ok) throw new Error(`Failed to fetch supervisor v2 status: ${res.statusText}`);
+  return SupervisorV2StatusSchema.parse(await res.json());
 }
 

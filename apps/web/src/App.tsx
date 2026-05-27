@@ -25,6 +25,7 @@ import { RotationsPage } from './pages/rotations/RotationsPage';
 import { PlaylistsPage } from './pages/playlists/PlaylistsPage';
 import { ActivityPage } from './pages/activity/ActivityPage';
 import { PromoPage } from './pages/promo/PromoPage';
+import { SupervisorPage } from './pages/supervisor/SupervisorPage';
 
 const queryClient = new QueryClient();
 
@@ -62,6 +63,7 @@ export function App() {
             <Route path="/promo" element={<PromoPage />} />
             <Route path="/playlists" element={<PlaylistsPage />} />
             <Route path="/rotations" element={<RotationsPage />} />
+            <Route path="/supervisor" element={<SupervisorPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

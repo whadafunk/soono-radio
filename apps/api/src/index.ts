@@ -23,6 +23,7 @@ import { musicCampaignRoutes } from './routes/musicCampaigns.js';
 import { rundownRoutes } from './routes/rundown.js';
 import { spotBudgetRoutes } from './routes/spotBudget.js';
 import { stationSettingsRoutes } from './routes/stationSettings.js';
+import { supervisorStatusRoutes } from './routes/supervisorStatus.js';
 import { db, runMigrations } from './db/index.js';
 import { supervisorState as supervisorStateTable } from './db/schema.js';
 import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
@@ -75,6 +76,7 @@ fastify.register(musicCampaignRoutes);
 fastify.register(rundownRoutes);
 fastify.register(spotBudgetRoutes);
 fastify.register(stationSettingsRoutes);
+fastify.register(supervisorStatusRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Radio API Server' };

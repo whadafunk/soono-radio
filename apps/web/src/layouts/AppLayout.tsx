@@ -4,7 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import {
   Menu, X, Radio,
   LayoutDashboard, Music2, Users, Calendar,
-  Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat, Loader, Megaphone,
+  Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat, Loader, Megaphone, Activity,
 } from 'lucide-react';
 import { fetchActivityStats } from '../api';
 
@@ -18,6 +18,7 @@ const navItems = [
   { label: 'Rotations',    path: '/rotations',    icon: Repeat          },
   { label: 'Advertising',  path: '/customers',    icon: Users           },
   { label: 'Promos',       path: '/promo',        icon: Megaphone       },
+  { label: 'Supervisor',   path: '/supervisor',   icon: Activity        },
   { label: 'Settings',     path: '/settings',     icon: Settings        },
   { label: 'Users',        path: '/users',        icon: UserCog         },
   { label: 'Certificates', path: '/certificates', icon: ShieldCheck     },

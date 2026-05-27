@@ -144,3 +144,40 @@ export const SimulatedPlaySchema = z.object({
   stop_set_position: z.number().int().nullable(),
 });
 export type SimulatedPlay = z.infer<typeof SimulatedPlaySchema>;
+
+// ─── Supervisor V2 Status (Phase 5 — operator visibility) ────────────────────
+
+export const SupervisorV2PlanItemSchema = z.object({
+  id: z.number().int(),
+  position: z.number().int(),
+  content_type: z.string(),
+  media_title: z.string().nullable(),
+  planned_duration_seconds: z.number(),
+  status: z.string(),
+  reason: z.string(),
+  mandatory: z.boolean(),
+});
+export type SupervisorV2PlanItem = z.infer<typeof SupervisorV2PlanItemSchema>;
+
+export const SupervisorV2StopSetEstimateSchema = z.object({
+  id: z.number().int(),
+  segment_id: z.number().int(),
+  break_duration_seconds: z.number(),
+  hard_claimed_seconds: z.number(),
+  contested_seconds: z.number(),
+  free_seconds: z.number(),
+  occupation_ratio: z.number(),
+  oversubscribed: z.boolean(),
+  candidate_count: z.number().int(),
+});
+export type SupervisorV2StopSetEstimate = z.infer<typeof SupervisorV2StopSetEstimateSchema>;
+
+export const SupervisorV2StatusSchema = z.object({
+  active_plan_id: z.number().int().nullable(),
+  current_drift_seconds: z.number(),
+  last_heartbeat_at: z.number().nullable(),
+  live_takeover_active: z.boolean(),
+  plan_items: z.array(SupervisorV2PlanItemSchema),
+  stop_set_estimates: z.array(SupervisorV2StopSetEstimateSchema),
+});
+export type SupervisorV2Status = z.infer<typeof SupervisorV2StatusSchema>;
