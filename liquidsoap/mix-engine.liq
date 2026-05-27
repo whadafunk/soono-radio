@@ -31,17 +31,17 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/push",
-  fun (_headers, data) ->
+  fun (_headers, data, reply) ->
     begin
       parsed = json.parse(default={uri = ""}, data())
       ann_uri = parsed.uri
       if ann_uri == "" then
-        (400, [("Content-Type", "application/json")], json.stringify({ok = false, error = "uri is required"}))
+        reply(400, [("Content-Type", "application/json")], json.stringify({ok = false, error = "uri is required"}))
       else
         r = request.create(ann_uri)
         queue.push(r)
         rid = "#{request.id(r)}"
-        (200, [("Content-Type", "application/json")], json.stringify({ok = true, request_id = rid}))
+        reply(200, [("Content-Type", "application/json")], json.stringify({ok = true, request_id = rid}))
       end
     end
 )
@@ -50,11 +50,11 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/queue",
-  fun (_headers, _data) ->
+  fun (_headers, _data, reply) ->
     begin
       ids = list.map(fun (r) -> "#{request.id(r)}", queue.queue())
       depth = list.length(ids)
-      (200, [("Content-Type", "application/json")], json.stringify({depth = depth, ids = ids}))
+      reply(200, [("Content-Type", "application/json")], json.stringify({depth = depth, ids = ids}))
     end
 )
 
@@ -62,10 +62,10 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/skip",
-  fun (_headers, _data) ->
+  fun (_headers, _data, reply) ->
     begin
       queue.skip()
-      (200, [("Content-Type", "application/json")], json.stringify({ok = true}))
+      reply(200, [("Content-Type", "application/json")], json.stringify({ok = true}))
     end
 )
 
@@ -73,10 +73,10 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/live-status",
-  fun (_headers, _data) ->
+  fun (_headers, _data, reply) ->
     begin
       connected = live.is_connected()
-      (200, [("Content-Type", "application/json")], json.stringify({connected = connected}))
+      reply(200, [("Content-Type", "application/json")], json.stringify({connected = connected}))
     end
 )
 
