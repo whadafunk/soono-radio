@@ -1,4 +1,15 @@
 import { EventEmitter } from 'events';
+import type {
+  BrandingCandidatePool,
+  MusicCandidatePool,
+  RundownCandidatePool,
+  StopSetCandidatePool,
+} from './types.js';
+
+// Names of the four content processes. Used to route REQUEST_CANDIDATES and
+// CANDIDATES traffic — each content process filters bus events to messages
+// addressed to itself.
+export type ContentProcessName = 'music' | 'campaign' | 'branding' | 'rundown';
 
 // All cross-process messages use this discriminated union.
 // In Level 1, the bus is an in-process EventEmitter wrapper.
@@ -25,6 +36,61 @@ export type BusMessage =
       // play_history_id annotation on the ending track.
       play_history_id: number | null;
       metadata: Record<string, string>;
+    }
+  // ─── Phase 2: Planner ↔ content process protocol (Decision 11) ──────────────
+  //
+  // The planner emits REQUEST_CANDIDATES addressed to one content process per
+  // message. The targeted process replies with CANDIDATES carrying a pool.
+  // No state changes happen during the request/response cycle — pacing,
+  // rotation position, and slot-1 tracking are updated only on CONFIRM_USED.
+  // RETURN_UNUSED is informational. DROP_COMMITTED reverses a prior
+  // CONFIRM_USED when a replan rejects items the planner had committed.
+  | {
+      type: 'REQUEST_CANDIDATES';
+      request_id: string;
+      process: ContentProcessName;
+      segment_id: number;
+      duration_needed_seconds: number;
+      // Unix ms — identifies which clock-hour instance of the segment this
+      // request belongs to. Lets the content process scope per-instance
+      // queries (e.g. rundown assignments are keyed by clock instance).
+      clock_instance_started_at: number;
+      // Unix ms — the planner's notion of "now" at request time. Content
+      // processes use this for time-windowed eligibility checks rather than
+      // calling Date.now() themselves, so dry-run simulation can substitute
+      // a synthetic clock without modifying the processes.
+      now_ms: number;
+    }
+  | {
+      type: 'CANDIDATES';
+      request_id: string;
+      process: ContentProcessName;
+      payload:
+        | MusicCandidatePool
+        | StopSetCandidatePool
+        | BrandingCandidatePool
+        | RundownCandidatePool;
+    }
+  | {
+      type: 'CONFIRM_USED';
+      request_id: string;
+      process: ContentProcessName;
+      // ids the planner committed to the plan, in placement order
+      used_ids: number[];
+    }
+  | {
+      type: 'RETURN_UNUSED';
+      request_id: string;
+      process: ContentProcessName;
+      unused_ids: number[];
+    }
+  | {
+      type: 'DROP_COMMITTED';
+      request_id: string;
+      process: ContentProcessName;
+      // ids the planner is removing from a previously-finalized plan; the
+      // content process should reverse any state update CONFIRM_USED applied
+      dropped_ids: number[];
     };
 
 const emitter = new EventEmitter();
