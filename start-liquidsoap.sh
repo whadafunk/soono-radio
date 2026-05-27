@@ -3,6 +3,12 @@
 # Start Liquidsoap container for local development
 # Mirrors start-icecast.sh — same image-build + run pattern.
 # Run this in one terminal AFTER ./start-icecast.sh is up, then `pnpm dev` in another.
+#
+# IMPORTANT: the media directory is mounted at /media inside the container.
+# The API must know this so it generates correct annotated URIs for LiquidSoap.
+# Before running `pnpm dev`, export:
+#   export LS_MEDIA_DIR=/media
+# Or set it in your .env file at the repo root.
 
 set -e
 

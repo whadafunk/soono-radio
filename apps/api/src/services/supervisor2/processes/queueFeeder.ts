@@ -20,7 +20,7 @@ import {
   type Media,
   type PlanItem,
 } from '../../../db/schema.js';
-import { mediaPathForSha } from '../../ingest/paths.js';
+import { lsMediaPathForSha } from '../../ingest/paths.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
 import { insertPushed } from '../playHistoryService.js';
@@ -316,7 +316,7 @@ function buildAnnotatedUri(
   mediaRow: Media,
   extras: { play_history_id: number; plan_item_id?: number; emergency_fill?: boolean },
 ): string {
-  const filePath = mediaPathForSha(mediaRow.sha256);
+  const filePath = lsMediaPathForSha(mediaRow.sha256);
   const annotations: string[] = [];
   annotations.push(`play_history_id="${extras.play_history_id}"`);
   if (extras.plan_item_id != null) {

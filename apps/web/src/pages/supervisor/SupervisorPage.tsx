@@ -542,10 +542,9 @@ function ProcessHealthPanel({
     ? Math.floor((Date.now() - lastHeartbeatAt) / 1000)
     : null;
 
-  function getStatus(processName: string): { label: string; cls: string } {
-    if (processName !== 'supervisor') {
-      return { label: 'N/A', cls: 'text-zinc-500' };
-    }
+  // All processes run in the same server process; if the supervisor heartbeat
+  // is alive, all processes are alive. N/A shown only when heartbeat is absent.
+  function getStatus(_processName: string): { label: string; cls: string } {
     if (heartbeatAgo === null) {
       return { label: 'offline', cls: 'text-red-400' };
     }
@@ -570,10 +569,7 @@ function ProcessHealthPanel({
                     ? 'bg-red-500'
                     : 'bg-zinc-600';
 
-            const heartbeatLabel =
-              name === 'supervisor'
-                ? fmtRelativeTime(lastHeartbeatAt)
-                : 'N/A';
+            const heartbeatLabel = fmtRelativeTime(lastHeartbeatAt);
 
             return (
               <div key={name} className="flex flex-col gap-1 p-2 bg-zinc-800/40 rounded">
