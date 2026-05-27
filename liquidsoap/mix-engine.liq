@@ -36,7 +36,7 @@ harbor.http.register(
       body = req.body
       # body is the annotated URI string sent by HarborClient.push()
       # Parse the JSON {"uri": "..."} payload
-      parsed = json.parse(default={"uri": ""}, body)
+      parsed = json.parse(default={uri = ""}, body)
       uri = parsed.uri
       if uri == "" then
         {
