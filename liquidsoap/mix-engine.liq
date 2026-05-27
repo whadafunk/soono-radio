@@ -33,7 +33,7 @@ harbor.http.register(
   "/push",
   fun (_headers, data) ->
     begin
-      parsed = json.parse(default={uri = ""}, data)
+      parsed = json.parse(default={uri = ""}, data())
       ann_uri = parsed.uri
       if ann_uri == "" then
         (400, [("Content-Type", "application/json")], json.stringify({ok = false, error = "uri is required"}))
