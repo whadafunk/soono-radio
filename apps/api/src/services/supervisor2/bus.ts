@@ -146,6 +146,27 @@ export type BusMessage =
       type: 'PLAN_REPLANNED';
       request_id: string;
       plan_id: number;
+    }
+  // ─── Phase 4: Live takeover ─────────────────────────────────────────────────
+  //
+  // Fired by the API webhook routes when LiquidSoap reports its live harbor
+  // input has connected / disconnected. The Supervisor switches into / out of
+  // live-takeover mode and relays the status change to the Queue Feeder via
+  // LIVE_STATUS_CHANGED so the latter can suspend pushes while the DJ is on.
+  | {
+      type: 'LS_LIVE_STARTED';
+      source_name: string;
+    }
+  | {
+      type: 'LS_LIVE_ENDED';
+      source_name: string;
+    }
+  | {
+      // Supervisor → Queue Feeder: live takeover entered (active=true) or left
+      // (active=false). Sent in addition to LS_LIVE_STARTED / LS_LIVE_ENDED so
+      // the Queue Feeder doesn't need to interpret LS-specific events.
+      type: 'LIVE_STATUS_CHANGED';
+      active: boolean;
     };
 
 const emitter = new EventEmitter();

@@ -23,10 +23,19 @@ import { musicCampaignRoutes } from './routes/musicCampaigns.js';
 import { rundownRoutes } from './routes/rundown.js';
 import { spotBudgetRoutes } from './routes/spotBudget.js';
 import { stationSettingsRoutes } from './routes/stationSettings.js';
-import { runMigrations } from './db/index.js';
+import { db, runMigrations } from './db/index.js';
+import { supervisorState as supervisorStateTable } from './db/schema.js';
 import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
 import { ensureDirs } from './services/ingest/paths.js';
 import { loadIntegrationsConfig } from './services/integrations/config.js';
+import { bus } from './services/supervisor2/bus.js';
+import { MusicProcess } from './services/supervisor2/processes/music.js';
+import { CampaignProcess } from './services/supervisor2/processes/campaign.js';
+import { BrandingProcess } from './services/supervisor2/processes/branding.js';
+import { RundownProcess } from './services/supervisor2/processes/rundown.js';
+import { PlannerProcess } from './services/supervisor2/processes/planner.js';
+import { QueueFeederProcess } from './services/supervisor2/processes/queueFeeder.js';
+import { SupervisorProcess } from './services/supervisor2/processes/supervisor.js';
 
 const fastify = Fastify({
   logger: true,
@@ -88,10 +97,49 @@ const start = async () => {
     // Pick up any jobs that were left in 'queued' across restarts.
     ingestQueue.signal();
 
+    // Ensure the singleton supervisor_state row exists before any process
+    // tries to read/update it.
+    await db
+      .insert(supervisorStateTable)
+      .values({ id: 1, current_drift_seconds: 0 })
+      .onConflictDoNothing();
+
+    // Instantiate and start all seven Supervisor V2 processes (Level 1 — all
+    // share this Node.js process, communicating exclusively via the bus).
+    const musicProcess = new MusicProcess(bus, db);
+    const campaignProcess = new CampaignProcess(bus, db);
+    const brandingProcess = new BrandingProcess(bus, db);
+    const rundownProcess = new RundownProcess(bus, db);
+    const plannerProcess = new PlannerProcess(bus, db, fastify.log);
+    const queueFeederProcess = new QueueFeederProcess(bus, db, fastify.log);
+    const supervisorProcess = new SupervisorProcess(bus, db, fastify.log);
+
+    const supervisorProcesses = [
+      musicProcess,
+      campaignProcess,
+      brandingProcess,
+      rundownProcess,
+      plannerProcess,
+      queueFeederProcess,
+      supervisorProcess,
+    ];
+    for (const p of supervisorProcesses) p.start();
+    fastify.log.info(
+      { count: supervisorProcesses.length },
+      'Supervisor V2 processes started',
+    );
+
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
 
     const shutdown = async (signal: string) => {
       fastify.log.info(`Received ${signal}, shutting down`);
+      for (const p of supervisorProcesses) {
+        try {
+          p.stop();
+        } catch (err) {
+          fastify.log.error({ err }, 'Supervisor process stop() threw');
+        }
+      }
       await fastify.close();
       process.exit(0);
     };

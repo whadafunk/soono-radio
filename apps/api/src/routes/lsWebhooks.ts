@@ -101,4 +101,43 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
       return reply.status(200).send({ ok: true });
     },
   );
+
+  // LS calls this when its live harbor input becomes active (DJ connected).
+  // The Supervisor will suspend queue feeding and record a live_events row.
+  fastify.post<{ Body: Record<string, unknown> }>(
+    '/internal/ls/live-started',
+    async (request, reply) => {
+      if (!validateSecret(request, reply)) return;
+
+      const body = request.body ?? {};
+      const source_name =
+        typeof body['source_name'] === 'string' ? (body['source_name'] as string) : 'live';
+
+      request.log.info({ source_name }, 'LS live-started webhook received');
+
+      bus.emit({ type: 'LS_LIVE_STARTED', source_name });
+
+      return reply.status(200).send({ ok: true });
+    },
+  );
+
+  // LS calls this when its live harbor input disconnects. The Supervisor
+  // re-engages queue feeding and may request a replan to absorb remaining
+  // segment time.
+  fastify.post<{ Body: Record<string, unknown> }>(
+    '/internal/ls/live-ended',
+    async (request, reply) => {
+      if (!validateSecret(request, reply)) return;
+
+      const body = request.body ?? {};
+      const source_name =
+        typeof body['source_name'] === 'string' ? (body['source_name'] as string) : 'live';
+
+      request.log.info({ source_name }, 'LS live-ended webhook received');
+
+      bus.emit({ type: 'LS_LIVE_ENDED', source_name });
+
+      return reply.status(200).send({ ok: true });
+    },
+  );
 }
