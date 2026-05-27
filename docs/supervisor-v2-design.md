@@ -537,6 +537,553 @@ interface StopSetCandidateResponse {
 
 ## Open questions / still to design
 
-- **Operator modification of the draft plan.** If an operator modifies the draft via the UI, how that write reaches the planner process (bus message, or planner polls SQLite on finalization pass).
-- **`catching_up_order` / `coasting_order` exact semantics.** Schema exists and is now actionable — exact values and how the deviation monitor maps them to replan instructions to be designed during implementation.
-- **`stop_set_estimates` persistence.** Whether the space estimate is written to its own table or embedded in the `plans` table — to be decided at implementation.
+*(none — all resolved by Decisions 15–28 below)*
+
+---
+
+### Decision 15 — Updated process topology
+
+**Status: decided**
+
+Two categories of processes. Content processes are candidate suppliers. Orchestration processes drive the sequence.
+
+#### Content processes
+
+| Process | Owns | What it returns |
+|---|---|---|
+| **Music** | Rotation state, hot-play streak, heavy rotation pacing, music campaign pacing | N rotation candidates, M hot-play candidates, K heavy-rotation/music-campaign candidates — combined pool. Music campaign state is internal to this process. |
+| **Campaign** | Spot pacing (global, per-show, per-interval), promo pacing, position-1 eligibility, slot-1-satisfied-today | `StopSetCandidateResponse` — eligible spots + promos + space estimate. Promo state is internal to this process. |
+| **Branding** | Jingle pool, station ID pool, segment envelopes, show envelopes | Short content for interstitial positions and segment/show start-end. No branding rotations in V2; round-robin and random only. |
+| **Rundown** | Calendar-assigned rundown content (news, bulletin) | Ordered list of assigned clips with total duration estimate; gap = segment_duration − total_duration, to be filled by planner using normal music/branding. |
+
+**No separate processes for:**
+- Music Campaign — internal to Music process (same segment type, same pool, same injection logic as hot-play/heavy-rotation)
+- Promo — internal to Campaign process (same segment type, included in StopSetCandidateResponse)
+- Tracking (recorded shows) — deferred to backlog
+- Live — no content process; live is a Supervisor state event (see Decision 17)
+- Beds — deferred to backlog (requires secondary LS audio layer)
+- Voice Track — deferred to backlog
+
+#### Orchestration processes
+
+| Process | Owns |
+|---|---|
+| **Supervisor** | Outer event loop, drift accumulation, correction decisions, drives Planner and Queue Feeder, receives all LS webhooks |
+| **Planner** | Segment plan assembly, gap filling, finalization substitutions, replan on correction signal |
+| **Queue Feeder** | Executes finalized plan one item at a time, triggered by `on_end` webhook |
+
+**Not separate processes (deferred/merged):**
+- Sweeps Planner — backlog
+- Overlay Content Feeder (for beds) — backlog
+- Logging — not a process; structured pino logging inside every process
+- Budget Compute — existing `spotBudget.ts` service called on-demand by API; no supervisor involvement
+
+---
+
+### Decision 16 — Subprocess embedding: music campaigns inside Music, promos inside Campaign
+
+**Status: decided**
+
+**Music campaigns** (heavy rotation, contractual plays-per-day) are embedded in the Music process rather than running as a separate process. Reasons:
+- Music campaigns fill music segments — the same pool and segment type as rotation music and hot-play
+- The Music process already owns all the injection-pattern logic (hot-play streak, heavy rotation pacing check)
+- Returning a combined music pool from one process avoids any need for two processes to negotiate over the same segment time budget
+- Internal pacing state for music campaigns lives inside the Music process and is updated via the same CONFIRM_USED / RETURN_UNUSED cycle
+
+**Promos** are embedded in the Campaign process for the same reasons:
+- Promos fill stop-set segments alongside spot campaigns
+- The Campaign process already computes break space and return `StopSetCandidateResponse`
+- Promo pacing (min/max target, not contract-bound) is simpler than spot pacing; it does not warrant separate process overhead
+- Decision 14 already includes `promos: PromoCandidate[]` in the response struct
+
+---
+
+### Decision 17 — Supervisor as central hub; Deviation Monitor is a module inside it
+
+**Status: decided**
+
+The Supervisor is the central process around which all orchestration is built. Every LS webhook reaches the API endpoint layer, which relays it to the Supervisor. The Supervisor drives all other orchestration:
+
+```
+LS webhooks
+    ↓
+API /internal/ls/* endpoints
+    ↓
+Supervisor
+  ├── drives Planner (request draft, request finalization, request replan)
+  ├── drives Queue Feeder (plan ready signal, skip signal)
+  ├── queries LS harbor (GET /queue, POST /skip for correction)
+  └── accumulates drift, makes correction decisions
+```
+
+Content processes do not communicate with each other. They respond to requests from the Planner only. The Planner is a module driven by the Supervisor, not an independently-scheduled process at Level 1. At Level 3, Planner becomes a forked process that still communicates only via the bus (Supervisor as initiator).
+
+The previous "Deviation Monitor" design (Decision 9, 10) is folded into the Supervisor. Logically it remains a distinct module (`deviationMonitor.ts`), but it lives in the Supervisor process and communicates with the Planner through the Supervisor, not independently.
+
+**Supervisor responsibilities:**
+
+1. **Event loop** — receive `on_track` and `on_end` webhooks; dispatch to internal modules
+2. **Drift accounting** — maintain running `drift_seconds` (positive = behind, negative = ahead); update on each `on_track` event using `planned_start_at` vs. `actual_started_at`
+3. **Correction decision** — after each `on_track`, evaluate whether drift warrants action using the next segment's `start_policy` and the correction thresholds (see Decision 20)
+4. **Segment planning drive** — on each new segment start: request draft plan from Planner; 30–60s before next boundary: request finalization
+5. **Replan drive** — when deviation exceeds threshold: signal Planner with `{correction_type, magnitude_seconds, remaining_plan_items}`
+6. **Safety net** — 30s heartbeat: `GET /queue` from LS; if queue empty and not in live-takeover → log warning, emergency push
+7. **Live takeover handling** — when live input webhook fires: suspend queue feeding, record takeover start time; when live ends: replan remaining segment from current position
+
+---
+
+### Decision 18 — Rundown process design and gap filling
+
+**Status: decided**
+
+The Rundown process handles news and bulletin segments. Content for these segments is pre-assigned to specific calendar instances by an operator (the rundown editor feature). At planning time, the Rundown process:
+
+1. Queries the calendar instance for the upcoming news/bulletin segment
+2. Returns the ordered list of assigned clips with their estimated total duration
+3. Includes a `gap_estimate_seconds = segment_target_duration − estimated_content_duration`
+
+The Planner receives this pool and:
+1. Places the rundown items first (they are mandatory, not subject to reorder)
+2. Fills the residual gap using the segment's normal `coasting_order` (typically music track, then short filler)
+3. The gap fill follows the same rules as any other segment gap fill (Decision 8)
+
+The Rundown process never fills its own gap — it has no access to the music or branding pools.
+
+**Boundary behavior:** Rundown content is `mandatory = true` and `not_subject_to_skip = true`. If the rundown content runs over the segment boundary (operator assigned too much), the Planner drops the last item(s) and reports a `RUNDOWN_OVERFLOW` event to the Supervisor.
+
+**Gap fill content for rundown segments** is the same pool the segment's clock would normally supply: a music track from the associated show/rotation, or a station ID if the gap is short (<60s), or a jingle. The specific priority is encoded in the segment's `coasting_order`.
+
+---
+
+### Decision 19 — Live handling: Supervisor state event, not a content process
+
+**Status: decided**
+
+Live is not automated content. There is no "live content process" because there is no content to supply — the audio comes from the live harbor input, not from the file system or a playlist.
+
+**What we need:**
+
+- LS fires a webhook when the live harbor input becomes active (stream connected) and when it disconnects
+- The Supervisor receives this webhook, sets `state = LIVE_TAKEOVER`, and suspends normal queue feeding
+- When live ends, the Supervisor evaluates remaining segment time:
+  - If residual > threshold: request replan for remaining segment
+  - If residual < threshold: let the segment end and plan the next one normally
+- The Supervisor records live-takeover start and end times in a new `live_events` table for logging and reporting
+
+**Beds (background audio for live segments):** Deferred. Beds require a secondary audio layer in LiquidSoap (a background mixer track separate from the main queue). Designing the overlay content feeder and the LS script changes for bed mixing is a standalone feature that should land when live/news segments are being built. Until then, beds are backlog. The LS script must reserve a mixer input for bed audio — plan for it in the LS topology even if the control side is not built yet.
+
+---
+
+### Decision 20 — Drift correction framework
+
+**Status: decided**
+
+Drift is measured as `drift_seconds = actual_position − planned_position` at each `on_track` event. Positive = behind plan (segment running long). Negative = ahead of plan (segment running short).
+
+**Drift sources:**
+- **Organic** — accumulated from planner rounding (intentional; plan fills segment approximately). Predictable, small.
+- **Operator** — skip, inject, extend show, cut-short show. Can be substantial and sudden.
+
+**Correction framework — next segment start_policy drives the decision:**
+
+```
+drift detected
+  → is next segment start_policy = 'hard'?
+      yes → correction required in current segment
+              or absorbed via shorter next segment plan
+      no  → soft tolerance window applies; no action until |drift| > tolerance
+```
+
+**Correction actions by drift direction:**
+
+| Direction | Magnitude | Next segment | Action |
+|---|---|---|---|
+| Behind (long) | < soft tolerance | Any | No action; absorb via next segment |
+| Behind (long) | > soft tolerance | Soft start | No action; planner gets shortened next segment duration |
+| Behind (long) | > hard threshold | Hard start | Skip from `catching_up_order` (music first; spots last); if insufficient, cut at boundary |
+| Ahead (short) | < 5s | Any | Accept silence; no action |
+| Ahead (short) | 5–30s | Soft start | Fire next segment early (early_seconds allows it) |
+| Ahead (short) | 5–30s | Fixed start (early_seconds=0) | Inject filler from `coasting_order` (station ID, jingle, short promo) |
+| Ahead (short) | > 30s | Any | Replan remaining segment; request additional track from Music process |
+
+**Default plan-time bias: slight overfill.** When two tracks are equally valid for a slot and the segment has a soft-end successor, prefer the longer one. Being 5s long costs nothing with a soft-start successor. Being 5s short risks an audible gap before a fixed-start successor.
+
+**catching_up_order semantics** (field on `clock_segments`):
+- Values: ordered list of content types to skip when running behind
+- Example: `['music', 'promo', 'filler']` — skip music first, then promos, then fillers; never skip campaign spots (mandatory = true)
+- The Supervisor iterates this list, signals Queue Feeder to drop the next pending item of that type, and re-evaluates drift after each drop
+
+**coasting_order semantics** (field on `clock_segments`):
+- Values: ordered list of content types to inject when running ahead
+- Example: `['station_id', 'jingle', 'music']` — try a station ID first; if gap too large, try a jingle; if still too large, add a short music track
+- The Supervisor signals Planner to request a short item from the Branding or Music process and inserts it into the remaining plan
+
+**Gap vs fire early — preference:**
+- Prefer filling (coasting_order) over firing early when a suitable filler exists (< 60s gap)
+- Prefer firing early over filling when the gap exceeds 60s — forcing a long filler sequence sounds worse than an early start
+- Only possible when the next segment allows early handover (`start_policy.early_seconds > 0`)
+
+**Skip vs fire late — preference:**
+- Prefer firing late over skipping when next segment has soft start (absorb without action)
+- Prefer skip over cut when content is music (music can be faded; spots cannot be cut mid-read)
+- Avoid skipping contract-bound spots; mark as `mandatory` in plan_items and never include them in catching_up_order
+
+---
+
+### Decision 21 — Queue depth = 1; Queue Feeder as cut-short agent
+
+**Status: decided**
+
+The LiquidSoap queue is maintained at depth 1. Rationale: items already in the queue cannot be corrected without dropping them. With depth 1, the queue always holds exactly the next item to play, and everything further ahead remains in the plan where the Supervisor can still modify it.
+
+**Queue Feeder trigger:** `on_end` fires N seconds before the current track ends. Queue Feeder reads the next `pending` item from the active plan and pushes it via `POST /push`. N should be large enough for the HTTP round-trip (5 seconds is sufficient for local Docker; configure as `queue_advance_seconds` in supervisor config).
+
+**Cut-short mechanism:** Implemented by the Supervisor via `POST /skip` to LS harbor. The Queue Feeder does not decide to skip — that is a Supervisor correction decision. The Queue Feeder only executes pushes on trigger. The sequence for a cut-short:
+1. Supervisor decides a skip is needed (catching_up_order)
+2. Supervisor calls `POST /skip` on harbor → LS aborts current track
+3. LS fires `on_track` for the previously-queued next item
+4. LS fires `on_end` N seconds before that item ends → Queue Feeder pushes the item after it
+
+The queue feeder has a safety fallback: if the plan is exhausted or unavailable when `on_end` fires, push a random music track from the current clock's primary rotation to prevent silence. Log this as `EMERGENCY_FILL`.
+
+---
+
+### Decision 22 — Campaign placement constraints enforced by Planner
+
+**Status: decided**
+
+The Campaign process returns candidates with metadata. The Planner enforces all placement constraints during stop-set assembly. The Campaign process does not know what other campaigns are being placed in the same break.
+
+**Constraints the Planner enforces:**
+1. **Advertiser separation** — minimum N spots between two spots from the same `customer_id` in the same break
+2. **Campaign separation** — same `campaign_id` must not be adjacent in the same break; minimum 1 spot between if the same campaign appears twice (allowed)
+3. **Competing exclusions** — if campaign A is placed, remove all campaigns in A's `competing_exclusions` set from remaining candidates
+4. **First-in-slot** — among `slot_1_required` candidates, the Planner picks the winner by highest `pacing_score`; others drop to position 2+
+5. **Slot-1 per-day relaxation** — if a `slot_1_required` campaign has `slot_1_satisfied_today = true` and priority is `best_effort`, the Planner may place it in any position; if priority is `hard` and pacing is behind, still try slot 1
+
+**What the Campaign process adds:**
+- `slot_1_satisfied_today: bool` — did this campaign already get slot 1 in an earlier break today?
+- Campaign process tracks slot-1 delivery per day and updates this flag on CONFIRM_USED
+
+**Multiple pacing levels:** Campaign process maintains pacing for each campaign at three granularities: global (all-time during campaign dates), per-show (plays in each show instance), and per-interval (plays in each broadcast interval). Eligibility check uses all three. The `pacing_score` returned for each candidate reflects the most-behind level.
+
+---
+
+### Decision 23 — Staging changes without shadow tables
+
+**Status: decided**
+
+No shadow tables. The DB is always the source of truth. Changes applied at any time take effect at the next planning pass.
+
+**Why this works:**
+- Segment N is already running its finalized plan when a change lands — we let it finish; no table required to buffer the change
+- Segment N+1's draft plan is built at the start of segment N. If the change arrives after the draft is built, the finalization pass (30–60s before the boundary) re-reads the DB and picks up the change via substitution
+- Segment N+2 and beyond are planned from scratch using the current DB state — no staging needed
+
+**One constraint:** changes that affect the broadcast template (clock structure, segment boundaries) should be applied between segment boundaries, not mid-segment. The UI may show a banner: "Changes will take effect at the next segment boundary." This is a UX note, not a data model restriction.
+
+**Operator plan modifications** (direct plan_items edits in the operator console): written to SQLite. Planner reads plan_items at finalization time and treats any operator-modified items as pre-confirmed (skips REQUEST_CANDIDATES for those positions). Queue Feeder reads plan_items in order — no special handling.
+
+---
+
+### Decision 24 — Logging structure
+
+**Status: decided**
+
+Logging is not a separate process. Every process logs via pino (already configured in Fastify). All scheduling-relevant log entries use structured JSON with a mandatory set of fields:
+
+```typescript
+interface SchedulingLogEntry {
+  timestamp: string         // ISO 8601
+  process: string           // 'supervisor' | 'planner' | 'music' | 'campaign' | 'branding' | 'rundown' | 'queueFeeder'
+  event: string             // see event catalog below
+  plan_id?: number
+  plan_item_id?: number
+  segment_id?: number
+  media_id?: number
+  campaign_id?: number
+  music_campaign_id?: number
+  drift_seconds?: number
+  reason?: string           // free-form reasoning string — required for all planning decisions
+  [key: string]: unknown    // process-specific extras
+}
+```
+
+**Event catalog (partial):**
+- Supervisor: `SEGMENT_START`, `SEGMENT_END`, `DRIFT_UPDATE`, `CORRECTION_SKIP`, `CORRECTION_FILL`, `CORRECTION_REPLAN`, `LIVE_TAKEOVER_START`, `LIVE_TAKEOVER_END`, `EMERGENCY_FILL`
+- Planner: `PLAN_DRAFT_START`, `PLAN_DRAFT_COMPLETE`, `PLAN_FINALIZE_START`, `PLAN_FINALIZE_COMPLETE`, `PLAN_ITEM_PLACED`, `PLAN_ITEM_SUBSTITUTED`, `PLAN_ITEM_DROPPED`, `PLAN_REPLAN`
+- Content processes: `CANDIDATES_REQUESTED`, `CANDIDATES_RETURNED`, `CONFIRM_USED`, `RETURN_UNUSED`, `DROP_COMMITTED`
+- Queue Feeder: `PUSH_SENT`, `PUSH_ERROR`, `EMERGENCY_FILL`
+
+The `reason` field on `PLAN_ITEM_PLACED` is the primary tool for analyzing scheduling decisions:
+```
+"heavy_rotation campaign='Pop Hits Q3' (plays 2/8 today, behind); LRP pick track_id=442"
+"campaign='Acme Radio' pacing_score=0.72 (behind hard); slot_1 — competing_exclusions cleared [campId=8]"
+"coasting fill: gap=18s, coasting_order=['station_id','jingle'] → station_id sid=12"
+```
+
+Logs are queryable from the UI (see Decision 25). No separate logging process needed.
+
+---
+
+### Decision 25 — UI visibility into supervisor state
+
+**Status: decided (scope)**
+
+The operator must be able to see what the supervisor is doing without reading log files. Minimum viable supervisor visibility panel:
+
+**Active segment panel:**
+- Current segment name, type, scheduled end time
+- Running drift (`+Ns behind` / `−Ns ahead`) updated in real-time
+- Next correction action if drift > threshold
+
+**Active plan list:**
+- Ordered list of plan_items for the current and next segment (pending / playing / played / dropped)
+- Each item shows: content type, media title, planned duration, status, reason
+- Operator can mark an item for skip (sets `status = operator_skip_requested`; Supervisor acts on it at the next safe moment)
+
+**Campaign pacing dashboard:**
+- Per campaign: target plays today/week, actual plays, pacing score, projected end-of-day
+- Oversubscribed break indicator (occupation_ratio > 0.90)
+
+**Process health panel:**
+- Each supervisor process: last heartbeat, status (`running` / `error` / `stopped`)
+- LS connection status (last successful harbor response)
+
+**Supervisor log feed:**
+- Last N structured log entries (filterable by event type and process)
+- This is the primary tool for diagnosing scheduling gaps and reasoning
+
+All of these read from SQLite (`plans`, `plan_items`, `play_history`, campaign pacing) and from a new `supervisor_state` table (a single-row ephemeral state table: current_segment_id, current_drift_seconds, last_heartbeat_at, active_plan_id).
+
+---
+
+### Decision 26 — Dry run / simulation
+
+**Status: decided (scope)**
+
+A dry run executes the Planner's planning logic over a future time window without producing actual LiquidSoap commands. It:
+
+1. Accepts `{start_at, end_at}` as input
+2. Iterates through each segment in the clock schedule for that window
+3. For each segment: runs the full planning algorithm (REQUEST_CANDIDATES → assemble → gap fill) using current pacing state
+4. Updates simulated pacing state between segments (so later segments see the projected plays from earlier ones)
+5. Records each simulated `plan` and `plan_item` to a separate set of tables (`sim_plans`, `sim_plan_items`) tagged with a `simulation_id`
+
+**Output:** a timeline of simulated segment plans. Each plan shows the same per-item `reason` field used in live planning. Campaign pacing projections (projected plays by end of dry-run period) are derived from the simulation.
+
+**UI:** calendar/timeline view with per-segment click-through to the simulated plan items. Oversubscribed breaks and pacing shortfalls highlighted.
+
+**Dry run does not require LiquidSoap to be running.** The Planner already works offline (Decision 9). The only difference is: instead of waiting for segment boundaries, the dry run advances time synthetically.
+
+---
+
+### Decision 27 — catching_up_order / coasting_order exact semantics
+
+**Status: decided**
+
+The type vocabulary is already defined in shared schemas as `DRIFT_EVENT_TYPES = ['songs', 'jingles', 'station_ids', 'spots', 'promos']`. Both fields are JSON arrays of these values on `clock_segments`.
+
+#### catching_up_order — mechanics
+
+The Supervisor has positive drift (running long) and the next segment has a hard start. It iterates `catching_up_order` in listed order:
+
+1. Find the next `plan_item` with matching `content_type` and `status = 'pending'`
+2. Mark it `status = 'supervisor_skipped'`; remove it from the Queue Feeder's feed
+3. Recompute remaining duration vs. remaining wall-clock time; stop if drift absorbed
+4. If still behind: advance to the next type in the list; repeat
+
+**`spots` must never appear in `catching_up_order`.** Spots are `mandatory = true` in plan_items. The Supervisor must also guard in code: if `item.mandatory === true`, skip it in the iteration regardless of what the list says.
+
+**Sensible defaults by segment type:**
+
+| Segment type | Default | Reasoning |
+|---|---|---|
+| `music` | `['jingles', 'station_ids', 'promos', 'songs']` | Shed interstitials first (short, cheap), then promos, songs last (most valuable) |
+| `stop_set` | `['promos', 'jingles', 'station_ids']` | Only non-contractual content; spots never touched |
+| `news` / `bulletin` | `[]` | Rundown items are mandatory; nothing skippable |
+| `voice_track` | `['songs']` | Music fill is the only skippable content in a voice-track segment |
+
+#### coasting_order — mechanics
+
+The Supervisor has a gap (running short). For each type in `coasting_order`, it requests a candidate from the Planner specifying `max_duration_seconds = gap − 2s`. The Planner requests from the relevant content process (Branding for station_ids/jingles, Campaign for promos, Music for songs), filters to items ≤ `max_duration_seconds`, and returns the best fit. The item is injected and the Supervisor re-evaluates the residual. Iteration continues until the gap drops below the 5s silence threshold or the list is exhausted.
+
+The order should place the **shortest content types first** to avoid overshooting:
+
+**Sensible defaults by segment type:**
+
+| Segment type | Default | Reasoning |
+|---|---|---|
+| `music` | `['station_ids', 'jingles', 'promos', 'songs']` | Station ID (15–30s) fills small gaps; escalate to song only if gap is large |
+| `stop_set` | `['promos', 'jingles', 'station_ids']` | Promos fill naturally in a break; interstitials for small residuals |
+| `news` / `bulletin` | `['station_ids', 'jingles', 'songs']` | Same fill priority as music; song if rundown ran very short |
+| `voice_track` | `['songs']` | Only music belongs in a music-segment gap |
+
+**"Too long to fit" handling:** If the content process returns nothing ≤ `max_duration_seconds` (no station ID short enough), the Supervisor moves to the next type in the list. If the list is exhausted and gap > 5s, the Supervisor emits a `COASTING_FILL_FAILED` event and logs the unfilled gap. The next segment's start_policy determines whether silence or early start is the fallback.
+
+---
+
+### Decision 28 — stop_set_estimates: separate table, not a plans column
+
+**Status: decided**
+
+The break space estimate (`BreakSpaceEstimate`) is written to a dedicated `stop_set_estimates` table, not as a JSON column on `plans`.
+
+**Why not a column on `plans`:**
+- The inventory UI needs to query "show occupation ratios for all upcoming stop-set breaks in the next 7 days, grouped by segment" — this query benefits from a `segment_id` column with an index, not from parsing a JSON blob on the plans table
+- The `plans` table is generic (covers all segment types); a stop-set column would be null on ~70% of rows
+- SQLite cannot index into a JSON column, so filtering by `oversubscribed = true` across the plans table would require full scans
+
+**Schema (one row per plan, unique on plan_id):**
+
+```sql
+stop_set_estimates
+  id                       integer primary key
+  plan_id                  integer NOT NULL UNIQUE references plans(id) on delete cascade
+  segment_id               integer NOT NULL references clock_segments(id) on delete cascade
+  computed_at              integer NOT NULL   -- unix ms
+  break_duration_seconds   real NOT NULL
+  hard_claimed_seconds     real NOT NULL
+  contested_seconds        real NOT NULL
+  free_seconds             real NOT NULL
+  occupation_ratio         real NOT NULL      -- (hard_claimed + contested) / break_duration
+  oversubscribed           integer NOT NULL   -- 0/1 boolean: occupation_ratio > 0.90
+  candidate_count          integer NOT NULL   -- eligible campaigns for this break
+```
+
+**Write pattern:** Campaign process inserts when the draft plan is created; upserts (update in place) when the finalization pass recomputes with fresher pacing data. Only one row per plan; no draft vs. final distinction — the row always holds the most recent estimate.
+
+**Queries this enables cleanly:**
+
+```sql
+-- All oversubscribed upcoming breaks
+SELECT sse.*, cs.name
+FROM stop_set_estimates sse
+JOIN plans p ON p.id = sse.plan_id
+JOIN clock_segments cs ON cs.id = sse.segment_id
+WHERE p.status IN ('draft', 'finalized')
+  AND sse.oversubscribed = 1
+ORDER BY p.clock_instance_started_at;
+
+-- Occupation ratio history for one break (inventory analysis)
+SELECT computed_at, occupation_ratio
+FROM stop_set_estimates
+WHERE segment_id = ?
+ORDER BY computed_at DESC
+LIMIT 90;
+```
+
+---
+
+## Deferred to backlog
+
+The following are confirmed features that will not be built in V2 initial implementation:
+
+| Feature | Reason deferred | Notes |
+|---|---|---|
+| Sweeps Planner | Not needed until sweeps content built out | Sweeps overlay model documented in `project_clocks_design_detail.md` |
+| Overlay Content Feeder | Depends on LS secondary audio layer design | Required for beds; design the LS mixer topology first |
+| Beds (background audio) | Blocked on overlay feeder | Document LS mixer input reservation in LS script planning |
+| Tracking (recorded shows) | Separate content type, low priority | Tracking process will return pre-recorded show clips for tracking segments |
+| Voice Track | Similar to tracking | Will slot into same content process model |
+| Live Content Process | Not applicable — live is Supervisor state | |
+| Operator Console full UI | Data model is ready; UI is deferred | `plan_items` table plus planned API endpoints are sufficient; full drag-reorder UI is follow-on work |
+| Simulation UI | Core dry-run logic can land first; simulation UI follows | |
+
+---
+
+## Build Plan — Locked 2026-05-27
+
+Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
+
+### Phase 1 — Teardown + Infrastructure
+
+Delete V1 entirely on day one. No telnet, no legacy supervisor code, no compatibility shims.
+
+**Tasks:**
+- Delete the entire `apps/api/src/services/supervisor/` directory (TelnetClient, scheduler, picker, metadataWatcher, stopSetPicker, snapshot, predictor, clockResolver)
+- DB migrations: `plans`, `plan_items`, `stop_set_estimates`, `supervisor_state`, `live_events`; add `plan_item_id` FK to `play_history`
+- `bus.ts` — EventEmitter wrapper with typed message discriminants; Level 1 implementation
+- LS script — add harbor HTTP endpoints (`/push`, `/queue`, `/skip`) + webhooks (`on_track`, `on_end`) with `thread.run` wrapping
+- `HarborClient` — stateless `fetch()` wrapper; replaces TelnetClient
+- Webhook receiver routes: `POST /internal/ls/track-started`, `POST /internal/ls/track-ending`
+- Process module stubs: empty classes with correct bus interface, no logic yet
+
+**Milestone:** No V1 code anywhere. LS speaks harbor. Webhook routes receive and log events. `pnpm type-check` passes.
+
+---
+
+### Phase 2 — Content Processes
+
+All four processes are independent and implement the same protocol. Build in any order.
+
+**Protocol every content process implements:**
+`REQUEST_CANDIDATES` → return pool (no state change) → `CONFIRM_USED` → update state → `RETURN_UNUSED` / `DROP_COMMITTED`
+
+**Tasks:**
+- **Music process** — rotation pool, hot-play injection cadence, heavy rotation / music campaign pacing
+- **Campaign process** — eligible spot + promo candidates, pacing at global / per-show / per-interval, break space estimate computation
+- **Branding process** — jingle pool, station ID pool, segment/show envelopes; round-robin and random only
+- **Rundown process** — reads calendar-assigned news/bulletin clips, returns ordered list + gap estimate
+
+**Milestone:** All four processes respond correctly to `REQUEST_CANDIDATES`. No side effects before `CONFIRM_USED`. Verified via unit tests against the bus (LS not required).
+
+---
+
+### Phase 3 — Planner
+
+Consumes content process pools, assembles plans, writes to SQLite.
+
+**Tasks:**
+- Draft plan at segment start; finalization pass 30–60s before boundary
+- Music segment assembly: rotation sequence + branding interstitials + gap fill via `coasting_order`
+- Stop-set assembly: advertiser separation, competing exclusions, first-in-slot competition, slot-1 per-day relaxation
+- Rundown segment assembly: mandatory rundown items first, gap fill second
+- `stop_set_estimates` insert + upsert at finalization
+- Every `plan_item` gets a `reason` string — mandatory
+- Offline operation: planner runs without LS
+
+**Milestone:** Given a segment type + duration, Planner produces correct `plan` + `plan_items` in SQLite with reasoning strings. Verified via offline tests.
+
+---
+
+### Phase 4 — Supervisor + Queue Feeder + Drift
+
+The execution layer. Wires everything together.
+
+**Tasks:**
+- Supervisor outer loop: receives `on_track` / `on_end` webhooks; tracks segment boundaries; drives Planner at segment start and 30–60s before boundary
+- Queue Feeder: `on_end`-triggered, reads next `pending` plan_item, `POST /push` to harbor, queue depth = 1
+- Drift accumulation: `drift_seconds` updated on each `on_track` against `planned_start_at`
+- `catching_up_order` correction: skip pending items by content type, re-evaluate after each drop
+- `coasting_order` correction: request short candidate with `max_duration_seconds = gap − 2s`, inject, re-evaluate
+- Replan drive: signal Planner to rebuild remaining segment when drift exceeds threshold
+- Live takeover: suspend queue feeding on live connect webhook; replan on disconnect; write to `live_events`
+
+**Milestone:** Station plays a fully planned schedule. Supervisor handles operator skips and drift. Logs show per-event reasoning and drift values with structured fields.
+
+---
+
+### Phase 5 — Operator Visibility UI
+
+**Tasks:**
+- Active plan list: current + next segment items (content type, title, planned duration, status, reason)
+- Drift panel: running `drift_seconds`, trend indicator, next correction action when over threshold
+- Campaign pacing dashboard: target vs. actual per campaign, pacing score, projected end-of-day
+- Process health panel: last heartbeat per process, LS harbor last-success timestamp
+- Supervisor log feed: structured log tail, filterable by event type and process
+
+**Milestone:** Operator can observe the engine's reasoning and state in the web UI without opening log files.
+
+---
+
+### Phase 6 — Dry Run
+
+**Tasks:**
+- Planner runs over a synthetic future window advancing time without LS
+- Simulated pacing state carries forward between segments
+- `sim_plans` / `sim_plan_items` tables tagged with `simulation_id`
+- API: `POST /simulation {start_at, end_at}`
+- UI: timeline view with per-segment drill-down and pacing projections; oversubscribed breaks highlighted
+
+**Milestone:** Operator can preview 24 hours of scheduling before it airs, with per-item reasoning and projected campaign pacing.
