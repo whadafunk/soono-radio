@@ -31,28 +31,17 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/push",
-  fun (req) ->
+  fun (~protocol=_, ~data, ~headers=_, _) ->
     begin
-      body = req.body()
-      # body is the annotated URI string sent by HarborClient.push()
-      # Parse the JSON {"uri": "..."} payload
-      parsed = json.parse(default={uri = ""}, body)
-      uri = parsed.uri
-      if uri == "" then
-        {
-          status_code = 400,
-          headers = [("Content-Type", "application/json")],
-          body = json.stringify({ok = false, error = "uri is required"})
-        }
+      parsed = json.parse(default={uri = ""}, data)
+      ann_uri = parsed.uri
+      if ann_uri == "" then
+        (400, [("Content-Type", "application/json")], json.stringify({ok = false, error = "uri is required"}))
       else
-        r = request.create(uri)
+        r = request.create(ann_uri)
         queue.push(r)
-        rid = string_of(request.id(r))
-        {
-          status_code = 200,
-          headers = [("Content-Type", "application/json")],
-          body = json.stringify({ok = true, request_id = rid})
-        }
+        rid = "#{request.id(r)}"
+        (200, [("Content-Type", "application/json")], json.stringify({ok = true, request_id = rid}))
       end
     end
 )
@@ -61,15 +50,11 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/queue",
-  fun (_req) ->
+  fun (~protocol=_, ~data=_, ~headers=_, _) ->
     begin
-      ids = list.map(fun (r) -> string_of(request.id(r)), queue.queue())
+      ids = list.map(fun (r) -> "#{request.id(r)}", queue.queue())
       depth = list.length(ids)
-      {
-        status_code = 200,
-        headers = [("Content-Type", "application/json")],
-        body = json.stringify({depth = depth, ids = ids})
-      }
+      (200, [("Content-Type", "application/json")], json.stringify({depth = depth, ids = ids}))
     end
 )
 
@@ -77,14 +62,10 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/skip",
-  fun (_req) ->
+  fun (~protocol=_, ~data=_, ~headers=_, _) ->
     begin
       queue.skip()
-      {
-        status_code = 200,
-        headers = [("Content-Type", "application/json")],
-        body = json.stringify({ok = true})
-      }
+      (200, [("Content-Type", "application/json")], json.stringify({ok = true}))
     end
 )
 
@@ -92,14 +73,10 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/live-status",
-  fun (_req) ->
+  fun (~protocol=_, ~data=_, ~headers=_, _) ->
     begin
       connected = live.is_connected()
-      {
-        status_code = 200,
-        headers = [("Content-Type", "application/json")],
-        body = json.stringify({connected = connected})
-      }
+      (200, [("Content-Type", "application/json")], json.stringify({connected = connected}))
     end
 )
 
