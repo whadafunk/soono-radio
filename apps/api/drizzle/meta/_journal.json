@@ -309,6 +309,13 @@
       "when": 1779794121672,
       "tag": "0043_broken_living_lightning",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "6",
+      "when": 1779876707770,
+      "tag": "0044_chilly_liz_osborn",
+      "breakpoints": true
     }
   ]
 }

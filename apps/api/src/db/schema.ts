@@ -160,6 +160,10 @@ export const playHistory = sqliteTable(
     // heavy_rotation-enabled rotation. Null for plays not attributable to a
     // music campaign.
     music_campaign_id: integer('music_campaign_id').references(() => musicCampaigns.id, { onDelete: 'set null' }),
+    // V2 plan linkage — set when a play was executed from a finalized plan.
+    // Null for manual plays, live plays, and any play that predates V2.
+    // No Drizzle FK reference to avoid circular dependency with planItems.
+    plan_item_id: integer('plan_item_id'),
   },
   (t) => ({
     startedAtIdx: index('play_history_started_at_idx').on(t.started_at),
@@ -167,6 +171,7 @@ export const playHistory = sqliteTable(
     sourceIdx: index('play_history_source_idx').on(t.source),
     campaignIdx: index('play_history_campaign_idx').on(t.campaign_id),
     musicCampaignIdx: index('play_history_music_campaign_idx').on(t.music_campaign_id),
+    planItemIdx: index('play_history_plan_item_idx').on(t.plan_item_id),
   }),
 );
 
@@ -1071,3 +1076,144 @@ export const stationSettings = sqliteTable('station_settings', {
 
 export type StationSettings = typeof stationSettings.$inferSelect;
 export type RundownPlaybackCursorInsert = typeof rundownPlaybackCursors.$inferInsert;
+
+// ─── Supervisor V2 ────────────────────────────────────────────────────────────
+
+export const PLAN_STATUSES = ['draft', 'finalized', 'active', 'completed'] as const;
+export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
+export const plans = sqliteTable(
+  'plans',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    segment_id: integer('segment_id')
+      .notNull()
+      .references(() => clockSegments.id, { onDelete: 'cascade' }),
+    // Unix ms — identifies which clock-hour instance of the segment this plan covers.
+    clock_instance_started_at: integer('clock_instance_started_at').notNull(),
+    status: text('status', { enum: PLAN_STATUSES }).notNull(),
+    created_at: integer('created_at').notNull(),
+    finalized_at: integer('finalized_at'),
+  },
+  (t) => ({
+    segmentIdx: index('plans_segment_idx').on(t.segment_id),
+    statusIdx: index('plans_status_idx').on(t.status),
+  }),
+);
+
+export type Plan = typeof plans.$inferSelect;
+export type PlanInsert = typeof plans.$inferInsert;
+
+export const PLAN_ITEM_CONTENT_TYPES = [
+  'music',
+  'campaign',
+  'promo',
+  'jingle',
+  'station_id',
+  'filler',
+  'voice_track',
+  'branding',
+  'rundown',
+] as const;
+export type PlanItemContentType = (typeof PLAN_ITEM_CONTENT_TYPES)[number];
+
+export const PLAN_ITEM_STATUSES = [
+  'pending',
+  'playing',
+  'played',
+  'dropped',
+  'skipped',
+  'supervisor_skipped',
+  'operator_skipped',
+] as const;
+export type PlanItemStatus = (typeof PLAN_ITEM_STATUSES)[number];
+
+export const planItems = sqliteTable(
+  'plan_items',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    plan_id: integer('plan_id')
+      .notNull()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    position: integer('position').notNull(),
+    media_id: integer('media_id')
+      .notNull()
+      .references(() => media.id, { onDelete: 'cascade' }),
+    content_type: text('content_type', { enum: PLAN_ITEM_CONTENT_TYPES }).notNull(),
+    campaign_id: integer('campaign_id').references(() => campaigns.id, { onDelete: 'set null' }),
+    music_campaign_id: integer('music_campaign_id').references(() => musicCampaigns.id, { onDelete: 'set null' }),
+    planned_duration_seconds: real('planned_duration_seconds').notNull(),
+    mandatory: integer('mandatory', { mode: 'boolean' }).notNull().default(false),
+    status: text('status', { enum: PLAN_ITEM_STATUSES }).notNull().default('pending'),
+    // Reasoning string — required; explains why this item was placed.
+    reason: text('reason').notNull(),
+    // Set when the item is actually played; links plan to play_history.
+    play_history_id: integer('play_history_id').references(() => playHistory.id, { onDelete: 'set null' }),
+  },
+  (t) => ({
+    planIdx: index('plan_items_plan_idx').on(t.plan_id),
+    positionIdx: index('plan_items_position_idx').on(t.plan_id, t.position),
+    statusIdx: index('plan_items_status_idx').on(t.status),
+  }),
+);
+
+export type PlanItem = typeof planItems.$inferSelect;
+export type PlanItemInsert = typeof planItems.$inferInsert;
+
+export const stopSetEstimates = sqliteTable(
+  'stop_set_estimates',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    plan_id: integer('plan_id')
+      .notNull()
+      .unique()
+      .references(() => plans.id, { onDelete: 'cascade' }),
+    segment_id: integer('segment_id')
+      .notNull()
+      .references(() => clockSegments.id, { onDelete: 'cascade' }),
+    computed_at: integer('computed_at').notNull(),
+    break_duration_seconds: real('break_duration_seconds').notNull(),
+    hard_claimed_seconds: real('hard_claimed_seconds').notNull(),
+    contested_seconds: real('contested_seconds').notNull(),
+    free_seconds: real('free_seconds').notNull(),
+    occupation_ratio: real('occupation_ratio').notNull(),
+    oversubscribed: integer('oversubscribed', { mode: 'boolean' }).notNull(),
+    candidate_count: integer('candidate_count').notNull(),
+  },
+  (t) => ({
+    segmentIdx: index('stop_set_estimates_segment_idx').on(t.segment_id),
+    oversubscribedIdx: index('stop_set_estimates_oversubscribed_idx').on(t.oversubscribed),
+  }),
+);
+
+export type StopSetEstimate = typeof stopSetEstimates.$inferSelect;
+export type StopSetEstimateInsert = typeof stopSetEstimates.$inferInsert;
+
+// Single-row table — always id=1. Ephemeral supervisor runtime state.
+export const supervisorState = sqliteTable('supervisor_state', {
+  id: integer('id').primaryKey().default(1),
+  current_segment_id: integer('current_segment_id').references(() => clockSegments.id, { onDelete: 'set null' }),
+  current_drift_seconds: real('current_drift_seconds').notNull().default(0),
+  last_heartbeat_at: integer('last_heartbeat_at'),
+  active_plan_id: integer('active_plan_id').references(() => plans.id, { onDelete: 'set null' }),
+});
+
+export type SupervisorStateRow = typeof supervisorState.$inferSelect;
+export type SupervisorStateInsert = typeof supervisorState.$inferInsert;
+
+export const liveEvents = sqliteTable(
+  'live_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    started_at: integer('started_at').notNull(),
+    ended_at: integer('ended_at'),
+    segment_id: integer('segment_id').references(() => clockSegments.id, { onDelete: 'set null' }),
+    plan_id: integer('plan_id').references(() => plans.id, { onDelete: 'set null' }),
+  },
+  (t) => ({
+    startedAtIdx: index('live_events_started_at_idx').on(t.started_at),
+  }),
+);
+
+export type LiveEvent = typeof liveEvents.$inferSelect;
+export type LiveEventInsert = typeof liveEvents.$inferInsert;
