@@ -112,6 +112,7 @@ queue.on_track(fun (meta) ->
 
 on_end(
   delay=5.,
+  queue,
   fun (remaining, meta) ->
     thread.run(fun () ->
       begin
@@ -128,8 +129,7 @@ on_end(
           "#{api_url}/internal/ls/track-ending"
         ))
       end
-    ),
-  queue
+    )
 )
 
 # Source priority — live takes over when present, queue otherwise
