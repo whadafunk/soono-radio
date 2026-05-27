@@ -31,17 +31,19 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/push",
-  fun (reply, _headers, data) ->
+  fun (req, res) ->
     begin
-      parsed = json.parse(default={uri = ""}, data())
+      body = req.body()
+      parsed = json.parse(default={uri = ""}, body)
       ann_uri = parsed.uri
       if ann_uri == "" then
-        reply(400, [("Content-Type", "application/json")], json.stringify({ok = false, error = "uri is required"}))
+        res.status_code(400)
+        res.json({ok = false, error = "uri is required"})
       else
         r = request.create(ann_uri)
         queue.push(r)
         rid = "#{request.id(r)}"
-        reply(200, [("Content-Type", "application/json")], json.stringify({ok = true, request_id = rid}))
+        res.json({ok = true, request_id = rid})
       end
     end
 )
@@ -50,11 +52,11 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/queue",
-  fun (_headers, _data, reply) ->
+  fun (_req, res) ->
     begin
       ids = list.map(fun (r) -> "#{request.id(r)}", queue.queue())
       depth = list.length(ids)
-      reply(200, [("Content-Type", "application/json")], json.stringify({depth = depth, ids = ids}))
+      res.json({depth = depth, ids = ids})
     end
 )
 
@@ -62,10 +64,10 @@ harbor.http.register(
   port=8005,
   method="POST",
   "/skip",
-  fun (_headers, _data, reply) ->
+  fun (_req, res) ->
     begin
       queue.skip()
-      reply(200, [("Content-Type", "application/json")], json.stringify({ok = true}))
+      res.json({ok = true})
     end
 )
 
@@ -73,10 +75,10 @@ harbor.http.register(
   port=8005,
   method="GET",
   "/live-status",
-  fun (_headers, _data, reply) ->
+  fun (_req, res) ->
     begin
       connected = live.is_connected()
-      reply(200, [("Content-Type", "application/json")], json.stringify({connected = connected}))
+      res.json({connected = connected})
     end
 )
 
