@@ -65,6 +65,11 @@ export class SupervisorProcess {
   private currentSegmentEndMs: number | null = null;
   private currentClockInstanceMs: number | null = null;
   private currentDriftSeconds = 0;
+  // Timestamp when the active plan was activated (or when the supervisor last
+  // restarted with an active plan). Used as the drift baseline so that
+  // calendar lag from safety fills / restarts before the plan started does
+  // not count as drift.
+  private planActivatedAtMs = 0;
   private activePlanId: number | null = null;
   // Plan currently being prepared for the *next* segment. Tracks which
   // segment instance we have already drafted so we don't double-draft.
@@ -223,9 +228,35 @@ export class SupervisorProcess {
         .where(eq(supervisorStateTable.id, 1));
       if (!row) return;
       this.currentSegmentId = row.current_segment_id ?? null;
-      this.currentDriftSeconds = row.current_drift_seconds ?? 0;
       this.activePlanId = row.active_plan_id ?? null;
       this.isPaused = row.paused ?? false;
+
+      // On restart, set planActivatedAtMs so that drift starts near zero.
+      // We compute how much content has already been consumed from the active
+      // plan and back-date the baseline: planActivatedAtMs = now - consumed.
+      // This avoids a massive false drift from items already played/skipped.
+      if (this.activePlanId != null) {
+        const items = await this.db
+          .select({ status: planItemsTable.status, planned_duration_seconds: planItemsTable.planned_duration_seconds })
+          .from(planItemsTable)
+          .where(eq(planItemsTable.plan_id, this.activePlanId))
+          .orderBy(asc(planItemsTable.position));
+        const terminal = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
+        let consumedMs = 0;
+        for (const item of items) {
+          if (terminal.has(item.status)) {
+            consumedMs += (item.planned_duration_seconds ?? 0) * 1_000;
+          } else {
+            break;
+          }
+        }
+        this.planActivatedAtMs = Date.now() - consumedMs;
+        this.currentDriftSeconds = 0; // restart fresh; let tick() recompute naturally
+        await this.db
+          .update(supervisorStateTable)
+          .set({ current_drift_seconds: 0 })
+          .where(eq(supervisorStateTable.id, 1));
+      }
     } catch (err) {
       this.logger?.error(
         { err, process: 'supervisor', event: 'HYDRATE_FAILED' },
@@ -291,9 +322,13 @@ export class SupervisorProcess {
     // --- Plan playhead ---
     const { consumedSeconds, expectedEndMs } = await this.computePlanPlayhead(nowMs);
 
-    // --- Drift ---
-    const calendarElapsed = (nowMs - resolved.segmentStartMs) / 1000;
-    const drift = calendarElapsed - consumedSeconds;
+    // --- Drift (plan-relative baseline) ---
+    // planRelativeElapsed counts only time since the plan was activated,
+    // not since segment start. This prevents calendar lag from safety fills
+    // or mid-segment restarts from being counted as drift.
+    const planRelativeElapsedSeconds =
+      this.planActivatedAtMs > 0 ? (nowMs - this.planActivatedAtMs) / 1000 : 0;
+    const drift = planRelativeElapsedSeconds - consumedSeconds;
     if (Math.abs(drift - this.currentDriftSeconds) > 0.5) {
       this.currentDriftSeconds = drift;
       await this.db
@@ -302,7 +337,7 @@ export class SupervisorProcess {
         .where(eq(supervisorStateTable.id, 1));
       this.logger?.info({
         process: 'supervisor', event: 'DRIFT_UPDATE',
-        drift_seconds: drift, calendar_elapsed: calendarElapsed,
+        drift_seconds: drift, plan_relative_elapsed: planRelativeElapsedSeconds,
         plan_consumed: consumedSeconds,
       }, 'supervisor: drift updated from playheads');
     }
@@ -555,9 +590,13 @@ export class SupervisorProcess {
       .where(eq(plansTable.id, msg.plan_id));
 
     this.activePlanId = msg.plan_id;
+    // Reset the plan-relative drift baseline to now. Any lag accumulated
+    // before this plan activated (safety fills, restarts) is not "drift".
+    this.planActivatedAtMs = Date.now();
+    this.currentDriftSeconds = 0;
     await this.db
       .update(supervisorStateTable)
-      .set({ active_plan_id: msg.plan_id })
+      .set({ active_plan_id: msg.plan_id, current_drift_seconds: 0 })
       .where(eq(supervisorStateTable.id, 1));
 
     this.logger?.info(
@@ -642,11 +681,12 @@ export class SupervisorProcess {
       return;
     }
 
-    const driftAdjustment = -this.currentDriftSeconds;
-    const targetDuration = Math.max(
-      0,
-      resolved.segment.duration_seconds + driftAdjustment,
-    );
+    // Target = remaining segment time from now, not the full segment duration.
+    // Using remaining time handles both the normal case (plan requested at
+    // segment start → remaining ≈ full duration) and the restart/late case
+    // (plan requested mid-segment → remaining = actual time left).
+    const remainingMs = Math.max(0, resolved.segmentEndMs - nowMs);
+    const targetDuration = Math.floor(remainingMs / 1000);
     const requestId = randomUUID();
     this.logger?.info(
       {
@@ -654,7 +694,7 @@ export class SupervisorProcess {
         event: 'PLAN_DRAFT_REQUESTED',
         segment_id: resolved.segment.id,
         target_duration_seconds: targetDuration,
-        drift_adjustment_seconds: driftAdjustment,
+        remaining_ms: remainingMs,
         request_id: requestId,
       },
       'supervisor: requesting draft plan',
