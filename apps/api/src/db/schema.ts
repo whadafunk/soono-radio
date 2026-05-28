@@ -1149,6 +1149,10 @@ export const planItems = sqliteTable(
     reason: text('reason').notNull(),
     // Set when the item is actually played; links plan to play_history.
     play_history_id: integer('play_history_id').references(() => playHistory.id, { onDelete: 'set null' }),
+    // Supervisor cut/skip permission per item (D34). Defaults from supervisor_config;
+    // content processes may override per candidate. 1=allowed, 0=forbidden.
+    cut_allowed: integer('cut_allowed').notNull().default(1),
+    skip_allowed: integer('skip_allowed').notNull().default(1),
   },
   (t) => ({
     planIdx: index('plan_items_plan_idx').on(t.plan_id),
@@ -1197,6 +1201,12 @@ export const supervisorState = sqliteTable('supervisor_state', {
   last_heartbeat_at: integer('last_heartbeat_at'),
   active_plan_id: integer('active_plan_id').references(() => plans.id, { onDelete: 'set null' }),
   paused: integer('paused', { mode: 'boolean' }).notNull().default(false),
+  // Two-plan model additions (D50, D51)
+  next_plan_id: integer('next_plan_id').references(() => plans.id, { onDelete: 'set null' }),
+  next_plan_draft_drift_seconds: real('next_plan_draft_drift_seconds'),
+  next_plan_drift_delta_seconds: real('next_plan_drift_delta_seconds'),
+  intentional_offset_seconds: real('intentional_offset_seconds').notNull().default(0),
+  planned_overshoot_seconds: real('planned_overshoot_seconds').notNull().default(0),
 });
 
 export type SupervisorStateRow = typeof supervisorState.$inferSelect;
@@ -1218,3 +1228,45 @@ export const liveEvents = sqliteTable(
 
 export type LiveEvent = typeof liveEvents.$inferSelect;
 export type LiveEventInsert = typeof liveEvents.$inferInsert;
+
+// Single-row config table — always id=1. All tunable supervisor parameters (D36 + D50).
+export const supervisorConfig = sqliteTable('supervisor_config', {
+  id: integer('id').primaryKey().default(1),
+  // Planning
+  overserve_factor: real('overserve_factor').notNull().default(2.0),
+  second_pass_drift_delta_threshold_s: real('second_pass_drift_delta_threshold_s').notNull().default(30.0),
+  second_pass_lead_time_s: real('second_pass_lead_time_s').notNull().default(30.0),
+  // Drift correction
+  drift_correction_threshold_s: real('drift_correction_threshold_s').notNull().default(10.0),
+  coasting_correction_threshold_s: real('coasting_correction_threshold_s').notNull().default(30.0),
+  // Silence
+  silence_gap_tolerance_s: real('silence_gap_tolerance_s').notNull().default(5.0),
+  // Queue
+  queue_advance_s: real('queue_advance_s').notNull().default(8.0),
+  // Fire-early window (D50)
+  fire_early_min_window_s: real('fire_early_min_window_s').notNull().default(30.0),
+  // Drift tolerance preferences (D43, D50)
+  prefer_early_start_over_fill: integer('prefer_early_start_over_fill', { mode: 'boolean' }).notNull().default(true),
+  prefer_late_start_over_skip: integer('prefer_late_start_over_skip', { mode: 'boolean' }).notNull().default(true),
+  // Content type defaults: cut_allowed (D34, D36)
+  cut_allowed_music: integer('cut_allowed_music', { mode: 'boolean' }).notNull().default(true),
+  cut_allowed_campaign: integer('cut_allowed_campaign', { mode: 'boolean' }).notNull().default(false),
+  cut_allowed_promo: integer('cut_allowed_promo', { mode: 'boolean' }).notNull().default(false),
+  cut_allowed_jingle: integer('cut_allowed_jingle', { mode: 'boolean' }).notNull().default(false),
+  cut_allowed_station_id: integer('cut_allowed_station_id', { mode: 'boolean' }).notNull().default(false),
+  cut_allowed_branding: integer('cut_allowed_branding', { mode: 'boolean' }).notNull().default(false),
+  cut_allowed_rundown: integer('cut_allowed_rundown', { mode: 'boolean' }).notNull().default(false),
+  cut_allowed_voice_track: integer('cut_allowed_voice_track', { mode: 'boolean' }).notNull().default(false),
+  // Content type defaults: skip_allowed (D34, D36)
+  skip_allowed_music: integer('skip_allowed_music', { mode: 'boolean' }).notNull().default(true),
+  skip_allowed_campaign: integer('skip_allowed_campaign', { mode: 'boolean' }).notNull().default(false),
+  skip_allowed_promo: integer('skip_allowed_promo', { mode: 'boolean' }).notNull().default(true),
+  skip_allowed_jingle: integer('skip_allowed_jingle', { mode: 'boolean' }).notNull().default(true),
+  skip_allowed_station_id: integer('skip_allowed_station_id', { mode: 'boolean' }).notNull().default(true),
+  skip_allowed_branding: integer('skip_allowed_branding', { mode: 'boolean' }).notNull().default(true),
+  skip_allowed_rundown: integer('skip_allowed_rundown', { mode: 'boolean' }).notNull().default(false),
+  skip_allowed_voice_track: integer('skip_allowed_voice_track', { mode: 'boolean' }).notNull().default(false),
+});
+
+export type SupervisorConfig = typeof supervisorConfig.$inferSelect;
+export type SupervisorConfigInsert = typeof supervisorConfig.$inferInsert;

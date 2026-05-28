@@ -37,6 +37,12 @@ export interface ResolvedSegment {
   // Plans key off the clock instance, not the segment, so this is the key
   // the Supervisor uses for PLAN_DRAFT_REQUESTED.clock_instance_started_at.
   clockInstanceStartedAt: number;
+  // Show context derived from the calendar / template entry that resolved this
+  // segment. Null when no show is scheduled (generic clock time). Used by the
+  // Supervisor to populate show_id / show_name in PLAN_DRAFT_REQUESTED so the
+  // Planner can request show-envelope candidates from the Branding process.
+  show_id: number | null;
+  show_name: string | null;
 }
 
 // ISO weekday in our schema: 1 = Mon … 7 = Sun. JS Date.getDay() returns
@@ -79,9 +85,9 @@ export async function resolveCurrentSegment(
       ),
     );
   for (const row of calendarRows) {
-    const clockId = await resolveClockIdForEntry(db, row.clock_id, row.show_id);
-    if (clockId != null) {
-      const resolved = await resolveSegmentWithinClock(db, clockId, nowMs);
+    const ctx = await resolveClockContext(db, row.clock_id, row.show_id);
+    if (ctx != null) {
+      const resolved = await resolveSegmentWithinClock(db, ctx.clockId, nowMs, ctx.showId, ctx.showName);
       if (resolved) return resolved;
     }
   }
@@ -98,7 +104,7 @@ export async function resolveCurrentSegment(
       ),
     );
   if (tce) {
-    const resolved = await resolveSegmentWithinClock(db, tce.clock_id, nowMs);
+    const resolved = await resolveSegmentWithinClock(db, tce.clock_id, nowMs, null, null);
     if (resolved) return resolved;
   }
 
@@ -114,9 +120,9 @@ export async function resolveCurrentSegment(
       ),
     );
   for (const row of templateRows) {
-    const clockId = await resolveClockIdForEntry(db, row.clock_id, row.show_id);
-    if (clockId != null) {
-      const resolved = await resolveSegmentWithinClock(db, clockId, nowMs);
+    const ctx = await resolveClockContext(db, row.clock_id, row.show_id);
+    if (ctx != null) {
+      const resolved = await resolveSegmentWithinClock(db, ctx.clockId, nowMs, ctx.showId, ctx.showName);
       if (resolved) return resolved;
     }
   }
@@ -124,20 +130,49 @@ export async function resolveCurrentSegment(
   return null;
 }
 
-// Pulls clock_id out of an entry: prefer the explicit clock_id, otherwise
-// fall back to the assigned show's default_clock_id.
-async function resolveClockIdForEntry(
+// Resolves the segment that begins immediately after the segment active at
+// `nowMs`. Returns null if there is no following segment (silence, end of
+// clock structure, or calendar gap). Used by the Supervisor to request a
+// first-pass draft for segment N+1 the moment segment N starts (D29, D32).
+export async function resolveNextSegment(
+  nowMs: number,
+  db: typeof defaultDb = defaultDb,
+): Promise<ResolvedSegment | null> {
+  const current = await resolveCurrentSegment(nowMs, db);
+  if (!current) return null;
+  return resolveCurrentSegment(current.segmentEndMs + 1, db);
+}
+
+// ─── Internal helpers ────────────────────────────────────────────────────────
+
+interface ClockContext {
+  clockId: number;
+  showId: number | null;
+  showName: string | null;
+}
+
+// Resolves clock + show context from an entry's clock_id / show_id fields.
+// Prefers the explicit clock_id; falls back to the show's default_clock_id.
+// Returns null when neither source yields a clock.
+async function resolveClockContext(
   db: typeof defaultDb,
   clockId: number | null | undefined,
   showId: number | null | undefined,
-): Promise<number | null> {
-  if (clockId != null) return clockId;
+): Promise<ClockContext | null> {
+  if (clockId != null) {
+    return { clockId, showId: showId ?? null, showName: null };
+  }
   if (showId == null) return null;
   const [show] = await db
-    .select({ default_clock_id: showsTable.default_clock_id })
+    .select({ default_clock_id: showsTable.default_clock_id, name: showsTable.name })
     .from(showsTable)
     .where(eq(showsTable.id, showId));
-  return show?.default_clock_id ?? null;
+  if (!show?.default_clock_id) return null;
+  return {
+    clockId: show.default_clock_id,
+    showId,
+    showName: show.name ?? null,
+  };
 }
 
 // Given a clock_id and now-ms, lays out segments in sort_order starting at
@@ -146,6 +181,8 @@ async function resolveSegmentWithinClock(
   db: typeof defaultDb,
   clockId: number,
   nowMs: number,
+  showId: number | null,
+  showName: string | null,
 ): Promise<ResolvedSegment | null> {
   const segments = await db
     .select()
@@ -177,6 +214,8 @@ async function resolveSegmentWithinClock(
         segmentStartMs: segStart,
         segmentEndMs: segEnd,
         clockInstanceStartedAt: hourStartMs,
+        show_id: showId,
+        show_name: showName,
       };
     }
     cursorMs = segEnd;

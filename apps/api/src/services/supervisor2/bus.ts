@@ -108,6 +108,12 @@ export type BusMessage =
       // Segment duration already adjusted for drift by the Supervisor.
       target_duration_seconds: number;
       now_ms: number;
+      // Show context resolved by the Supervisor (D40, D50). Null when no
+      // show is scheduled for this segment's clock instance. The Planner
+      // uses show_id to request show-start/end envelopes from Branding and
+      // to determine is_show_start / is_show_end via a calendar query.
+      show_id: number | null;
+      show_name: string | null;
     }
   | {
       // Planner → Supervisor + Queue Feeder: draft plan written to SQLite.
@@ -122,6 +128,20 @@ export type BusMessage =
       request_id: string;
       plan_id: number;
       now_ms: number;
+      // Drift-adjusted target the Planner must hit during second-pass
+      // assembly (D49, D50). The Supervisor owns this computation:
+      //   adjusted_target = nominal_segment_duration − current_drift_seconds
+      // clamped to [60%, 140%] of nominal. When |drift_delta_seconds| ≥
+      // second_pass_drift_delta_threshold_s the Planner does a full
+      // re-assembly using this value; otherwise it only re-validates.
+      adjusted_target_seconds: number;
+      // drift_at_second_pass − drift_at_first_pass. Governs whether the
+      // Planner does a full re-assembly (large delta) or lightweight
+      // substitution only (small delta). See Decision 31.
+      drift_delta_seconds: number;
+      // Running drift at the moment finalization is triggered. Logged on
+      // every PLAN_FINALIZE_COMPLETE entry for post-mortem analysis.
+      current_drift_seconds: number;
     }
   | {
       // Planner → Supervisor + Queue Feeder: plan finalized, queue feeder may
