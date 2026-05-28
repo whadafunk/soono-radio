@@ -60,6 +60,10 @@ export type BusMessage =
       // calling Date.now() themselves, so dry-run simulation can substitute
       // a synthetic clock without modifying the processes.
       now_ms: number;
+      // Show id passed only to the branding process so it can return
+      // show_start / show_end envelope candidates (D40). Null / omitted for
+      // non-show segments or non-branding processes.
+      show_id: number | null;
     }
   | {
       type: 'CANDIDATES';

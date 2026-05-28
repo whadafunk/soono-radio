@@ -26,6 +26,10 @@
 //                 separation, competing exclusions, first-in-slot)
 //   Decision 27 — coasting_order vocabulary: songs/jingles/station_ids/spots/promos
 //   Decision 28 — stop_set_estimates: separate table
+//   Decision 31 — full re-assembly at second pass when |drift_delta| >= threshold
+//   Decision 34 — cut_allowed + skip_allowed per plan_item from supervisor_config
+//   Decision 35 — rundown segments exempt from drift target adjustment
+//   Decision 40 — show envelope detection and placement
 //
 // All async errors inside event handlers are caught and logged. The Planner
 // works offline — it never calls HarborClient.
@@ -40,10 +44,13 @@ import {
   plans as plansTable,
   planItems as planItemsTable,
   stopSetEstimates as stopSetEstimatesTable,
+  supervisorConfig as supervisorConfigTable,
   type ClockSegment,
   type PlanItemContentType,
   type PlanItemInsert,
+  type SupervisorConfig,
 } from '../../../db/schema.js';
+import { resolveCurrentSegment } from '../clockResolver.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import type {
   BrandingCandidate,
@@ -77,6 +84,10 @@ interface PendingAssemblyItem {
   planned_duration_seconds: number;
   mandatory: boolean;
   reason: string;
+  // D34: cut/skip permissions — derived from supervisor_config defaults;
+  // show envelopes always carry false/false.
+  cut_allowed: boolean;
+  skip_allowed: boolean;
   // ids returned by the content process — used to send CONFIRM_USED /
   // RETURN_UNUSED back to the same process.
   music_candidate_id?: number;
@@ -97,6 +108,21 @@ interface AssemblyResult {
   unused_rundown_ids: number[];
   // Optional space estimate persisted to stop_set_estimates for stop-set plans.
   space_estimate?: StopSetCandidatePool['space_estimate'];
+}
+
+// Show context carried into the assembly methods (D40).
+interface ShowContext {
+  showId: number | null;
+  showName: string | null;
+  // True when this segment is the first segment of the first clock instance
+  // of the show block — a show_start envelope should be placed here (D40).
+  isShowStart: boolean;
+  // True when this segment is the last segment of the last clock instance
+  // of the show block — a show_end envelope should be placed here (D40).
+  isShowEnd: boolean;
+  // supervisor_config row — carried in ShowContext so every assembly helper
+  // can compute cut_allowed/skip_allowed without a separate DB call.
+  config: SupervisorConfig;
 }
 
 export class PlannerProcess {
@@ -165,6 +191,8 @@ export class PlannerProcess {
       msg.clock_instance_started_at,
       msg.target_duration_seconds,
       msg.now_ms,
+      msg.show_id,
+      msg.show_name,
     );
     this._bus.emit({
       type: 'PLAN_DRAFT_READY',
@@ -177,7 +205,13 @@ export class PlannerProcess {
   private async handleFinalizeRequested(
     msg: BusMessage & { type: 'PLAN_FINALIZE_REQUESTED' },
   ): Promise<void> {
-    await this.finalizePlan(msg.plan_id, msg.now_ms);
+    await this.finalizePlan(
+      msg.plan_id,
+      msg.now_ms,
+      msg.adjusted_target_seconds,
+      msg.drift_delta_seconds,
+      msg.current_drift_seconds,
+    );
     this._bus.emit({
       type: 'PLAN_FINALIZED',
       request_id: msg.request_id,
@@ -209,6 +243,8 @@ export class PlannerProcess {
     clockInstanceStartedAt: number,
     targetDurationSeconds: number,
     nowMs: number,
+    showId: number | null,
+    showName: string | null,
   ): Promise<number> {
     const [segment] = await this.db
       .select()
@@ -227,6 +263,23 @@ export class PlannerProcess {
       return this.insertPlanRow(segment, clockInstanceStartedAt, nowMs);
     }
 
+    const config = await this.loadSupervisorConfig();
+
+    let isShowStart = false;
+    let isShowEnd = false;
+    if (showId != null) {
+      const flags = await this.getShowBoundaryFlags(
+        segment.id,
+        segment.clock_id,
+        clockInstanceStartedAt,
+        showId,
+      );
+      isShowStart = flags.isShowStart;
+      isShowEnd = flags.isShowEnd;
+    }
+
+    const showCtx: ShowContext = { showId, showName, isShowStart, isShowEnd, config };
+
     const planId = await this.insertPlanRow(segment, clockInstanceStartedAt, nowMs);
 
     const result = await this.assembleForSegment(
@@ -234,6 +287,7 @@ export class PlannerProcess {
       clockInstanceStartedAt,
       targetDurationSeconds,
       nowMs,
+      showCtx,
     );
 
     await this.persistPlanItems(planId, result.items);
@@ -247,6 +301,8 @@ export class PlannerProcess {
         segment_id: segment.id,
         segment_type: segment.type,
         item_count: result.items.length,
+        is_show_start: isShowStart,
+        is_show_end: isShowEnd,
       },
       'planner: draft complete',
     );
@@ -254,11 +310,19 @@ export class PlannerProcess {
     return planId;
   }
 
-  // Finalization pass. Re-requests candidates and substitutes any pending
-  // item whose backing candidate is no longer present in the fresh pool
-  // (campaign hit daily cap, etc.). Upserts stop_set_estimates with fresh
-  // numbers when the segment is a stop-set. Updates plan status to 'finalized'.
-  async finalizePlan(planId: number, nowMs: number): Promise<void> {
+  // Finalization pass (D31). When |drift_delta_seconds| >= threshold, drops
+  // all pending items and runs a full re-assembly with adjusted_target_seconds.
+  // Otherwise runs the lightweight substitution pass (re-validates pacing only).
+  // Rundown segments (news/bulletin) are always lightweight — they are exempt
+  // from drift target adjustment (D35). Updates plan status to 'finalized'.
+  async finalizePlan(
+    planId: number,
+    nowMs: number,
+    adjustedTargetSeconds: number,
+    driftDeltaSeconds: number,
+    currentDriftSeconds: number,
+  ): Promise<void> {
+    void currentDriftSeconds; // logged by supervisor; planner just records finalize event
     const [plan] = await this.db
       .select()
       .from(plansTable)
@@ -285,71 +349,158 @@ export class PlannerProcess {
       return;
     }
 
-    const pendingItems = await this.db
-      .select()
-      .from(planItemsTable)
-      .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
+    const config = await this.loadSupervisorConfig();
+    const threshold = config.second_pass_drift_delta_threshold_s;
 
-    // Lightweight check: re-request candidate pools and verify each pending
-    // item still has a backing candidate. Items whose backing candidate has
-    // disappeared (campaign hit daily cap, promo over min target) are
-    // substituted with the first eligible replacement from the fresh pool.
-    // Full re-assembly is intentionally deferred — substitution is enough to
-    // pick up the most common drift cases (cap hits, slot-1 resolution).
+    // Rundown segments are exempt from drift target adjustment (D35).
+    const isRundown = segment.type === 'news' || segment.type === 'bulletin';
+    const needsFullReassembly = !isRundown && Math.abs(driftDeltaSeconds) >= threshold;
+
     let substitutions = 0;
-    if (pendingItems.length > 0) {
-      const sumPending = pendingItems.reduce(
-        (acc, it) => acc + it.planned_duration_seconds,
-        0,
-      );
-      const freshMusic =
-        segment.type === 'music' || hasMusicGapNeeds(segment)
-          ? await this.requestPool<MusicCandidatePool>('music', segment, plan, sumPending, nowMs)
-          : null;
-      const freshCampaign =
-        segment.type === 'stop_set'
-          ? await this.requestPool<StopSetCandidatePool>(
-              'campaign',
-              segment,
-              plan,
-              sumPending,
-              nowMs,
-            )
-          : null;
 
-      for (const item of pendingItems) {
-        const stillValid = isItemStillValid(item, freshMusic, freshCampaign);
-        if (stillValid) continue;
-        const replacement = pickReplacement(item, freshMusic, freshCampaign);
-        if (!replacement) continue;
+    if (needsFullReassembly) {
+      // Full re-assembly: drop all pending items, rebuild from scratch with
+      // the drift-adjusted target (D31).
+      const pendingItems = await this.db
+        .select()
+        .from(planItemsTable)
+        .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
+
+      const dropMusic: number[] = [];
+      const dropBranding: number[] = [];
+      const dropCampaign: number[] = [];
+      const dropRundown: number[] = [];
+      for (const it of pendingItems) {
+        switch (it.content_type) {
+          case 'music': dropMusic.push(it.media_id); break;
+          case 'jingle':
+          case 'station_id':
+          case 'branding':
+          case 'filler': dropBranding.push(it.media_id); break;
+          case 'campaign':
+          case 'promo': dropCampaign.push(it.media_id); break;
+          case 'rundown':
+          case 'voice_track': dropRundown.push(it.media_id); break;
+        }
+      }
+      if (dropMusic.length > 0) this.emitDrop('music', dropMusic);
+      if (dropBranding.length > 0) this.emitDrop('branding', dropBranding);
+      if (dropCampaign.length > 0) this.emitDrop('campaign', dropCampaign);
+      if (dropRundown.length > 0) this.emitDrop('rundown', dropRundown);
+
+      for (const it of pendingItems) {
         await this.db
           .update(planItemsTable)
           .set({ status: 'dropped' })
-          .where(eq(planItemsTable.id, item.id));
-        await this.db.insert(planItemsTable).values({
-          plan_id: planId,
-          position: item.position,
-          media_id: replacement.media_id,
-          content_type: replacement.content_type,
-          campaign_id: replacement.campaign_id,
-          music_campaign_id: replacement.music_campaign_id,
-          planned_duration_seconds: replacement.planned_duration_seconds,
-          mandatory: replacement.mandatory,
-          reason: `${replacement.reason} (finalize substitution)`,
-          status: 'pending',
-        });
-        substitutions += 1;
+          .where(eq(planItemsTable.id, it.id));
       }
 
-      // Upsert the stop-set estimate with fresh numbers if the campaign pool
-      // is available. Decision 28: one row per plan, updated in place.
-      if (freshCampaign) {
-        await this.persistStopSetEstimateIfAny(
-          planId,
+      // Re-derive show context from the calendar at the plan's clock instance.
+      const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
+      const showId = showResolved?.show_id ?? null;
+      const showName = showResolved?.show_name ?? null;
+      let isShowStart = false;
+      let isShowEnd = false;
+      if (showId != null) {
+        const flags = await this.getShowBoundaryFlags(
           segment.id,
-          freshCampaign.space_estimate,
-          nowMs,
+          segment.clock_id,
+          plan.clock_instance_started_at,
+          showId,
         );
+        isShowStart = flags.isShowStart;
+        isShowEnd = flags.isShowEnd;
+      }
+
+      const showCtx: ShowContext = { showId, showName, isShowStart, isShowEnd, config };
+      const result = await this.assembleForSegment(
+        segment,
+        plan.clock_instance_started_at,
+        adjustedTargetSeconds,
+        nowMs,
+        showCtx,
+      );
+
+      await this.persistPlanItems(planId, result.items);
+      await this.notifyContentProcesses(result, planId, nowMs);
+      await this.persistStopSetEstimateIfAny(planId, segment.id, result.space_estimate, nowMs);
+
+      this.logger?.info(
+        {
+          event: 'PLAN_FINALIZE_FULL_REASSEMBLY',
+          plan_id: planId,
+          segment_id: segment.id,
+          drift_delta_seconds: driftDeltaSeconds,
+          adjusted_target_seconds: adjustedTargetSeconds,
+          dropped_count: pendingItems.length,
+          added_count: result.items.length,
+        },
+        'planner: finalize full re-assembly',
+      );
+    } else {
+      // Lightweight substitution: re-request candidate pools and replace any
+      // pending item whose backing candidate has disappeared (campaign hit
+      // daily cap, etc.). Does not restructure the plan.
+      const pendingItems = await this.db
+        .select()
+        .from(planItemsTable)
+        .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
+
+      if (pendingItems.length > 0) {
+        const sumPending = pendingItems.reduce(
+          (acc, it) => acc + it.planned_duration_seconds,
+          0,
+        );
+        const freshMusic =
+          segment.type === 'music' || hasMusicGapNeeds(segment)
+            ? await this.requestPool<MusicCandidatePool>('music', segment, plan, sumPending, nowMs)
+            : null;
+        const freshCampaign =
+          segment.type === 'stop_set'
+            ? await this.requestPool<StopSetCandidatePool>(
+                'campaign',
+                segment,
+                plan,
+                sumPending,
+                nowMs,
+              )
+            : null;
+
+        for (const item of pendingItems) {
+          const stillValid = isItemStillValid(item, freshMusic, freshCampaign);
+          if (stillValid) continue;
+          const replacement = pickReplacement(item, freshMusic, freshCampaign, config);
+          if (!replacement) continue;
+          await this.db
+            .update(planItemsTable)
+            .set({ status: 'dropped' })
+            .where(eq(planItemsTable.id, item.id));
+          await this.db.insert(planItemsTable).values({
+            plan_id: planId,
+            position: item.position,
+            media_id: replacement.media_id,
+            content_type: replacement.content_type,
+            campaign_id: replacement.campaign_id,
+            music_campaign_id: replacement.music_campaign_id,
+            planned_duration_seconds: replacement.planned_duration_seconds,
+            mandatory: replacement.mandatory,
+            reason: `${replacement.reason} (finalize substitution)`,
+            status: 'pending',
+            cut_allowed: replacement.cut_allowed ? 1 : 0,
+            skip_allowed: replacement.skip_allowed ? 1 : 0,
+          });
+          substitutions += 1;
+        }
+
+        // Upsert the stop-set estimate with fresh numbers if available (D28).
+        if (freshCampaign) {
+          await this.persistStopSetEstimateIfAny(
+            planId,
+            segment.id,
+            freshCampaign.space_estimate,
+            nowMs,
+          );
+        }
       }
     }
 
@@ -363,7 +514,9 @@ export class PlannerProcess {
         event: 'PLAN_FINALIZE_COMPLETE',
         plan_id: planId,
         segment_id: segment.id,
-        substitutions,
+        drift_delta_seconds: driftDeltaSeconds,
+        full_reassembly: needsFullReassembly,
+        substitutions: needsFullReassembly ? 0 : substitutions,
       },
       'planner: finalize complete',
     );
@@ -452,11 +605,26 @@ export class PlannerProcess {
         .where(eq(planItemsTable.id, it.id));
     }
 
+    const config = await this.loadSupervisorConfig();
+
+    // For mid-segment replanning, the show context is unchanged (show
+    // envelopes played at the start/end are not re-inserted). Pass show_id
+    // for branding pool selection but disable envelope insertion.
+    const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
+    const showCtx: ShowContext = {
+      showId: showResolved?.show_id ?? null,
+      showName: showResolved?.show_name ?? null,
+      isShowStart: false,
+      isShowEnd: false,
+      config,
+    };
+
     const result = await this.assembleForSegment(
       segment,
       plan.clock_instance_started_at,
       remainingSeconds,
       nowMs,
+      showCtx,
     );
 
     // Re-insert from fromPosition.
@@ -489,6 +657,7 @@ export class PlannerProcess {
     clockInstanceStartedAt: number,
     targetDurationSeconds: number,
     nowMs: number,
+    showCtx: ShowContext,
   ): Promise<AssemblyResult> {
     switch (segment.type) {
       case 'music':
@@ -497,6 +666,7 @@ export class PlannerProcess {
           clockInstanceStartedAt,
           targetDurationSeconds,
           nowMs,
+          showCtx,
         );
       case 'stop_set':
         return this.assembleStopSetPlan(
@@ -504,6 +674,7 @@ export class PlannerProcess {
           clockInstanceStartedAt,
           targetDurationSeconds,
           nowMs,
+          showCtx,
         );
       case 'news':
       case 'bulletin':
@@ -513,6 +684,7 @@ export class PlannerProcess {
           clockInstanceStartedAt,
           targetDurationSeconds,
           nowMs,
+          showCtx,
         );
       case 'live':
         return emptyResult();
@@ -528,20 +700,24 @@ export class PlannerProcess {
     clockInstanceStartedAt: number,
     targetDurationSeconds: number,
     nowMs: number,
+    showCtx: ShowContext,
   ): Promise<AssemblyResult> {
+    const { config } = showCtx;
+    const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
     const music = await this.requestPool<MusicCandidatePool>(
       'music',
       segment,
-      { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt },
+      instance,
       targetDurationSeconds,
       nowMs,
     );
     const branding = await this.requestPool<BrandingCandidatePool>(
       'branding',
       segment,
-      { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt },
+      instance,
       targetDurationSeconds,
       nowMs,
+      showCtx.showId,
     );
 
     const items: PendingAssemblyItem[] = [];
@@ -551,19 +727,33 @@ export class PlannerProcess {
     const isHardEnd = readStartPolicy(segment.start_policy).type === 'hard';
     const segmentStart = branding.segment_start;
     const segmentEnd = branding.segment_end;
-    const endReserveSeconds = segmentEnd?.duration_seconds ?? 0;
 
-    // (a) Segment-start envelope
+    // Reserve durations up-front so music fill stays within budget.
+    const showStartDur = (showCtx.isShowStart && branding.show_start)
+      ? branding.show_start.duration_seconds : 0;
+    const showEndReserve = (showCtx.isShowEnd && branding.show_end)
+      ? branding.show_end.duration_seconds : 0;
+    const segStartDur = segmentStart?.duration_seconds ?? 0;
+    const segEndReserve = segmentEnd?.duration_seconds ?? 0;
+
+    let remaining = targetDurationSeconds - showStartDur - segStartDur - segEndReserve - showEndReserve;
+
+    // (0) Show-start envelope — placed before segment-start envelope (D40).
+    if (showCtx.isShowStart && branding.show_start) {
+      items.push(showEnvelopeItem(branding.show_start, 'show_start envelope'));
+      usedBrandingIds.add(branding.show_start.id);
+    }
+
+    // (a) Segment-start envelope.
     if (segmentStart) {
-      items.push(brandingToItem(segmentStart, 'segment_start envelope'));
+      items.push(withCutSkip(
+        brandingToItem(segmentStart, 'segment_start envelope'),
+        config,
+      ));
       usedBrandingIds.add(segmentStart.id);
     }
 
-    // (b/c) Compute fillable budget = target - start envelope - reserve for end envelope.
-    const startDur = segmentStart?.duration_seconds ?? 0;
-    let remaining = targetDurationSeconds - startDur - endReserveSeconds;
-
-    // (d) Music + interstitial cadence.
+    // (b/c) Music + interstitial cadence.
     const jinglesEnabled = segment.interstitial_jingles_enabled;
     const jingleEveryN = segment.jingle_every_n_tracks ?? 0;
     const stationIdsEnabled = segment.interstitial_station_id_enabled;
@@ -595,7 +785,10 @@ export class PlannerProcess {
         ) {
           const j = nextBrandingPick(branding.jingles, jingleCursor, usedBrandingIds);
           if (j && tryFitItem(j.duration_seconds)) {
-            items.push(brandingToItem(j, `interstitial jingle every ${jingleEveryN} tracks`));
+            items.push(withCutSkip(
+              brandingToItem(j, `interstitial jingle every ${jingleEveryN} tracks`),
+              config,
+            ));
             usedBrandingIds.add(j.id);
             remaining -= j.duration_seconds;
             jingleCursor = j.cursor + 1;
@@ -609,9 +802,10 @@ export class PlannerProcess {
         ) {
           const s = nextBrandingPick(branding.station_ids, stationIdCursor, usedBrandingIds);
           if (s && tryFitItem(s.duration_seconds)) {
-            items.push(
+            items.push(withCutSkip(
               brandingToItem(s, `interstitial station_id every ${stationIdEveryN} tracks`),
-            );
+              config,
+            ));
             usedBrandingIds.add(s.id);
             remaining -= s.duration_seconds;
             stationIdCursor = s.cursor + 1;
@@ -620,19 +814,15 @@ export class PlannerProcess {
       }
 
       if (!tryFitItem(candidate.duration_seconds)) {
-        // For hard-end, walk to the next (shorter) candidate; for flexible we
-        // would have already broken out via the loop guards.
         continue;
       }
-      items.push(musicCandidateToItem(candidate));
+      items.push(withCutSkip(musicCandidateToItem(candidate), config));
       usedMusicIds.add(candidate.id);
       remaining -= candidate.duration_seconds;
       musicCount += 1;
     }
 
-    // (e) Gap fill via coasting_order when allowed and gap is large enough.
-    // Loop until either the gap is filled or a full cycle produces no placement
-    // (all candidates of every type are exhausted or too long).
+    // (d) Gap fill via coasting_order when allowed and gap is large enough.
     if (segment.can_fill && remaining > MIN_FILL_GAP_SECONDS) {
       const coastingOrder = parseDriftEventTypes(segment.coasting_order);
       let madeProgress = true;
@@ -648,6 +838,7 @@ export class PlannerProcess {
             usedBrandingIds,
             new Set(),
             new Set(),
+            config,
           );
           if (placed) {
             items.push(placed.item);
@@ -658,13 +849,18 @@ export class PlannerProcess {
       }
     }
 
-    // (f) Segment-end envelope.
+    // (e) Segment-end envelope.
     if (segmentEnd) {
-      // Only add if it still fits (it was reserved up-front, so it should).
-      if (segmentEnd.duration_seconds <= remaining + endReserveSeconds + MIN_FILL_GAP_SECONDS) {
-        items.push(brandingToItem(segmentEnd, 'segment_end envelope'));
+      if (segmentEnd.duration_seconds <= remaining + segEndReserve + MIN_FILL_GAP_SECONDS) {
+        items.push(withCutSkip(brandingToItem(segmentEnd, 'segment_end envelope'), config));
         usedBrandingIds.add(segmentEnd.id);
       }
+    }
+
+    // (f) Show-end envelope — placed after segment-end envelope (D40).
+    if (showCtx.isShowEnd && branding.show_end) {
+      items.push(showEnvelopeItem(branding.show_end, 'show_end envelope'));
+      usedBrandingIds.add(branding.show_end.id);
     }
 
     return {
@@ -686,11 +882,14 @@ export class PlannerProcess {
     clockInstanceStartedAt: number,
     targetDurationSeconds: number,
     nowMs: number,
+    showCtx: ShowContext,
   ): Promise<AssemblyResult> {
+    const { config } = showCtx;
+    const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
     const pool = await this.requestPool<StopSetCandidatePool>(
       'campaign',
       segment,
-      { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt },
+      instance,
       targetDurationSeconds,
       nowMs,
     );
@@ -713,7 +912,10 @@ export class PlannerProcess {
       if (winner) {
         const spot = pickLongestSpotThatFits(winner.spot_pool, remainingSeconds);
         if (spot) {
-          const item = campaignToItem(winner, spot, 0, 'slot_1 winner (first-in-slot)');
+          const item = withCutSkip(
+            campaignToItem(winner, spot, 0, 'slot_1 winner (first-in-slot)'),
+            config,
+          );
           items.push(item);
           placed.push(item);
           remainingSeconds -= spot.duration_seconds;
@@ -730,8 +932,6 @@ export class PlannerProcess {
 
     // (c) Fill remaining break.
     while (remainingSeconds > MIN_VIABLE_SPOT_DURATION_SECONDS) {
-      // 1. Filter candidates: remove excluded, remove campaigns with no spot
-      //    fitting remaining time.
       let eligible = pool.candidates.filter((c) => {
         if (excluded.has(c.id)) return false;
         if (usedCampaignIds.has(c.id)) return false;
@@ -740,16 +940,13 @@ export class PlannerProcess {
 
       if (eligible.length === 0) break;
 
-      // 2. Advertiser separation: if the last N placed items are from the same
-      //    customer_id (N = candidate.advertiser_separation_spots), exclude
-      //    that customer for this slot.
+      // Advertiser separation.
       eligible = eligible.filter((c) => {
         if (c.advertiser_separation_spots <= 0) return true;
         const tail = placed
           .slice(-c.advertiser_separation_spots)
           .filter((it) => it.content_type === 'campaign');
         if (tail.length === 0) return true;
-        // Look up customer_ids of tail items by joining back to their candidate.
         const tailCustomerIds = tail
           .map((it) => {
             const orig = pool.candidates.find((p) => p.id === it.campaign_candidate_id);
@@ -761,7 +958,7 @@ export class PlannerProcess {
 
       if (eligible.length === 0) break;
 
-      // 3. Campaign separation: exclude the immediately-preceding campaign.
+      // Campaign separation: exclude the immediately-preceding campaign.
       const last = placed[placed.length - 1];
       if (last && last.content_type === 'campaign' && last.campaign_candidate_id != null) {
         const lastCandidateId = last.campaign_candidate_id;
@@ -770,8 +967,6 @@ export class PlannerProcess {
 
       if (eligible.length === 0) break;
 
-      // 4. Sort: mandatory desc, pacing_score desc, priority(hard>best_effort),
-      //    campaign_id asc.
       eligible.sort((a, b) => {
         if (a.mandatory !== b.mandatory) return a.mandatory ? -1 : 1;
         if (a.pacing_score !== b.pacing_score) return b.pacing_score - a.pacing_score;
@@ -781,7 +976,6 @@ export class PlannerProcess {
         return a.campaign_id - b.campaign_id;
       });
 
-      // 5. Pick first; from its spot_pool, pick the longest spot fitting.
       const chosen = eligible[0];
       const spot = pickLongestSpotThatFits(chosen.spot_pool, remainingSeconds);
       if (!spot) break;
@@ -789,7 +983,7 @@ export class PlannerProcess {
       const reason =
         `campaign='${chosen.name}' pacing_score=${chosen.pacing_score.toFixed(2)} ` +
         `priority=${chosen.priority}`;
-      const item = campaignToItem(chosen, spot, placed.length, reason);
+      const item = withCutSkip(campaignToItem(chosen, spot, placed.length, reason), config);
       items.push(item);
       placed.push(item);
       remainingSeconds -= spot.duration_seconds;
@@ -806,7 +1000,7 @@ export class PlannerProcess {
       if (usedPromoIds.has(promo.id)) continue;
       if (promo.duration_seconds > remainingSeconds) continue;
       const reason = `promo pacing_score=${promo.pacing_score.toFixed(2)}`;
-      items.push(promoToItem(promo, reason));
+      items.push(withCutSkip(promoToItem(promo, reason), config));
       usedPromoIds.add(promo.id);
       remainingSeconds -= promo.duration_seconds;
     }
@@ -833,33 +1027,30 @@ export class PlannerProcess {
     clockInstanceStartedAt: number,
     targetDurationSeconds: number,
     nowMs: number,
+    showCtx: ShowContext,
   ): Promise<AssemblyResult> {
+    const { config } = showCtx;
+    const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
     const rundown = await this.requestPool<RundownCandidatePool>(
       'rundown',
       segment,
-      { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt },
+      instance,
       targetDurationSeconds,
       nowMs,
     );
     const branding = await this.requestPool<BrandingCandidatePool>(
       'branding',
       segment,
-      { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt },
+      instance,
       targetDurationSeconds,
       nowMs,
+      showCtx.showId,
     );
-    // Music is only requested if 'songs' appears in coasting_order — small
-    // optimisation, also gives content processes the chance to skip work.
+    // Music is only requested if 'songs' appears in coasting_order.
     const coastingOrder = parseDriftEventTypes(segment.coasting_order);
     const needsMusic = coastingOrder.includes('songs') && segment.can_fill;
     const music = needsMusic
-      ? await this.requestPool<MusicCandidatePool>(
-          'music',
-          segment,
-          { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt },
-          targetDurationSeconds,
-          nowMs,
-        )
+      ? await this.requestPool<MusicCandidatePool>('music', segment, instance, targetDurationSeconds, nowMs)
       : null;
 
     const items: PendingAssemblyItem[] = [];
@@ -867,39 +1058,55 @@ export class PlannerProcess {
     const usedBrandingIds = new Set<number>();
     const usedRundownIds = new Set<number>();
 
-    // (a) Optional segment_start envelope
+    // Reserve durations up-front.
+    const showStartDur = (showCtx.isShowStart && branding.show_start)
+      ? branding.show_start.duration_seconds : 0;
+    const showEndReserve = (showCtx.isShowEnd && branding.show_end)
+      ? branding.show_end.duration_seconds : 0;
+    const segEndReserve = branding.segment_end?.duration_seconds ?? 0;
+
+    // (0) Show-start envelope.
+    if (showCtx.isShowStart && branding.show_start) {
+      items.push(showEnvelopeItem(branding.show_start, 'show_start envelope'));
+      usedBrandingIds.add(branding.show_start.id);
+    }
+
+    // (a) Segment-start envelope.
     if (branding.segment_start) {
-      items.push(brandingToItem(branding.segment_start, 'segment_start envelope'));
+      items.push(withCutSkip(
+        brandingToItem(branding.segment_start, 'segment_start envelope'),
+        config,
+      ));
       usedBrandingIds.add(branding.segment_start.id);
     }
 
-    // Place rundown items in position order (mandatory).
+    // (b) Rundown items in position order (mandatory).
     let totalRundownDuration = 0;
     const orderedRundown = rundown.items.slice().sort((a, b) => a.position - b.position);
     for (const item of orderedRundown) {
+      const ct: PlanItemContentType =
+        segment.type === 'voice_track' ? 'voice_track' : 'rundown';
       items.push({
         media_id: item.media_id,
-        content_type:
-          segment.type === 'voice_track' ? 'voice_track' : 'rundown',
+        content_type: ct,
         campaign_id: null,
         music_campaign_id: null,
         planned_duration_seconds: item.duration_seconds,
         mandatory: true,
         reason: `rundown position=${item.position}`,
+        cut_allowed: cutAllowedForType(ct, config),
+        skip_allowed: false, // mandatory=true implies skip_allowed=false (D34)
         rundown_candidate_id: item.id,
       });
       usedRundownIds.add(item.id);
       totalRundownDuration += item.duration_seconds;
     }
 
-    // Recompute gap from actual rundown items (more accurate than the pool's
-    // gap_estimate_seconds, which was based on segment.duration_seconds).
-    const startEnvDur = branding.segment_start?.duration_seconds ?? 0;
-    const endReserve = branding.segment_end?.duration_seconds ?? 0;
+    const startEnvDur = (branding.segment_start?.duration_seconds ?? 0) + showStartDur;
     let remaining =
-      targetDurationSeconds - startEnvDur - totalRundownDuration - endReserve;
+      targetDurationSeconds - startEnvDur - totalRundownDuration - segEndReserve - showEndReserve;
 
-    // (e) Gap fill via coasting_order.
+    // (c) Gap fill via coasting_order.
     if (segment.can_fill && remaining > MIN_FILL_GAP_SECONDS) {
       let madeProgress = true;
       while (remaining > MIN_FILL_GAP_SECONDS && madeProgress) {
@@ -914,6 +1121,7 @@ export class PlannerProcess {
             usedBrandingIds,
             new Set(),
             new Set(),
+            config,
           );
           if (placed) {
             items.push(placed.item);
@@ -924,13 +1132,22 @@ export class PlannerProcess {
       }
     }
 
-    // (f) Optional segment_end envelope
+    // (d) Segment-end envelope.
     if (
       branding.segment_end &&
-      branding.segment_end.duration_seconds <= remaining + endReserve + MIN_FILL_GAP_SECONDS
+      branding.segment_end.duration_seconds <= remaining + segEndReserve + MIN_FILL_GAP_SECONDS
     ) {
-      items.push(brandingToItem(branding.segment_end, 'segment_end envelope'));
+      items.push(withCutSkip(
+        brandingToItem(branding.segment_end, 'segment_end envelope'),
+        config,
+      ));
       usedBrandingIds.add(branding.segment_end.id);
+    }
+
+    // (e) Show-end envelope.
+    if (showCtx.isShowEnd && branding.show_end) {
+      items.push(showEnvelopeItem(branding.show_end, 'show_end envelope'));
+      usedBrandingIds.add(branding.show_end.id);
     }
 
     return {
@@ -1082,6 +1299,59 @@ export class PlannerProcess {
     });
   }
 
+  // Reads the supervisor_config row (always id=1 per D36). Falls back to
+  // an empty-ish config if the table is unexpectedly missing.
+  private async loadSupervisorConfig(): Promise<SupervisorConfig> {
+    const [row] = await this.db
+      .select()
+      .from(supervisorConfigTable)
+      .where(eq(supervisorConfigTable.id, 1));
+    if (!row) {
+      throw new Error('planner.loadSupervisorConfig: supervisor_config row missing');
+    }
+    return row;
+  }
+
+  // Determines whether the given segment is the first/last segment of its
+  // show's calendar block (D40). Returns both flags. Called only when
+  // showId is not null.
+  private async getShowBoundaryFlags(
+    segmentId: number,
+    clockId: number,
+    clockInstanceStartedAt: number,
+    showId: number,
+  ): Promise<{ isShowStart: boolean; isShowEnd: boolean }> {
+    const orderedSegs = await this.db
+      .select({ id: clockSegments.id, sort_order: clockSegments.sort_order })
+      .from(clockSegments)
+      .where(eq(clockSegments.clock_id, clockId));
+    orderedSegs.sort((a, b) => a.sort_order - b.sort_order);
+
+    if (orderedSegs.length === 0) return { isShowStart: false, isShowEnd: false };
+
+    const firstId = orderedSegs[0]!.id;
+    const lastId = orderedSegs[orderedSegs.length - 1]!.id;
+
+    // is_show_start: first segment of clock AND the previous moment belongs
+    // to a different show (or silence), i.e. this is the first clock instance
+    // of the show block.
+    let isShowStart = false;
+    if (segmentId === firstId) {
+      const prevSeg = await resolveCurrentSegment(clockInstanceStartedAt - 1, this.db);
+      isShowStart = !prevSeg || prevSeg.show_id !== showId;
+    }
+
+    // is_show_end: last segment of clock AND the next clock instance belongs
+    // to a different show (or silence).
+    let isShowEnd = false;
+    if (segmentId === lastId) {
+      const nextSeg = await resolveCurrentSegment(clockInstanceStartedAt + 3_600_000 + 1, this.db);
+      isShowEnd = !nextSeg || nextSeg.show_id !== showId;
+    }
+
+    return { isShowStart, isShowEnd };
+  }
+
   // Try a single gap-fill placement for `type`. Returns the item placed, or
   // null if no candidate fits.
   private tryGapFill(
@@ -1096,6 +1366,7 @@ export class PlannerProcess {
     usedBrandingIds: Set<number>,
     usedCampaignIds: Set<number>,
     usedPromoIds: Set<number>,
+    config: SupervisorConfig,
   ): { item: PendingAssemblyItem } | null {
     const max = Math.max(0, remainingSeconds - 2);
     if (max < MIN_FILL_GAP_SECONDS) return null;
@@ -1108,7 +1379,10 @@ export class PlannerProcess {
         const pick = sorted[0];
         if (!pick) return null;
         usedBrandingIds.add(pick.id);
-        return { item: brandingToItem(pick, `coasting fill: gap≈${remainingSeconds.toFixed(0)}s, station_id`) };
+        return { item: withCutSkip(
+          brandingToItem(pick, `coasting fill: gap≈${remainingSeconds.toFixed(0)}s, station_id`),
+          config,
+        )};
       }
       case 'jingles': {
         const sorted = pools.branding.jingles
@@ -1117,7 +1391,10 @@ export class PlannerProcess {
         const pick = sorted[0];
         if (!pick) return null;
         usedBrandingIds.add(pick.id);
-        return { item: brandingToItem(pick, `coasting fill: gap≈${remainingSeconds.toFixed(0)}s, jingle`) };
+        return { item: withCutSkip(
+          brandingToItem(pick, `coasting fill: gap≈${remainingSeconds.toFixed(0)}s, jingle`),
+          config,
+        )};
       }
       case 'songs': {
         if (!pools.music) return null;
@@ -1127,7 +1404,7 @@ export class PlannerProcess {
         const pick = sorted[0];
         if (!pick) return null;
         usedMusicIds.add(pick.id);
-        return { item: musicCandidateToItem(pick) };
+        return { item: withCutSkip(musicCandidateToItem(pick), config) };
       }
       case 'promos': {
         if (!pools.campaign) return null;
@@ -1137,11 +1414,13 @@ export class PlannerProcess {
         const pick = sorted[0];
         if (!pick) return null;
         usedPromoIds.add(pick.id);
-        return { item: promoToItem(pick, `coasting fill: gap≈${remainingSeconds.toFixed(0)}s, promo`) };
+        return { item: withCutSkip(
+          promoToItem(pick, `coasting fill: gap≈${remainingSeconds.toFixed(0)}s, promo`),
+          config,
+        )};
       }
       case 'spots': {
-        // Not applicable for non-stop-set segments — coasting must never use
-        // contract-bound spots as filler outside a planned break.
+        // Not applicable for non-stop-set segments.
         void usedCampaignIds;
         return null;
       }
@@ -1159,6 +1438,7 @@ export class PlannerProcess {
     instance: { segment_id: number; clock_instance_started_at: number },
     durationNeededSeconds: number,
     nowMs: number,
+    showId?: number | null,
   ): Promise<T> {
     void segment;
     return requestCandidates<T>(
@@ -1170,6 +1450,7 @@ export class PlannerProcess {
         duration_needed_seconds: durationNeededSeconds,
         clock_instance_started_at: instance.clock_instance_started_at,
         now_ms: nowMs,
+        show_id: showId ?? null,
       },
       CANDIDATE_REQUEST_TIMEOUT_MS,
     );
@@ -1203,9 +1484,80 @@ async function requestCandidates<T>(
   });
 }
 
+// ─── cut_allowed / skip_allowed helpers (D34, D36) ───────────────────────────
+
+function cutAllowedForType(
+  contentType: PlanItemContentType,
+  config: SupervisorConfig,
+): boolean {
+  switch (contentType) {
+    case 'music': return config.cut_allowed_music;
+    case 'campaign': return config.cut_allowed_campaign;
+    case 'promo': return config.cut_allowed_promo;
+    case 'jingle': return config.cut_allowed_jingle;
+    case 'station_id': return config.cut_allowed_station_id;
+    case 'branding': return config.cut_allowed_branding;
+    case 'rundown': return config.cut_allowed_rundown;
+    case 'voice_track': return config.cut_allowed_voice_track;
+    case 'filler': return config.cut_allowed_jingle; // treat as jingle
+    default: return false;
+  }
+}
+
+function skipAllowedForType(
+  contentType: PlanItemContentType,
+  mandatory: boolean,
+  config: SupervisorConfig,
+): boolean {
+  if (mandatory) return false; // mandatory=true implies skip_allowed=false (D34)
+  switch (contentType) {
+    case 'music': return config.skip_allowed_music;
+    case 'campaign': return config.skip_allowed_campaign;
+    case 'promo': return config.skip_allowed_promo;
+    case 'jingle': return config.skip_allowed_jingle;
+    case 'station_id': return config.skip_allowed_station_id;
+    case 'branding': return config.skip_allowed_branding;
+    case 'rundown': return config.skip_allowed_rundown;
+    case 'voice_track': return config.skip_allowed_voice_track;
+    case 'filler': return config.skip_allowed_jingle; // treat as jingle
+    default: return true;
+  }
+}
+
+// Applies config-derived cut/skip defaults to a PendingAssemblyItem.
+function withCutSkip(item: Omit<PendingAssemblyItem, 'cut_allowed' | 'skip_allowed'>, config: SupervisorConfig): PendingAssemblyItem {
+  return {
+    ...item,
+    cut_allowed: cutAllowedForType(item.content_type, config),
+    skip_allowed: skipAllowedForType(item.content_type, item.mandatory, config),
+  };
+}
+
+// Show envelope items always carry cut_allowed=false, skip_allowed=false (D40).
+function showEnvelopeItem(c: BrandingCandidate, reasonPrefix: string): PendingAssemblyItem {
+  const contentType: PlanItemContentType =
+    c.content_subtype === 'jingle'
+      ? 'jingle'
+      : c.content_subtype === 'station_id'
+        ? 'station_id'
+        : 'branding';
+  return {
+    media_id: c.media_id,
+    content_type: contentType,
+    campaign_id: null,
+    music_campaign_id: null,
+    planned_duration_seconds: c.duration_seconds,
+    mandatory: false,
+    reason: `${reasonPrefix} (${c.content_subtype})`,
+    cut_allowed: false,
+    skip_allowed: false,
+    branding_candidate_id: c.id,
+  };
+}
+
 // ─── Conversion helpers ───────────────────────────────────────────────────────
 
-function musicCandidateToItem(c: MusicCandidate): PendingAssemblyItem {
+function musicCandidateToItem(c: MusicCandidate): Omit<PendingAssemblyItem, 'cut_allowed' | 'skip_allowed'> {
   return {
     media_id: c.media_id,
     content_type: 'music',
@@ -1218,7 +1570,7 @@ function musicCandidateToItem(c: MusicCandidate): PendingAssemblyItem {
   };
 }
 
-function brandingToItem(c: BrandingCandidate, reasonPrefix: string): PendingAssemblyItem {
+function brandingToItem(c: BrandingCandidate, reasonPrefix: string): Omit<PendingAssemblyItem, 'cut_allowed' | 'skip_allowed'> {
   const contentType: PlanItemContentType =
     c.content_subtype === 'jingle'
       ? 'jingle'
@@ -1242,7 +1594,7 @@ function campaignToItem(
   spot: SpotCandidate,
   positionInBreak: number,
   reason: string,
-): PendingAssemblyItem {
+): Omit<PendingAssemblyItem, 'cut_allowed' | 'skip_allowed'> {
   void positionInBreak;
   return {
     media_id: spot.media_id,
@@ -1256,7 +1608,7 @@ function campaignToItem(
   };
 }
 
-function promoToItem(p: PromoCandidate, reason: string): PendingAssemblyItem {
+function promoToItem(p: PromoCandidate, reason: string): Omit<PendingAssemblyItem, 'cut_allowed' | 'skip_allowed'> {
   return {
     media_id: p.media_id,
     content_type: 'promo',
@@ -1285,6 +1637,8 @@ function toInsertRow(
     mandatory: item.mandatory,
     reason: item.reason,
     status: 'pending',
+    cut_allowed: item.cut_allowed ? 1 : 0,
+    skip_allowed: item.skip_allowed ? 1 : 0,
   };
 }
 
@@ -1413,7 +1767,7 @@ function isItemStillValid(
     case 'music':
       return !!freshMusic?.candidates.some((c) => c.media_id === item.media_id);
     case 'campaign':
-      if (!freshCampaign) return true; // no fresh data → keep
+      if (!freshCampaign) return true;
       if (item.campaign_id == null) return true;
       return freshCampaign.candidates.some(
         (c) =>
@@ -1424,8 +1778,6 @@ function isItemStillValid(
       if (!freshCampaign) return true;
       return freshCampaign.promos.some((p) => p.media_id === item.media_id);
     default:
-      // Branding / rundown / voice_track / filler / station_id / jingle —
-      // not re-validated in the lightweight finalize pass.
       return true;
   }
 }
@@ -1434,6 +1786,7 @@ function pickReplacement(
   item: { content_type: PlanItemContentType; planned_duration_seconds: number },
   freshMusic: MusicCandidatePool | null,
   freshCampaign: StopSetCandidatePool | null,
+  config: SupervisorConfig,
 ): PendingAssemblyItem | null {
   if (item.content_type === 'music' && freshMusic) {
     const fits = freshMusic.candidates
@@ -1444,7 +1797,7 @@ function pickReplacement(
           Math.abs(b.duration_seconds - item.planned_duration_seconds),
       );
     const pick = fits[0];
-    if (pick) return musicCandidateToItem(pick);
+    if (pick) return withCutSkip(musicCandidateToItem(pick), config);
   }
   if (item.content_type === 'campaign' && freshCampaign) {
     const sorted = freshCampaign.candidates
@@ -1454,7 +1807,10 @@ function pickReplacement(
     if (pick) {
       const spot = pickLongestSpotThatFits(pick.spot_pool, item.planned_duration_seconds);
       if (spot) {
-        return campaignToItem(pick, spot, 0, `replacement: ${pick.name} pacing_score=${pick.pacing_score.toFixed(2)}`);
+        return withCutSkip(
+          campaignToItem(pick, spot, 0, `replacement: ${pick.name} pacing_score=${pick.pacing_score.toFixed(2)}`),
+          config,
+        );
       }
     }
   }
@@ -1463,7 +1819,7 @@ function pickReplacement(
       .filter((p) => p.duration_seconds <= item.planned_duration_seconds)
       .sort((a, b) => b.pacing_score - a.pacing_score);
     const pick = sorted[0];
-    if (pick) return promoToItem(pick, `replacement promo pacing_score=${pick.pacing_score.toFixed(2)}`);
+    if (pick) return withCutSkip(promoToItem(pick, `replacement promo pacing_score=${pick.pacing_score.toFixed(2)}`), config);
   }
   return null;
 }
