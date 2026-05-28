@@ -992,6 +992,740 @@ The following are confirmed features that will not be built in V2 initial implem
 
 ---
 
+### Decision 29 — Two-plan model: active plan + next plan
+
+**Status: decided — 2026-05-28**
+
+The supervisor always tracks two plans simultaneously:
+
+- **Active plan** — executing right now. Belongs to segment N (currently on air). The Queue Feeder reads from it one item at a time.
+- **Next plan** — being assembled for segment N+1. Sits in SQLite as `status = 'draft'` or `status = 'finalized'`. Becomes the active plan the moment segment N+1 starts.
+
+The supervisor carries two references in memory: `active_plan_id` and `next_plan_id`. At every segment boundary: next_plan → active_plan; a new next_plan request is issued immediately.
+
+**State machine for `next_plan`:**
+
+```
+Segment N starts
+  → resolve segment N+1 (via clockResolver.nextSegment)
+  → emit PLAN_DRAFT_REQUESTED for N+1  [first pass]
+  → store drift_at_first_pass = current_drift_seconds
+  → next_plan_id = null (waiting)
+
+PLAN_DRAFT_READY for N+1
+  → next_plan_id = plan_id
+  → plan visible in UI
+
+T = segment_N_end − 30s
+  → compute drift_delta = current_drift_seconds − drift_at_first_pass
+  → emit PLAN_FINALIZE_REQUESTED for next_plan_id  [second pass]
+    (carries drift_delta so planner can decide depth of re-assembly)
+
+PLAN_FINALIZED for next_plan_id
+  → next_plan is ready; sits in DB until boundary fires
+
+Segment N ends / N+1 starts
+  → activate next_plan (status → 'active')
+  → next_plan → active_plan
+  → immediately resolve segment N+2 and repeat from top
+```
+
+**Cold start (supervisor starts mid-segment with no plan):**
+
+1. Resolve current segment; compute `remaining_seconds = segmentEnd − now`.
+2. Request first-pass draft for the current segment with that remaining target.
+3. On draft ready: immediately finalize (no T−30s gate; we are already mid-segment).
+4. Activate the plan. Treat `drift_at_first_pass = 0` (restart baseline).
+5. Resolve next segment; request first-pass draft for it normally.
+
+The Queue Feeder must not push until there is an active plan. On cold start it blocks until step 4 completes (typically 1–5 seconds of DB work).
+
+---
+
+### Decision 30 — First-pass / second-pass terminology and minimum segment length
+
+**Status: decided — 2026-05-28**
+
+**Terminology (supersedes "draft / finalization" wherever ambiguous):**
+
+| Term | Meaning |
+|---|---|
+| First pass | Plan assembly triggered at segment N start for segment N+1. Full assembly: content process requests, sequencing, gap fill. Result: `status = 'draft'`. Visible in UI immediately. |
+| Second pass | Re-validation or full re-assembly triggered at T−30s before segment N end. Result: `status = 'finalized'`. Becomes active at segment N+1 boundary. |
+
+**Minimum segment length: 120 seconds**
+
+The clock builder must enforce a minimum of 120 seconds per segment. This guarantees:
+- At least 90 seconds for first-pass assembly before T−30s arrives.
+- The planner has real time to call all four content processes and assemble the sequence.
+
+**Fallback: boundary fires before second pass completes**
+
+If segment N ends while the second pass is still in progress (rare: very short segment, slow content process):
+1. Activate the first-pass draft as-is (`draft` → `active`).
+2. Log `PLAN_ACTIVATED_WITHOUT_FINALIZATION` with `plan_id` and `segment_id`.
+3. Continue normally. The active plan may have stale pacing; the *following* segment's plan will correct.
+
+This fallback also applies on cold start if the supervisor cannot complete even the first pass before the segment ends (extremely rare, but possible on a heavily loaded system). In that case, fall back to the emergency fill path (random music from the default rotation) and log `EMERGENCY_FILL`.
+
+---
+
+### Decision 31 — Drift delta: second-pass trigger and target duration adjustment
+
+**Status: decided — 2026-05-28**
+
+**What is drift delta?**
+
+`drift_delta = drift_at_second_pass − drift_at_first_pass`
+
+It measures how much the drift *changed* during segment N's playback — i.e., how much the organic and operator-induced drift accumulated *after* the first pass was built. A large `drift_delta` means the first-pass plan was assembled under significantly different conditions than what the segment actually experienced.
+
+**Second-pass depth:**
+
+| `|drift_delta|` | Second-pass action |
+|---|---|
+| < 30s | Lightweight: re-validate pending items against fresh pacing only. Substitute invalid items. No full re-assembly. |
+| ≥ 30s | Full re-assembly: drop all pending items in the next plan; request fresh candidates from content processes; re-assemble from scratch with drift-adjusted target. |
+
+The 30s threshold is configurable in the supervisor config table (see Decision 36, `second_pass_drift_delta_threshold_seconds`, default 30).
+
+**Target duration adjustment during full re-assembly:**
+
+When `|drift_delta| ≥ 30s`, the second pass sends a drift-adjusted `target_duration_seconds` to the planner:
+
+```
+adjusted_target = nominal_segment_duration − drift_delta
+```
+
+- `drift_delta > 0` (fell further behind): adjusted_target < nominal. Gives next segment less content so it finishes closer to its scheduled end, compensating for the late start.
+- `drift_delta < 0` (fell further ahead): adjusted_target > nominal. Gives next segment more content to fill the time gained from the early start.
+
+**Bounds:** `adjusted_target` is clamped to `[nominal × 0.6, nominal × 1.4]`. You cannot compress a segment below 60% or expand it beyond 140% of its scheduled duration. Beyond those bounds, recovery falls to the segment after next.
+
+**Rundown segments are exempt.** When segment N+1 is `news` or `bulletin`, the supervisor always sends `nominal_segment_duration` regardless of `drift_delta`. The planner handles compression/expansion internally based on actual rundown content length (see Decision 35).
+
+**UI exposure:**
+
+`supervisor_state` table gains two columns:
+- `next_plan_drift_delta_seconds` — the most recently computed drift delta for the next plan
+- `next_plan_draft_drift_seconds` — the drift value recorded at first-pass time
+
+The UI supervisor panel shows `drift_delta` alongside the running drift. An indicator ("second pass triggered full re-assembly") fires when `|drift_delta| ≥ threshold`.
+
+---
+
+### Decision 32 — Forward segment resolution
+
+**Status: decided — 2026-05-28**
+
+The supervisor needs to know what segment comes *after* the current one in order to request a first-pass draft for it at the right moment. The `clockResolver` module must expose a `nextSegment(nowMs, db)` function that:
+
+1. Resolves the current segment (same as `resolveCurrentSegment`).
+2. Advances past the current segment's end boundary.
+3. Resolves the segment that starts at that boundary.
+4. Returns the resolved next segment with its `segmentId`, `clockInstanceStartedAt`, and `segmentEndMs`.
+
+The result is valid until segment N ends. The supervisor caches it alongside the current-segment cache and invalidates both on segment boundary.
+
+**Edge cases:**
+
+- Clock structure ends (e.g. the last segment of the last clock in a day) → fall back to the template's fallback clock or the default rotation. Log `NO_NEXT_SEGMENT`.
+- Calendar gap (no clock scheduled for the upcoming time) → same fallback.
+- Show changes at the boundary → next segment resolver must honour which show (if any) is active at the next boundary.
+
+---
+
+### Decision 33 — Overserve factor
+
+**Status: decided — 2026-05-28**
+
+Content processes return more candidates than the planner strictly needs. This gives the planner a pool to choose from when optimising duration fit, sequencing, and inter-campaign spacing.
+
+**Mechanics:**
+
+The supervisor includes `overserve_factor` in every `REQUEST_CANDIDATES` message. The content process multiplies `duration_needed_seconds × overserve_factor` to determine how many candidates to return.
+
+Example: planner needs 8 minutes of music, `overserve_factor = 2.0` → content process returns ~16 minutes worth of candidates (approximately 4–5 songs). The planner picks the sequence that fills closest to the target.
+
+**Defaults by content type:**
+
+| Content type | Default overserve factor |
+|---|---|
+| Music | 2.0 (2× needed duration) |
+| Campaign spots | 1.5 (sufficient for exclusion/separation logic) |
+| Branding (jingles, station IDs) | 1.0 (round-robin pool; all available returned anyway) |
+| Rundown | 1.0 (all assigned clips returned; position is fixed) |
+
+The global `overserve_factor` in supervisor config applies to music and campaign. Branding and rundown override it internally.
+
+**UI exposure:** `overserve_factor` appears as a configurable field in the supervisor settings panel (numeric input, range 1.0–4.0, default 2.0). Operators who have large music libraries and want more scheduling variety increase it; operators on slower hardware decrease it to reduce planning time.
+
+---
+
+### Decision 34 — Plan item cut/skip attributes
+
+**Status: decided — 2026-05-28**
+
+Every `plan_item` carries two boolean attributes that govern how the supervisor and Queue Feeder may treat it at runtime:
+
+| Attribute | Meaning |
+|---|---|
+| `cut_allowed` | This item may be interrupted mid-play at a hard segment boundary. Audio will fade or be cut. |
+| `skip_allowed` | This item may be dropped from the plan before it starts playing (catching-up correction). |
+
+**Source of these values:**
+
+1. **Segment-type defaults** in the supervisor config table (see Decision 36). Example: `music` → `cut_allowed=true, skip_allowed=true`; `campaign` → `cut_allowed=false, skip_allowed=false`.
+2. **Content process override**: a content process may set `cut_allowed=false` or `skip_allowed=false` on a specific candidate, overriding the default. Example: campaign process marks every spot candidate with `cut_allowed=false` regardless of config.
+3. The config default applies when the content process does not set an override.
+
+**Relationship to `mandatory`:**
+
+`mandatory` (already on plan_items) means the item is contractually required to air. `skip_allowed=false` means the supervisor will not remove it proactively. These overlap but are not the same: a promo can be `mandatory=false` (not contractual) and `skip_allowed=false` (operator preference). In practice: `mandatory=true` implies `skip_allowed=false`; the reverse is not true.
+
+**Schema change:** Add `cut_allowed integer NOT NULL DEFAULT 1` and `skip_allowed integer NOT NULL DEFAULT 1` to `plan_items`. The planner writes these from the content process candidate + config lookup when inserting each item.
+
+**Boundary cut logic:** The supervisor, when approaching a hard segment boundary with content still pending:
+1. Walk pending items from the tail. If the last item has `cut_allowed=true` (music), allow it to be cut by the next segment's start.
+2. If the last item has `cut_allowed=false`, drop it (do not start it) and accept the resulting gap. Fill the gap via `coasting_order` if > 5s.
+
+---
+
+### Decision 35 — Rundown segment: planner owns expansion and compression
+
+**Status: decided — 2026-05-28**
+
+For `news` and `bulletin` segments, the supervisor cannot know the real content duration at the time it requests the plan. The supervisor always sends the **nominal segment duration** (from the clock structure) as `target_duration_seconds` — never a drift-adjusted value.
+
+The planner determines the actual plan length after receiving rundown content from the Rundown process:
+
+```
+rundown_total_duration = sum(clip.duration_seconds for clip in ordered_clips)
+gap = target_duration_seconds − rundown_total_duration
+```
+
+- `gap > 0` → planner fills with music/branding per `coasting_order` (same gap-fill logic as all other segments). The plan ends at approximately `target_duration_seconds`.
+- `gap ≤ 0` (rundown content overruns the segment) → planner drops the last clip(s) to fit within `target_duration_seconds` and emits `RUNDOWN_OVERFLOW` event. Supervisor logs this.
+- `gap < silence_gap_tolerance_seconds (default 5s)` → no filler attempted; silence accepted.
+
+**What this means for drift recovery:** The supervisor does not ask rundown segments to absorb drift. If segment N has accumulated drift, the supervisor expects segment N+2 (a music or stop-set segment) to absorb it via target duration adjustment. Segment N+1 (news/bulletin) plays its nominal length and is not responsible for drift compensation.
+
+---
+
+### Decision 36 — Supervisor global config table
+
+**Status: decided — 2026-05-28**
+
+A single-row `supervisor_config` table holds all tunable runtime parameters. Operators can edit these via the supervisor settings panel. The supervisor process reads this table on startup and refreshes it on a 30-second cycle (so changes take effect without restart).
+
+**Schema:**
+
+```sql
+supervisor_config
+  id                                    integer PRIMARY KEY DEFAULT 1
+  -- Planning
+  overserve_factor                      real    NOT NULL DEFAULT 2.0
+  second_pass_drift_delta_threshold_s   real    NOT NULL DEFAULT 30.0
+  second_pass_lead_time_s               real    NOT NULL DEFAULT 30.0
+  -- Drift correction
+  drift_correction_threshold_s          real    NOT NULL DEFAULT 10.0
+  coasting_correction_threshold_s       real    NOT NULL DEFAULT 30.0
+  -- Silence
+  silence_gap_tolerance_s               real    NOT NULL DEFAULT 5.0
+  -- Queue
+  queue_advance_s                       real    NOT NULL DEFAULT 8.0
+  -- Content type defaults: cut_allowed (1/0)
+  cut_allowed_music                     integer NOT NULL DEFAULT 1
+  cut_allowed_campaign                  integer NOT NULL DEFAULT 0
+  cut_allowed_promo                     integer NOT NULL DEFAULT 0
+  cut_allowed_jingle                    integer NOT NULL DEFAULT 0
+  cut_allowed_station_id                integer NOT NULL DEFAULT 0
+  cut_allowed_branding                  integer NOT NULL DEFAULT 0
+  cut_allowed_rundown                   integer NOT NULL DEFAULT 0
+  cut_allowed_voice_track               integer NOT NULL DEFAULT 0
+  -- Content type defaults: skip_allowed (1/0)
+  skip_allowed_music                    integer NOT NULL DEFAULT 1
+  skip_allowed_campaign                 integer NOT NULL DEFAULT 0
+  skip_allowed_promo                    integer NOT NULL DEFAULT 1
+  skip_allowed_jingle                   integer NOT NULL DEFAULT 1
+  skip_allowed_station_id               integer NOT NULL DEFAULT 1
+  skip_allowed_branding                 integer NOT NULL DEFAULT 1
+  skip_allowed_rundown                  integer NOT NULL DEFAULT 0
+  skip_allowed_voice_track              integer NOT NULL DEFAULT 0
+```
+
+**Rationale for defaults:**
+
+| Content type | cut_allowed default | skip_allowed default | Reasoning |
+|---|---|---|---|
+| music | yes | yes | Songs are the natural fill and the natural sacrifice. A fade on music is acceptable radio practice. |
+| campaign (spot) | no | no | Contractual. Never cut, never skip. `mandatory=true` is also set. |
+| promo | no | yes | Not contractual; can be deferred but not cut mid-read. |
+| jingle | no | yes | Short enough to complete before boundaries; droppable when catching up. |
+| station_id | no | yes | Same as jingle. |
+| branding (envelope) | no | no | Intro/outro clips define the show's identity; dropping them is audibly jarring. |
+| rundown | no | no | News/bulletin items are mandatory content; cutting is editorially unacceptable. |
+| voice_track | no | no | Recorded show content; matches rundown treatment. |
+
+**UI exposure:** The settings panel groups these into sections: Planning, Drift Correction, Silence, Queue, and Content Type Defaults. Each field has a tooltip explaining what it controls. Numeric fields have validated ranges (e.g. `overserve_factor` 1.0–4.0, thresholds 5–120s).
+
+---
+
+### Decision 37 — Show extension and cut-short fallback (outline; full design deferred)
+
+**Status: outline decided — full design deferred — 2026-05-28**
+
+**Show extension:**
+
+When an operator extends a show:
+- The supervisor enters `EXTENSION_MODE`. It stops tracking the calendar as source of truth.
+- It continues tiling segments from the **current calendar block's clock** (the show's clock if a show is active; otherwise the current clock). "Tiling" means repeating the clock's segment sequence past the scheduled end.
+- The operator specifies extension in **whole-minute increments** (e.g. +5, +10, +15 minutes). The supervisor uses this to know when to expect the extension to end and resume calendar tracking.
+- Segments that were scheduled to start during the extension window are skipped (no attempt to recover them). When extension ends, the supervisor reattaches to the calendar at the **next upcoming segment boundary** and resets drift to zero.
+- The UI shows an `EXTENSION_ACTIVE` badge with a countdown to extension end.
+
+**Cut-short show / show skip:**
+
+If a show is cut short or skipped:
+- The supervisor does **not** fire the next scheduled show or clock early. This avoids broadcasting a hard-start scheduled segment unexpectedly early.
+- Instead it activates a **fallback playlist**: a configured music playlist (set per show or globally in `supervisor_config`) played via the emergency fill path until the next scheduled boundary arrives.
+- Log event: `SHOW_CUT_SHORT`, including `show_id`, `segment_id`, `remaining_seconds`, `fallback_playlist_id`.
+- When the next natural calendar boundary arrives, the supervisor exits fallback mode and resumes normal planning.
+
+**What to design later:** The UI controls for show extension (minute-increment buttons, extend/end controls), the fallback playlist configuration field (per-show or global), and the calendar resume logic when a show runs long past a clock change boundary.
+
+---
+
+### Decision 38 — Campaign pacing: interval vs show (mutually exclusive) and validation
+
+**Status: decided — 2026-05-28**
+
+A campaign has **one** sub-target granularity, or none:
+
+| Configuration | Meaning |
+|---|---|
+| Neither | Global pacing only (`plays_per_month` over the campaign period). |
+| `plays_per_interval_per_day` | Must hit N plays in each broadcast interval, each day it airs. |
+| `plays_per_show` | Must hit N plays per show occurrence it is targeting. |
+
+These two are mutually exclusive — a campaign cannot have both. The UI enforces this: selecting one disables the other.
+
+**Validation constraint (enforced at campaign save time):**
+
+If `plays_per_interval_per_day` is set:
+```
+total_interval_plays = plays_per_interval_per_day × campaign_duration_days
+```
+This must not exceed the campaign's total capacity. Total capacity is approximated as:
+```
+total_capacity = plays_per_month × (campaign_duration_days / 30)
+```
+The UI warns and blocks save if `total_interval_plays > total_capacity`. This prevents a configuration where the interval sub-target demands more plays than the campaign can physically deliver in total.
+
+**Pacing score at planning time:**
+
+The campaign process computes a pacing ratio at each active granularity:
+```
+global_ratio = actual_plays_to_date / expected_global_plays_to_date
+interval_ratio = actual_plays_in_interval / expected_interval_plays_to_date  (if configured)
+show_ratio = actual_plays_in_show / min_plays_per_show  (if configured)
+```
+`pacing_score` = the *worst* (lowest) ratio across all active granularities. A campaign that is on pace globally but behind in the current show scores as behind. Eligibility exclusion (daily cap, weekly cap) operates independently as a binary gate before the pacing score is computed.
+
+---
+
+### Decision 39 — Slot-1 per-day sharing semantics (confirmed)
+
+**Status: decided — 2026-05-28**
+
+| Priority | `slot_1_satisfied_today = false` | `slot_1_satisfied_today = true` |
+|---|---|---|
+| `hard` | Must have slot 1. Excludes all other slot-1 competitors from the break. | Must still have slot 1. Exclusion still applies. Slot-1 is always required. |
+| `best_effort` | Competes for slot 1 normally. Winner excludes other `slot_1_required` competitors. | Satisfied for today. Drops requirement; can share break with other slot-1 competitors in any position. |
+
+Two `best_effort` slot-1 campaigns that have both satisfied their daily slot-1 can appear in the same break in non-slot-1 positions. The campaign process sets `slot_1_satisfied_today = true` on `CONFIRM_USED` when a campaign wins slot 1 for the day. This flag resets at midnight (or at the start of the broadcast day).
+
+---
+
+### Decision 40 — Show envelope detection and serving
+
+**Status: decided — 2026-05-28**
+
+**How the planner knows it is in a show:**
+
+The supervisor includes `show_id` (nullable) and `show_name` (nullable) in every `PLAN_DRAFT_REQUESTED` message, resolved from the current calendar context. If the segment is inside a show's calendar block, both fields are set. If not (generic clock time), both are null.
+
+**Is this the first or last segment of the show?**
+
+The planner determines this itself by querying the calendar. Given `show_id`, `clock_instance_started_at`, and `segment_id`, the planner:
+1. Finds the calendar block for this show instance (the row in `calendar_entries` covering this time).
+2. Looks up the clock's segment order. First segment = `show_start`, last segment = `show_end`.
+3. Checks whether the next clock instance (from `clockResolver.nextSegment`) belongs to the same show and calendar block. If not → this is the last segment.
+
+The supervisor sends the raw context; the planner derives the structural position. This is cleaner than the supervisor doing two calendar lookups per segment and sending boolean flags.
+
+**Who serves show envelope clips:**
+
+The Branding process. When the planner has confirmed this is a show-start or show-end segment, it includes `show_id` in the `REQUEST_CANDIDATES` call to the Branding process. The Branding process queries show configuration for the `show_start_playlist_id` and `show_end_playlist_id` and returns the appropriate clips as `show_start` / `show_end` candidates in the pool.
+
+**Placement:**
+
+- `show_start` envelope: inserted at position 0, before any segment-start envelope. (Show envelope wraps the segment envelope — the show intro comes first, then the segment intro if one exists.)
+- `show_end` envelope: appended at the tail after the segment-end envelope. (Segment outro first, then the show outro.)
+- Both carry `skip_allowed=false, cut_allowed=false` (they are identity clips; interrupting them sounds wrong).
+
+---
+
+### Decision 41 — last_in_slot attribute
+
+**Status: decided — 2026-05-28**
+
+`last_in_slot = true` on a plan item means this item must be placed at the tail of its structural group — typically a segment-end or show-end envelope. The planner places items with `last_in_slot=true` after all gap fill, as the final item(s) before the segment boundary.
+
+Content types that carry `last_in_slot`:
+- Segment-end envelopes (`segment_end` from Branding pool)
+- Show-end envelopes (`show_end` from Branding pool)
+- No other content type uses `last_in_slot`.
+
+The planner reserves duration for `last_in_slot` items up-front (same as the current `endReserveSeconds` logic) and inserts them at the end regardless of gap fill results.
+
+---
+
+### Decision 42 — Queue Feeder: zero decision logic; Supervisor owns all fallback
+
+**Status: decided — 2026-05-28**
+
+The Queue Feeder reads the next `pending` plan item from the active plan and pushes it to LiquidSoap. That is its entire job. It has no fallback logic, no emergency fill, and no gap detection.
+
+**If the plan is exhausted before the segment ends:**
+
+The supervisor detects this on its 500ms tick (no more pending items in active plan, segment not yet ended). It decides:
+- If the gap is coverable via `coasting_order`: request a fill item from the planner and insert it into the active plan as a new pending item. Queue Feeder picks it up on its next trigger.
+- If the gap exceeds 60s and the next plan is finalized: fire the next segment early (advance next_plan → active_plan). No injected fill needed.
+
+The Queue Feeder never decides either of these. It only pushes what the supervisor puts in the plan.
+
+**No emergency fill in the Queue Feeder.** If there is truly nothing to push (plan exhausted, supervisor hasn't inserted fill yet, next segment not ready), the Queue Feeder does nothing and logs `QUEUE_STALL`. The supervisor's next tick resolves the situation within 500ms.
+
+---
+
+### Decision 43 — Drift tolerance defaults: prefer early/late over fill/skip
+
+**Status: decided — 2026-05-28**
+
+**Corrected from previous draft.**
+
+| Situation | Preference | Default |
+|---|---|---|
+| Running ahead (gap before next segment) | Prefer firing next segment **early** over inserting fill content | `true` |
+| Running behind (segment running long) | Prefer letting next segment start **late** over skipping content | `true` |
+
+These are the defaults. Both are configurable in `supervisor_config` as boolean fields:
+- `prefer_early_start_over_fill` — default `true`
+- `prefer_late_start_over_skip` — default `true`
+
+**What "prefer early" means in practice:** When the supervisor detects a gap in the current plan and the next plan is finalized, it fires the next plan immediately rather than waiting for the scheduled boundary. It only inserts `coasting_order` fill if the next plan is not yet finalized or the gap is very small (< `silence_gap_tolerance_s`, default 5s).
+
+**What "prefer late" means in practice:** When the supervisor detects positive drift (running behind) and the next segment is soft-start, it lets the current segment run over the scheduled boundary rather than skipping content. It only skips if the next segment has a hard start (fixed boundary that cannot flex) or if `prefer_late_start_over_skip = false`.
+
+---
+
+### Decision 44 — Plan transition: when last active item starts playing
+
+**Status: decided — 2026-05-28**
+
+The transition from active plan to next plan happens when the **last pending item of the active plan transitions to `status = 'playing'`** — i.e., when LiquidSoap sends the `on_track` webhook confirming that item is now on air.
+
+At that moment:
+1. Supervisor sets `next_plan → active_plan` (`active_plan_id = next_plan_id`, `next_plan_id = null`).
+2. Resets `planActivatedAtMs = Date.now()` for the new active plan.
+3. Resets `currentDriftSeconds = 0` (new baseline; the intentional offset, if any, was already baked into the plan target — see Decision 45).
+4. Resolves the segment after next, emits `PLAN_DRAFT_REQUESTED` for it.
+
+The Queue Feeder then reads from the new active plan when `on_end` fires for the last old-plan item. The handoff is seamless: the last old item is playing, the new plan is active, and the next push comes from the new plan.
+
+**Why "starts playing" not "pushed to queue":**
+
+Pushing happens 8 seconds before the old item ends. Using push time would activate the new plan while the old plan's last item is still playing but not yet finished — resulting in a double-active state. Using "starts playing" means the old plan's last item has definitively started, and the new plan takes over for all subsequent pushes.
+
+---
+
+### Decision 45 — Intentional offset: clean drift baseline on fire-early/late
+
+**Status: decided — 2026-05-28**
+
+When the supervisor intentionally fires a segment early or late, it creates a predictable, known deviation from the scheduled wall-clock boundary. Without accounting for this, the new segment would start with an apparent drift equal to the early/late amount, which would immediately trigger spurious correction actions.
+
+**The fix:** the supervisor records `intentional_offset_seconds` at the moment of firing:
+- Fire early by X seconds: `intentional_offset_seconds = −X`
+- Fire late by X seconds: `intentional_offset_seconds = +X`
+
+The plan for the new segment is built with a target duration adjusted by this offset:
+```
+adjusted_target = nominal_duration − intentional_offset_seconds
+```
+- Fire early (negative offset): `adjusted_target = nominal + X` → more content to fill the extra time
+- Fire late (positive offset): `adjusted_target = nominal − X` → less content; segment is compressed to meet the following boundary
+
+Because `planActivatedAtMs = Date.now()` (actual activation time, not scheduled time), and the plan target already matches the actual available time, drift naturally starts near 0 for the new segment. The supervisor does not need to specially adjust its drift calculation — the combination of "actual activation baseline" + "adjusted plan target" produces the correct result.
+
+**State storage:** `intentional_offset_seconds` is stored in `supervisor_state` and logged with every `SEGMENT_START` event. It resets to 0 when the next segment starts on schedule (no intentional offset). It is surfaced in the UI supervisor panel as "Fired ±Xs from schedule" when non-zero, so operators can see why a segment started off-time.
+
+**Capped:** `|intentional_offset_seconds|` is capped at 50% of the nominal segment duration. Firing more than half a segment early or late is not a drift correction — it is a structural change that requires operator awareness.
+
+---
+
+### Decision 46 — Rundown segments: drift correction via skip/fill, not target adjustment
+
+**Status: decided — 2026-05-28**
+
+Rundown (news/bulletin) segments cannot have their target duration adjusted to absorb drift — the content is fixed-order mandatory clips. Drift correction inside a rundown segment uses only:
+
+1. **`catching_up_order` skip:** The rundown segment's `catching_up_order` may list gap-fill content types (e.g. `['songs', 'jingles']`). If the supervisor is running behind, it skips these non-mandatory gap-fill items from the plan. It never skips the mandatory rundown clips.
+2. **`coasting_order` fill:** If running ahead, the supervisor injects short fill content (station ID, jingle) into the remaining plan gap.
+
+**Drift carry-forward:** If drift remains after a rundown segment (because the rundown clips are fixed-length and the available correction was insufficient), the drift carries forward to the next segment. The next segment's plan is built using `adjusted_target = nominal − current_drift_seconds` at second-pass time (Decision 31), absorbing the inherited drift naturally. The rundown segment is transparent to this mechanism — it simply passes through with drift unchanged.
+
+The supervisor does not flag this as an anomaly. It is expected that rundown segments do not compress or expand.
+
+---
+
+### Decision 47 — Gap fill music sourcing for rundown and voice-track segments
+
+**Status: decided — 2026-05-28**
+
+When the planner fills a gap in a `news`, `bulletin`, or `voice_track` segment with music (because `coasting_order` includes `songs` and the gap is large enough), it requests music candidates from the Music process using the **current clock's primary rotation** — the same rotation pool used for music segments.
+
+The Music process responds with rotation-eligible candidates (artist separation, repeat interval, play history respected) in the same way as for pure music segments. The planner picks the track(s) that best fit the remaining gap.
+
+**Branding gap fill** (jingles, station IDs) is sourced from the Branding process's general pool (no show-specific filter — these are station-wide assets). This is the same pool used for interstitials in music segments.
+
+The segment configuration's `coasting_order` controls the priority: if `['station_ids', 'jingles', 'songs']`, the planner tries a station ID first, then a jingle, then a music track. Each type is requested only if the remaining gap exceeds the `silence_gap_tolerance_s` threshold.
+
+---
+
+### Decision 48 — Content process → segment type matrix (final)
+
+**Status: decided — 2026-05-28**
+
+Complete mapping of which content processes the planner calls for each segment type. All four processes are called only when their content is actually needed (conditional on segment config, not unconditionally).
+
+| Segment type | Music | Campaign | Branding | Rundown |
+|---|---|---|---|---|
+| `music` | ✓ Primary rotation + hot-play + heavy rotation candidates | — | ✓ Segment/show envelopes + interstitials (jingles, station IDs) | — |
+| `stop_set` | — | ✓ Spots + promos + space estimate | ✓ Segment/show envelopes only (no interstitials in a break) | — |
+| `news` | ✓ Gap fill only (if `coasting_order` includes `songs`) | — | ✓ Segment/show envelopes + gap fill (jingles, station IDs) | ✓ Ordered mandatory clips |
+| `bulletin` | ✓ Gap fill only (if `coasting_order` includes `songs`) | — | ✓ Segment/show envelopes + gap fill (jingles, station IDs) | ✓ Ordered mandatory clips |
+| `voice_track` | ✓ Gap fill only | — | ✓ Segment/show envelopes | ✓ Ordered mandatory clips |
+| `live` | — | — | — | — |
+
+Notes:
+- **Show envelopes** are included in the Branding response only when `show_id` is set in the request. The Branding process returns `show_start` / `show_end` candidates; the planner inserts them based on `is_show_start` / `is_show_end` determination (Decision 40).
+- **Stop-set branding:** a stop-set segment CAN have a segment-start envelope (a short jingle before spots start). This is optional — configured on the segment. The Branding process returns it if the segment has one configured.
+- **Music in rundown segments:** requested only if gap fill is needed and `coasting_order` includes `songs`. Planner skips the Music request entirely if the segment is `can_fill = false` or `coasting_order` is empty.
+
+---
+
+### Decision 49 — Fire-early transition: 30-second finalization window
+
+**Status: decided — 2026-05-28**
+
+When the supervisor decides to fire the next segment early (to close a gap rather than insert fill content), it uses the following algorithm to give finalization time to complete before the first push from the new plan.
+
+**Remaining time is computed from SQLite — no LS query needed:**
+
+```
+remaining_in_current_item =
+  (play_history.started_at + plan_items.planned_duration_seconds × 1000) − Date.now()
+```
+
+`started_at` is already stamped on `on_track`. `planned_duration_seconds` is already in the plan item. The supervisor has this from its existing `computePlanPlayhead` logic.
+
+**The algorithm:**
+
+1. Supervisor decides to fire early at time T. Compute `remaining` in the currently playing item.
+2. **If `remaining ≥ 30s`:** the currently playing item is the cut point.
+   - Mark all subsequent pending items in the active plan as `supervisor_skipped`.
+   - Emit `DROP_COMMITTED` to content processes for all skipped items.
+   - Immediately emit `PLAN_FINALIZE_REQUESTED` with `adjusted_target_seconds` (see below).
+   - Queue Feeder finds no more pending items after the playing item → does not push anything further.
+   - When the playing item ends (`on_track` fires for next item, which is now in the new active plan) → transition.
+3. **If `remaining < 30s`:** walk forward through pending items in order. Find the first pending item whose `planned_duration_seconds ≥ 30s`. That item becomes the cut point.
+   - Push it via Queue Feeder (normal path). Mark everything after it as `supervisor_skipped`.
+   - Immediately emit `PLAN_FINALIZE_REQUESTED`.
+   - Transition when that item ends.
+4. **If all remaining items are short (< 30s each):** let them play in sequence. Emit `PLAN_FINALIZE_REQUESTED` immediately. Finalization has the cumulative runtime of the short items to complete. If finalization is still outstanding when the last item ends: transition anyway and log `PLAN_FINALIZE_TIMEOUT`. Activate draft.
+
+**`adjusted_target_seconds` in `PLAN_FINALIZE_REQUESTED`:**
+
+When the supervisor fires early, it knows `intentional_offset_seconds` — how early the new plan will start relative to the scheduled boundary. The adjusted target for the new plan is:
+
+```
+adjusted_target = nominal_segment_duration + |intentional_offset_seconds|
+```
+
+The supervisor computes this and passes it in `PLAN_FINALIZE_REQUESTED`. The planner uses this value as the target for re-assembly (full re-assembly if `|drift_delta| ≥ threshold`; otherwise substitution pass only, with the adjusted target recorded for the plan). This ensures the new plan has enough content to fill the extra time from the early start.
+
+**For the normal second-pass path (T−30s gate, not fire-early):**
+
+The same `PLAN_FINALIZE_REQUESTED` message carries:
+- `adjusted_target_seconds = nominal − current_drift_seconds` (clamped to [60%, 140%] of nominal)
+- `drift_delta = current_drift − drift_at_first_pass` (governs full vs lightweight)
+- `current_drift_seconds` (for logging and the target formula)
+
+The planner uses `adjusted_target_seconds` directly. The supervisor owns the computation; the planner does not re-derive drift.
+
+**Transition trigger for fire-early vs normal:**
+
+- **Normal (plan naturally exhausted):** when the last pending item transitions to `playing` (Decision 44) → `next_plan → active_plan`.
+- **Fire-early:** the supervisor explicitly manages the transition. When `on_track` fires for the first item of the new plan (the item that follows the cut point in the LS queue) → supervisor sets `active_plan_id = next_plan_id`, resets `planActivatedAtMs = Date.now()`, resets drift to 0. Decision 44's general trigger does not apply to the fire-early path.
+
+---
+
+### Decision 50 — Schema additions for two-plan model
+
+**Status: decided — 2026-05-28**
+
+#### `PLAN_DRAFT_REQUESTED` bus message (additions)
+
+```typescript
+interface PlanDraftRequestedMessage {
+  type: 'PLAN_DRAFT_REQUESTED'
+  request_id: string
+  segment_id: number
+  clock_instance_started_at: number
+  target_duration_seconds: number  // existing
+  now_ms: number                   // existing
+  show_id: number | null           // NEW — null if no show active
+  show_name: string | null         // NEW — null if no show active
+}
+```
+
+The planner uses `show_id` to request show envelopes from the Branding process. It uses `show_id` + `clock_instance_started_at` to determine `is_show_start` / `is_show_end` by querying the calendar boundary.
+
+#### `PLAN_FINALIZE_REQUESTED` bus message (additions)
+
+```typescript
+interface PlanFinalizeRequestedMessage {
+  type: 'PLAN_FINALIZE_REQUESTED'
+  request_id: string
+  plan_id: number
+  now_ms: number                        // existing
+  adjusted_target_seconds: number       // NEW — computed by supervisor; planner uses as target
+  drift_delta_seconds: number           // NEW — |drift_delta| ≥ threshold → full re-assemble
+  current_drift_seconds: number         // NEW — for logging
+}
+```
+
+#### `supervisor_state` table (additions)
+
+```sql
+ALTER TABLE supervisor_state ADD COLUMN next_plan_id integer REFERENCES plans(id);
+ALTER TABLE supervisor_state ADD COLUMN next_plan_draft_drift_seconds real;
+ALTER TABLE supervisor_state ADD COLUMN next_plan_drift_delta_seconds real;
+ALTER TABLE supervisor_state ADD COLUMN intentional_offset_seconds real NOT NULL DEFAULT 0;
+```
+
+- `next_plan_id` — the plan currently being assembled for the next segment. Null when no next plan exists yet.
+- `next_plan_draft_drift_seconds` — the drift value recorded when the first pass was requested. Used to compute `drift_delta` at second-pass time.
+- `next_plan_drift_delta_seconds` — the most recently computed `drift_delta` for the next plan. Exposed in UI.
+- `intentional_offset_seconds` — the intentional early/late offset used when activating the current active plan. Shown in UI as "Fired ±Xs from schedule". Reset to 0 on normal (on-schedule) plan activation.
+
+#### `supervisor_config` table (additions to Decision 36)
+
+```sql
+ALTER TABLE supervisor_config ADD COLUMN prefer_early_start_over_fill integer NOT NULL DEFAULT 1;
+ALTER TABLE supervisor_config ADD COLUMN prefer_late_start_over_skip  integer NOT NULL DEFAULT 1;
+ALTER TABLE supervisor_config ADD COLUMN fire_early_min_window_s real NOT NULL DEFAULT 30.0;
+```
+
+- `prefer_early_start_over_fill` — default `1` (true): when running ahead and gap exceeds threshold, fire next segment early rather than inserting fill content.
+- `prefer_late_start_over_skip` — default `1` (true): when running behind and next segment is soft-start, start it late rather than skipping content.
+- `fire_early_min_window_s` — default `30.0`: minimum seconds the supervisor guarantees between the fire-early decision and the plan transition. Used in the cut-point selection algorithm (Decision 49).
+
+#### `plan_items` table (additions from Decision 34)
+
+```sql
+ALTER TABLE plan_items ADD COLUMN cut_allowed  integer NOT NULL DEFAULT 1;
+ALTER TABLE plan_items ADD COLUMN skip_allowed integer NOT NULL DEFAULT 1;
+```
+
+Populated by the planner at insert time using the segment-type defaults from `supervisor_config` plus any content-process-level overrides on the candidate.
+
+---
+
+### Decision 51 — Organic drift is accounted at activation; execution drift drives corrections
+
+**Status: decided — 2026-05-28**
+
+#### Organic drift is known at plan activation
+
+The moment a plan is activated, the supervisor computes:
+
+```
+planned_overshoot_seconds =
+  sum(plan_items.planned_duration_seconds) − nominal_segment_duration_seconds
+```
+
+- **Positive**: the plan will run longer than the segment. The segment will finish late.
+- **Negative**: the plan will finish before the segment ends. There will be a gap.
+- **Zero**: perfect fit (rare in practice due to track length rounding).
+
+This is **accounted drift** — a known, deterministic deviation built into the plan at assembly time. The supervisor does not need to observe drift accumulating to discover it. It is written to `supervisor_state.planned_overshoot_seconds` at activation.
+
+#### First-pass target for next segment already incorporates planned overshoot
+
+The next segment's first-pass plan should account for the current segment's planned overshoot from the start:
+
+```
+first_pass_target_N+1 = nominal_duration_N+1 − planned_overshoot_N
+```
+
+This means the planner builds the next segment's plan with the right length from the very first pass. The second pass only needs to correct for **execution drift** — deviations that occurred during playback beyond what the plan already promised.
+
+#### Execution drift is the only drift that requires correction
+
+```
+execution_drift = actual_drift_at_second_pass − planned_overshoot_N
+```
+
+- If `|execution_drift| < correction_threshold`: no correction needed. The accounted overshoot is being absorbed cleanly.
+- If `|execution_drift| ≥ correction_threshold`: operator-introduced or playback-timing drift has accumulated. Trigger correction (catching-up, coasting, or replan).
+
+The `drift_delta` threshold in Decision 31 (30s for full re-assemble at second pass) now specifically measures execution drift. Organic overshoot is already baked into the first-pass target and does not count toward that threshold.
+
+The second-pass target formula simplifies to the same result:
+
+```
+second_pass_target = nominal_N+1 − actual_drift_N
+                   = (nominal_N+1 − planned_overshoot_N) − execution_drift
+                   = first_pass_target − execution_drift
+```
+
+#### Fire-late and fire-early decisions are made at plan activation, not reactively
+
+The decision of whether to let the current segment overrun the boundary (fire late) or fire early is a structural decision based on the next segment's `start_policy`. It is made **once, at plan activation**, not reactively on each tick as drift accumulates.
+
+| `planned_overshoot` | Next segment `start_policy` | Decision at activation |
+|---|---|---|
+| > 0 (will run long) | flexible (soft start) | Accept late start. Record `expected_late_seconds = planned_overshoot`. No corrective action. Next segment starts late; its plan was already shortened to compensate. |
+| > 0 (will run long) | hard (fixed start) | Immediately correct via `catching_up_order`. Begin skipping non-mandatory items from the plan before they have even aired. Do not wait for drift to accumulate. |
+| < 0 (will finish early) | allows early start | Accept early start. Record `expected_early_seconds = |planned_overshoot|`. Gap fill not needed; plan exhaustion triggers normal fire-early transition (Decision 49). |
+| < 0 (will finish early) | hard (no early start) | Gap fill was already placed in plan by the planner via `coasting_order`. Supervisor monitors remaining gap at runtime. If gap remains (fill exhausted), silence is accepted up to `silence_gap_tolerance_s`. |
+
+The tick loop still runs every 500ms and watches for execution drift diverging from the accounted state. But it does **not** trigger corrections for drift that is entirely explained by `planned_overshoot`. Only `|execution_drift| > correction_threshold` warrants action.
+
+#### `supervisor_state` additions for this model
+
+```sql
+ALTER TABLE supervisor_state ADD COLUMN planned_overshoot_seconds real NOT NULL DEFAULT 0;
+-- expected_late/early derived from planned_overshoot; not stored separately.
+```
+
+The supervisor logs `PLAN_ACTIVATED` with `planned_overshoot_seconds` and `boundary_decision` (one of: `accept_late`, `correct_immediately`, `accept_early`, `gap_fill_in_plan`) so operators can see why the segment was handled the way it was from the moment it started.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

@@ -631,22 +631,29 @@ export class PlannerProcess {
     }
 
     // (e) Gap fill via coasting_order when allowed and gap is large enough.
+    // Loop until either the gap is filled or a full cycle produces no placement
+    // (all candidates of every type are exhausted or too long).
     if (segment.can_fill && remaining > MIN_FILL_GAP_SECONDS) {
       const coastingOrder = parseDriftEventTypes(segment.coasting_order);
-      for (const type of coastingOrder) {
-        if (remaining <= MIN_FILL_GAP_SECONDS) break;
-        const placed = this.tryGapFill(
-          type,
-          remaining,
-          { music, branding, campaign: null },
-          usedMusicIds,
-          usedBrandingIds,
-          new Set(),
-          new Set(),
-        );
-        if (placed) {
-          items.push(placed.item);
-          remaining -= placed.item.planned_duration_seconds;
+      let madeProgress = true;
+      while (remaining > MIN_FILL_GAP_SECONDS && madeProgress) {
+        madeProgress = false;
+        for (const type of coastingOrder) {
+          if (remaining <= MIN_FILL_GAP_SECONDS) break;
+          const placed = this.tryGapFill(
+            type,
+            remaining,
+            { music, branding, campaign: null },
+            usedMusicIds,
+            usedBrandingIds,
+            new Set(),
+            new Set(),
+          );
+          if (placed) {
+            items.push(placed.item);
+            remaining -= placed.item.planned_duration_seconds;
+            madeProgress = true;
+          }
         }
       }
     }
@@ -894,20 +901,25 @@ export class PlannerProcess {
 
     // (e) Gap fill via coasting_order.
     if (segment.can_fill && remaining > MIN_FILL_GAP_SECONDS) {
-      for (const type of coastingOrder) {
-        if (remaining <= MIN_FILL_GAP_SECONDS) break;
-        const placed = this.tryGapFill(
-          type,
-          remaining,
-          { music, branding, campaign: null },
-          usedMusicIds,
-          usedBrandingIds,
-          new Set(),
-          new Set(),
-        );
-        if (placed) {
-          items.push(placed.item);
-          remaining -= placed.item.planned_duration_seconds;
+      let madeProgress = true;
+      while (remaining > MIN_FILL_GAP_SECONDS && madeProgress) {
+        madeProgress = false;
+        for (const type of coastingOrder) {
+          if (remaining <= MIN_FILL_GAP_SECONDS) break;
+          const placed = this.tryGapFill(
+            type,
+            remaining,
+            { music, branding, campaign: null },
+            usedMusicIds,
+            usedBrandingIds,
+            new Set(),
+            new Set(),
+          );
+          if (placed) {
+            items.push(placed.item);
+            remaining -= placed.item.planned_duration_seconds;
+            madeProgress = true;
+          }
         }
       }
     }
@@ -1092,7 +1104,7 @@ export class PlannerProcess {
       case 'station_ids': {
         const sorted = pools.branding.station_ids
           .filter((c) => !usedBrandingIds.has(c.id) && c.duration_seconds <= max)
-          .sort((a, b) => a.duration_seconds - b.duration_seconds);
+          .sort((a, b) => b.duration_seconds - a.duration_seconds);
         const pick = sorted[0];
         if (!pick) return null;
         usedBrandingIds.add(pick.id);
@@ -1101,7 +1113,7 @@ export class PlannerProcess {
       case 'jingles': {
         const sorted = pools.branding.jingles
           .filter((c) => !usedBrandingIds.has(c.id) && c.duration_seconds <= max)
-          .sort((a, b) => a.duration_seconds - b.duration_seconds);
+          .sort((a, b) => b.duration_seconds - a.duration_seconds);
         const pick = sorted[0];
         if (!pick) return null;
         usedBrandingIds.add(pick.id);
@@ -1111,7 +1123,7 @@ export class PlannerProcess {
         if (!pools.music) return null;
         const sorted = pools.music.candidates
           .filter((c) => !usedMusicIds.has(c.id) && c.duration_seconds <= max)
-          .sort((a, b) => a.duration_seconds - b.duration_seconds);
+          .sort((a, b) => b.duration_seconds - a.duration_seconds);
         const pick = sorted[0];
         if (!pick) return null;
         usedMusicIds.add(pick.id);
@@ -1121,7 +1133,7 @@ export class PlannerProcess {
         if (!pools.campaign) return null;
         const sorted = pools.campaign.promos
           .filter((c) => !usedPromoIds.has(c.id) && c.duration_seconds <= max)
-          .sort((a, b) => a.duration_seconds - b.duration_seconds);
+          .sort((a, b) => b.duration_seconds - a.duration_seconds);
         const pick = sorted[0];
         if (!pick) return null;
         usedPromoIds.add(pick.id);
