@@ -1,5 +1,6 @@
 import { spawn } from 'child_process';
-import { join } from 'path';
+import { join, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 export interface AudioAnalysisResult {
   bpm: number | null;
@@ -11,7 +12,9 @@ export interface AudioAnalysisResult {
   warnings?: string[];
 }
 
-const ANALYSIS_DIR = join(process.cwd(), '..', '..', 'analysis');
+// Anchor to this file's location so the path works regardless of CWD
+// (dev: src/services/ingest/, Docker: dist/services/ingest/ — both 3 levels below apps/api/)
+const ANALYSIS_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..', 'analysis');
 const SCRIPT_PATH = join(ANALYSIS_DIR, 'analyse.py');
 const MODELS_DIR = join(ANALYSIS_DIR, 'models');
 // Use the venv Python when available; fall back to system python3.
@@ -43,7 +46,7 @@ function run(args: string[]): Promise<string> {
     proc.on('error', (err: NodeJS.ErrnoException) => {
       if (err.code === 'ENOENT') {
         reject(new Error(
-          'Audio analysis venv not found — run: ./analysis/setup.sh'
+          'Audio analysis venv not found — run: ./apps/api/analysis/setup.sh'
         ));
       } else {
         reject(err);

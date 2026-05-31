@@ -13,10 +13,10 @@ brew install ffmpeg chromaprint python@3.11   # Mac
 # apt install ffmpeg libchromaprint-tools python3.11 python3-pip  # Ubuntu
 
 # Set up Python venv + install audio analysis deps (one time)
-./analysis/setup.sh
+./apps/api/analysis/setup.sh
 
 # Download Essentia mood models (one time, ~200MB)
-./analysis/download_models.sh
+./apps/api/analysis/download_models.sh
 
 # Terminal 1: Start Icecast (streaming server)
 ./start-icecast.sh
@@ -40,7 +40,7 @@ pnpm type-check
 
 ## Project Overview
 
-**Radio Automation and Streaming Server**: A complex application that provides radio station operators with an all-in-one platform to manage broadcasts. The system combines backend streaming infrastructure with a modern web-based control panel.
+**Soono**: A radio automation and streaming server that provides station operators with an all-in-one platform to manage broadcasts. The system combines backend streaming infrastructure with a modern web-based control panel.
 
 Core features include:
 - Playlist management and scheduling

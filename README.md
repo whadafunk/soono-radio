@@ -1,6 +1,6 @@
-# Radio Automation & Streaming Server
+# Soono
 
-A modern, containerized radio automation and streaming server with a responsive web control panel. Manage Icecast, LiquidSoap, playlists, and jingles all from one dashboard.
+A modern, containerized radio automation and streaming server with a responsive web control panel. Manage Icecast, LiquidSoap, playlists, jingles, scheduling, and ad campaigns from one dashboard.
 
 ## Tech Stack
 
@@ -21,8 +21,8 @@ A modern, containerized radio automation and streaming server with a responsive 
 | ffmpeg / ffprobe | Audio probe, transcode, loudness | `brew install ffmpeg` | `apt install ffmpeg` |
 | fpcalc (Chromaprint) | AcoustID audio fingerprinting | `brew install chromaprint` | `apt install libchromaprint-tools` |
 | Python 3.11+ | Audio analysis runtime | `brew install python@3.11` | `apt install python3.11 python3-venv` |
-| aubio + essentia | BPM, key, mood analysis | `./analysis/setup.sh` | same |
-| Essentia mood models | ML mood classifiers | `./analysis/download_models.sh` | same |
+| aubio + essentia | BPM, key, mood analysis | `./apps/api/analysis/setup.sh` | same |
+| Essentia mood models | ML mood classifiers | `./apps/api/analysis/download_models.sh` | same |
 
 > **Note:** Python and Essentia are only required for the audio analysis pipeline (BPM/key/mood detection on ingested music). The app runs without them — analysis will be skipped with a warning. `setup.sh` creates an isolated virtual environment so it won't conflict with system Python.
 

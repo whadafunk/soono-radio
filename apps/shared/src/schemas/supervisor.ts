@@ -172,6 +172,50 @@ export const SupervisorV2StopSetEstimateSchema = z.object({
 });
 export type SupervisorV2StopSetEstimate = z.infer<typeof SupervisorV2StopSetEstimateSchema>;
 
+export const SupervisorV2CurrentSegmentSchema = z.object({
+  id: z.number().int(),
+  type: z.string(),
+  name: z.string(),
+  duration_seconds: z.number(),
+  clock_id: z.number().int(),
+  show_id: z.number().int().nullable(),
+  show_name: z.string().nullable(),
+  elapsed_seconds: z.number(),
+  remaining_seconds: z.number(),
+});
+export type SupervisorV2CurrentSegment = z.infer<typeof SupervisorV2CurrentSegmentSchema>;
+
+export const SupervisorV2NextPlanSchema = z.object({
+  id: z.number().int(),
+  status: z.string(),
+  segment_id: z.number().int(),
+  segment_type: z.string(),
+  segment_name: z.string(),
+  item_count: z.number().int(),
+  target_seconds: z.number(),
+});
+export type SupervisorV2NextPlan = z.infer<typeof SupervisorV2NextPlanSchema>;
+
+export const SupervisorV2RecentPlaySchema = z.object({
+  title: z.string().nullable(),
+  artist: z.string().nullable(),
+  content_type: z.string().nullable(),
+  started_at_ms: z.number(),
+  duration_seconds: z.number().nullable(),
+  plan_item_id: z.number().int().nullable(),
+});
+export type SupervisorV2RecentPlay = z.infer<typeof SupervisorV2RecentPlaySchema>;
+
+export const SupervisorV2SegmentConfigSchema = z.object({
+  rotation_ids: z.array(z.number().int()),
+  jingle_playlist_id: z.number().int().nullable(),
+  station_id_playlist_id: z.number().int().nullable(),
+  start_clip_playlist_id: z.number().int().nullable(),
+  end_clip_playlist_id: z.number().int().nullable(),
+  show_jingle_playlist_id: z.number().int().nullable(),
+});
+export type SupervisorV2SegmentConfig = z.infer<typeof SupervisorV2SegmentConfigSchema>;
+
 export const SupervisorV2StatusSchema = z.object({
   active_plan_id: z.number().int().nullable(),
   current_drift_seconds: z.number(),
@@ -184,6 +228,11 @@ export const SupervisorV2StatusSchema = z.object({
   segment_duration_seconds: z.number().nullable(),
   plan_consumed_seconds: z.number(),
   expected_current_item_end_ms: z.number().nullable(),
+  // Phase C additions
+  current_segment: SupervisorV2CurrentSegmentSchema.nullable(),
+  next_plan: SupervisorV2NextPlanSchema.nullable(),
+  recent_plays: z.array(SupervisorV2RecentPlaySchema),
+  segment_config: SupervisorV2SegmentConfigSchema.nullable(),
 });
 export type SupervisorV2Status = z.infer<typeof SupervisorV2StatusSchema>;
 
