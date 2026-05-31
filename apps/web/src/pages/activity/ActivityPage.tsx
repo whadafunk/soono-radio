@@ -4,7 +4,7 @@ import {
   Loader, Trash2, Check, AlertCircle, AlertTriangle, ChevronDown, ChevronUp,
   Fingerprint, Wand2, Activity, RefreshCcw,
 } from 'lucide-react';
-import type { BackgroundJob, LookupIdResults, AnalyseResults, StoredCandidate } from '@radio/shared';
+import type { BackgroundJob, LookupIdResults, AnalyseResults, StoredCandidate } from '@soono/shared';
 import {
   fetchActivityJobs,
   fetchActivityJob,
@@ -22,7 +22,7 @@ function formatDate(d: Date | string | null): string {
 function StatusBadge({ status }: { status: BackgroundJob['status'] }) {
   if (status === 'running') {
     return (
-      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-blue-900/40 border border-blue-700 text-blue-300">
+      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[10px] font-semibold bg-brand-900/40 border border-brand-600 text-brand-300">
         <Loader className="w-2.5 h-2.5 animate-spin" />
         Running
       </span>
@@ -53,13 +53,13 @@ function StatusBadge({ status }: { status: BackgroundJob['status'] }) {
 }
 
 function TypeIcon({ type }: { type: BackgroundJob['type'] }) {
-  if (type === 'lookup_id') return <Fingerprint className="w-4 h-4 text-indigo-400 flex-shrink-0" />;
+  if (type === 'lookup_id') return <Fingerprint className="w-4 h-4 text-brand-400 flex-shrink-0" />;
   if (type === 'analyse') return <Wand2 className="w-4 h-4 text-violet-400 flex-shrink-0" />;
   return <RefreshCcw className="w-4 h-4 text-zinc-400 flex-shrink-0" />;
 }
 
 function SourceBadge({ source }: { source: StoredCandidate['source'] }) {
-  if (source === 'acoustid') return <span className="text-[10px] bg-indigo-900/40 border border-indigo-700 text-indigo-300 px-1.5 py-0.5 rounded">AcoustID</span>;
+  if (source === 'acoustid') return <span className="text-[10px] bg-brand-900/40 border border-brand-700 text-brand-300 px-1.5 py-0.5 rounded">AcoustID</span>;
   if (source === 'musicbrainz') return <span className="text-[10px] bg-purple-900/40 border border-purple-700 text-purple-300 px-1.5 py-0.5 rounded">MusicBrainz</span>;
   return <span className="text-[10px] bg-zinc-800 border border-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded">Filename</span>;
 }
@@ -91,7 +91,7 @@ function SkippedItem({
                 <button
                   onClick={() => setShowCandidates((v) => !v)}
                   disabled={resolving}
-                  className="text-xs text-indigo-300 hover:text-indigo-100 transition-colors"
+                  className="text-xs text-brand-300 hover:text-brand-100 transition-colors"
                 >
                   {showCandidates ? 'Hide' : `${item.candidates.length} candidate${item.candidates.length !== 1 ? 's' : ''}`}
                 </button>
@@ -124,7 +124,7 @@ function SkippedItem({
                 <button
                   onClick={() => onResolve(item.id, 'apply', i)}
                   disabled={resolving}
-                  className="text-xs px-2 py-1 rounded bg-indigo-600 hover:bg-indigo-500 text-white transition-colors disabled:opacity-50"
+                  className="text-xs px-2 py-1 rounded bg-zinc-700 hover:bg-zinc-600 text-white transition-colors disabled:opacity-50"
                 >
                   Apply
                 </button>
@@ -430,12 +430,12 @@ export function ActivityPage() {
                 : 'Background job results and review queue'}
           </p>
         </div>
-        {hasRunning && <Loader className="w-5 h-5 animate-spin text-indigo-400" />}
+        {hasRunning && <Loader className="w-5 h-5 animate-spin text-brand-400" />}
       </div>
 
       {isLoading ? (
         <div className="flex items-center justify-center py-16">
-          <Loader className="w-6 h-6 animate-spin text-indigo-500" />
+          <Loader className="w-6 h-6 animate-spin text-brand-500" />
         </div>
       ) : jobs.length === 0 ? (
         <div className="bg-zinc-900/50 border border-zinc-800 rounded-xl p-12 text-center">

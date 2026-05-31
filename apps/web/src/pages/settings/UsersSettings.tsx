@@ -18,7 +18,7 @@ import {
   UserCreateSchema,
   UserPatch,
   UserPatchSchema,
-} from '@radio/shared';
+} from '@soono/shared';
 import { fetchUsers, createUser, updateUser, deleteUsers } from '../../api';
 import { INPUT, LABEL } from '../../ui';
 
@@ -43,9 +43,9 @@ function sortRows<T extends object>(rows: T[], sort: SortConfig): T[] {
 function SortIcon({ column, sort }: { column: string; sort: SortConfig }) {
   if (!sort || sort.column !== column) return <ChevronsUpDown size={12} className="text-zinc-500" />;
   return sort.direction === 'asc' ? (
-    <ChevronUp size={12} className="text-indigo-400" />
+    <ChevronUp size={12} className="text-brand-400" />
   ) : (
-    <ChevronDown size={12} className="text-indigo-400" />
+    <ChevronDown size={12} className="text-brand-400" />
   );
 }
 
@@ -172,7 +172,7 @@ function UserForm({
         <button
           type="submit"
           disabled={isLoading}
-          className="px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg disabled:opacity-50 flex items-center gap-2"
+          className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg disabled:opacity-50 flex items-center gap-2"
         >
           {isLoading && <Loader size={14} className="animate-spin" />}
           {submitLabel}
@@ -316,7 +316,7 @@ export function UsersSettings() {
           )}
           <button
             onClick={() => setCreatingUser(true)}
-            className="flex items-center gap-2 px-3 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg"
+            className="flex items-center gap-2 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg"
           >
             <Plus size={14} />
             New User
@@ -336,7 +336,7 @@ export function UsersSettings() {
             <p className="text-sm">No users yet.</p>
             <button
               onClick={() => setCreatingUser(true)}
-              className="mt-3 text-indigo-400 hover:text-indigo-300 text-sm"
+              className="mt-3 text-brand-400 hover:text-brand-300 text-sm"
             >
               Add the first user
             </button>
@@ -354,7 +354,7 @@ export function UsersSettings() {
                         allSelected ? new Set() : new Set(sorted.map((u) => u.id)),
                       )
                     }
-                    className="accent-indigo-500"
+                    className="accent-brand-500"
                   />
                 </th>
                 {COLS.map(({ key, label }) => (
@@ -379,7 +379,7 @@ export function UsersSettings() {
                   onDoubleClick={() => setEditingUser(user)}
                   className={`border-b border-zinc-800 last:border-0 cursor-pointer transition-colors ${
                     selected.has(user.id)
-                      ? 'bg-indigo-950/40'
+                      ? 'bg-brand-950/40'
                       : 'hover:bg-zinc-800/50'
                   }`}
                 >
@@ -388,7 +388,7 @@ export function UsersSettings() {
                       type="checkbox"
                       checked={selected.has(user.id)}
                       onChange={() => {}}
-                      className="accent-indigo-500 pointer-events-none"
+                      className="accent-brand-500 pointer-events-none"
                     />
                   </td>
                   <td className="px-4 py-3 text-white font-medium">{user.first_name}</td>

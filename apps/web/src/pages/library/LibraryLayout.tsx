@@ -29,14 +29,14 @@ export function LibraryLayout() {
               className={({ isActive }) =>
                 `flex items-center gap-1.5 px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
                   isActive
-                    ? 'border-indigo-500 text-white'
+                    ? 'border-brand-500 text-white'
                     : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
                 }`
               }
             >
               {tab.label}
               {tab.label === 'Activity' && (activityStats?.running ?? 0) > 0 && (
-                <Loader className="w-3 h-3 animate-spin text-blue-400" />
+                <Loader className="w-3 h-3 animate-spin text-brand-400" />
               )}
               {tab.label === 'Activity' && !(activityStats?.running) && (activityStats?.review_pending ?? 0) > 0 && (
                 <span className="bg-amber-500 text-black text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">

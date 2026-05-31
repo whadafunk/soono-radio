@@ -1,5 +1,5 @@
 import { UseFormRegister } from 'react-hook-form';
-import { IcecastConfig } from '@radio/shared';
+import { IcecastConfig } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
@@ -19,7 +19,7 @@ export function LimitsSection({ register }: Props) {
           <input
             {...register('limits.max_sources', { valueAsNumber: true })}
             type="number"
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
           />
         </div>
         <div>
@@ -30,7 +30,7 @@ export function LimitsSection({ register }: Props) {
           <input
             {...register('limits.max_clients', { valueAsNumber: true })}
             type="number"
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
           />
         </div>
         <div>
@@ -41,7 +41,7 @@ export function LimitsSection({ register }: Props) {
           <input
             {...register('limits.max_queue_size', { valueAsNumber: true })}
             type="number"
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
           />
         </div>
         <div>
@@ -52,7 +52,7 @@ export function LimitsSection({ register }: Props) {
           <input
             {...register('limits.burst_size', { valueAsNumber: true })}
             type="number"
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
           />
         </div>
       </div>

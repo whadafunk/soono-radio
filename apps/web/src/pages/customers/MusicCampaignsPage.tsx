@@ -8,7 +8,7 @@ import {
   MusicCampaignCreate,
   MusicCampaignCreateSchema,
   MusicCampaignWithCustomer,
-} from '@radio/shared';
+} from '@soono/shared';
 import {
   fetchMusicCampaigns,
   createMusicCampaign,
@@ -135,7 +135,7 @@ export function MusicCampaignsPage({
       >
         <span className="flex items-center gap-1">
           {children}
-          <Icon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-indigo-400' : 'text-zinc-400'}`} />
+          <Icon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-brand-400' : 'text-zinc-400'}`} />
         </span>
       </th>
     );
@@ -193,7 +193,7 @@ export function MusicCampaignsPage({
                     type="checkbox"
                     checked={allSelected}
                     onChange={toggleAll}
-                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                   />
                 </th>
                 <SortTh col="name">Campaign</SortTh>
@@ -266,14 +266,14 @@ function CampaignRow({
       onClick={onRowClick}
       onDoubleClick={onEdit}
       title="Double-click to edit"
-      className={`cursor-pointer transition-colors ${isSelected || isFocused ? 'bg-indigo-600/10' : 'hover:bg-zinc-800/40'}`}
+      className={`cursor-pointer transition-colors ${isSelected || isFocused ? 'bg-brand-600/10' : 'hover:bg-zinc-800/40'}`}
     >
       <td className="px-4 py-3 border-r border-zinc-800/60" onClick={onToggle}>
         <input
           type="checkbox"
           checked={isSelected}
           onChange={() => {}}
-          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
         />
       </td>
       <td className="px-4 py-3 text-zinc-200 font-medium text-sm">{campaign.name}</td>
@@ -295,7 +295,7 @@ function CampaignRow({
           type="checkbox"
           checked={campaign.active}
           onChange={(e) => onToggleActive(e.target.checked)}
-          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
         />
       </td>
     </tr>

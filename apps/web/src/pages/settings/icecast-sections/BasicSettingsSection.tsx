@@ -1,5 +1,5 @@
 import { UseFormRegister, FieldErrors } from 'react-hook-form';
-import { IcecastConfig } from '@radio/shared';
+import { IcecastConfig } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
@@ -19,7 +19,7 @@ export function BasicSettingsSection({ register, errors }: Props) {
           </label>
           <input
             {...register('server.hostname')}
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             placeholder="radio.example.com"
           />
           {errors.server?.hostname && (
@@ -33,7 +33,7 @@ export function BasicSettingsSection({ register, errors }: Props) {
           </label>
           <input
             {...register('server.location')}
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             placeholder="New York, USA"
           />
         </div>
@@ -45,7 +45,7 @@ export function BasicSettingsSection({ register, errors }: Props) {
           <input
             {...register('server.admin')}
             type="email"
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
           />
           {errors.server?.admin && (
             <p className="text-red-400 text-xs mt-1">{errors.server.admin.message}</p>

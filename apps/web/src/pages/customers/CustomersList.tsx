@@ -35,7 +35,7 @@ import {
   ContactPatchSchema,
   User,
   Show,
-} from '@radio/shared';
+} from '@soono/shared';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
 import { MusicCampaignsPage } from './MusicCampaignsPage';
@@ -128,7 +128,7 @@ function GlobalBudgetPanel() {
   const breaksTotal = data.inventory.effective.global.breaks;
 
   const pct = total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
-  const barColor = pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-indigo-500';
+  const barColor = pct >= 90 ? 'bg-red-500' : pct >= 70 ? 'bg-amber-500' : 'bg-brand-500';
 
   return (
     <div className="px-4 py-3 bg-zinc-900/60 border border-zinc-800 rounded-lg space-y-2">
@@ -717,7 +717,7 @@ export function CustomersList() {
   if (isLoading)
     return (
       <div className="flex items-center justify-center h-screen">
-        <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+        <Loader className="w-8 h-8 animate-spin text-brand-500" />
       </div>
     );
 
@@ -813,7 +813,7 @@ export function CustomersList() {
                     type="checkbox"
                     checked={allCustomersSelected}
                     onChange={toggleAllCustomers}
-                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                   />
                 </th>
                 <SortableHeader
@@ -844,7 +844,7 @@ export function CustomersList() {
                   title="Double-click to edit"
                   className={`cursor-pointer transition-colors ${
                     focusedCustomerId === customer.id
-                      ? 'bg-indigo-600/20'
+                      ? 'bg-brand-600/20'
                       : 'hover:bg-zinc-800/50'
                   }`}
                 >
@@ -853,7 +853,7 @@ export function CustomersList() {
                       type="checkbox"
                       checked={selectedCustomerIds.has(customer.id)}
                       onChange={() => {}}
-                      className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                      className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                     />
                   </td>
                   <td className="px-6 py-3 font-medium text-white">{customer.name}</td>
@@ -883,9 +883,9 @@ export function CustomersList() {
       </div>
 
       {/* BOTTOM: Campaigns / Contacts — always visible */}
-      <div className="flex-1 min-h-0 flex flex-col bg-slate-950 border border-indigo-900/50 rounded-lg overflow-hidden">
+      <div className="flex-1 min-h-0 flex flex-col bg-slate-950 border border-brand-900/50 rounded-lg overflow-hidden">
         {/* Tab bar + filter chip */}
-        <div className="flex items-center border-b border-indigo-900/30 bg-slate-900/50">
+        <div className="flex items-center border-b border-brand-900/30 bg-slate-900/50">
           <button
             onClick={() => setActiveTab('campaigns')}
             className={`px-4 py-3 text-sm font-medium transition-colors rounded-t ${
@@ -918,11 +918,11 @@ export function CustomersList() {
           </button>
           <div className="flex-1" />
           {focusedCustomerId && focusedCustomerName && (
-            <div className="mr-3 flex items-center gap-1.5 px-2.5 py-1 bg-indigo-900/30 border border-indigo-700/50 rounded-lg text-xs text-indigo-300">
+            <div className="mr-3 flex items-center gap-1.5 px-2.5 py-1 bg-brand-900/30 border border-brand-700/50 rounded-lg text-xs text-brand-300">
               <span>
                 {focusedCustomerName}
                 {selectedCustomerIds.size > 1 && (
-                  <span className="ml-1 text-indigo-400">+{selectedCustomerIds.size - 1} more</span>
+                  <span className="ml-1 text-brand-400">+{selectedCustomerIds.size - 1} more</span>
                 )}
               </span>
               <button onClick={clearCustomerFocus} className="hover:text-white">
@@ -980,7 +980,7 @@ export function CustomersList() {
                           type="checkbox"
                           checked={allCampaignsSelected}
                           onChange={toggleAllCampaigns}
-                          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                         />
                       </th>
                       {!focusedCustomerId && (
@@ -1092,7 +1092,7 @@ export function CustomersList() {
                           type="checkbox"
                           checked={allContactsSelected}
                           onChange={toggleAllContacts}
-                          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                         />
                       </th>
                       {!focusedCustomerId && (
@@ -1144,7 +1144,7 @@ export function CustomersList() {
                           title="Double-click to edit"
                           className={`cursor-pointer transition-colors ${
                             selectedContactIds.has(contact.id) || focusedContactId === contact.id
-                              ? 'bg-indigo-600/20'
+                              ? 'bg-brand-600/20'
                               : 'hover:bg-slate-900/50'
                           }`}
                         >
@@ -1153,7 +1153,7 @@ export function CustomersList() {
                               type="checkbox"
                               checked={selectedContactIds.has(contact.id)}
                               onChange={() => {}}
-                              className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                              className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                             />
                           </td>
                           {!focusedCustomerId && (
@@ -1285,7 +1285,7 @@ function SortableHeader({
     >
       <span className="flex items-center gap-1">
         {label}
-        <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-indigo-400' : 'text-zinc-400'}`} />
+        <Icon className={`w-4 h-4 flex-shrink-0 ${isActive ? 'text-brand-400' : 'text-zinc-400'}`} />
       </span>
     </th>
   );
@@ -1409,7 +1409,7 @@ function CreateCustomerForm({
         <button
           type="submit"
           disabled={isLoading}
-          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+          className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
         >
           {isLoading ? 'Creating…' : 'Create Customer'}
         </button>
@@ -1740,7 +1740,7 @@ function CreateCampaignForm({
 
           <div className="grid grid-cols-2 gap-3 items-end">
             <div className="flex items-center gap-2 pb-2">
-              <input type="checkbox" {...register('first_in_slot')} disabled={isLoading} className="rounded border-zinc-700 text-indigo-600 h-4 w-4 flex-shrink-0" />
+              <input type="checkbox" {...register('first_in_slot')} disabled={isLoading} className="rounded border-zinc-700 text-brand-600 h-4 w-4 flex-shrink-0" />
               <label className="text-sm font-medium text-zinc-300 flex items-center gap-0">
                 First in slot
                 <HelpTooltip text="This campaign's spot should open the commercial break rather than appear mid-break." />
@@ -1794,7 +1794,7 @@ function CreateCampaignForm({
         <button type="button" onClick={onCancel} disabled={isLoading} className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
           Cancel
         </button>
-        <button type="submit" disabled={isLoading} className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
+        <button type="submit" disabled={isLoading} className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
           {isLoading ? 'Creating…' : 'Create Campaign'}
         </button>
       </div>
@@ -1868,7 +1868,7 @@ function CreateContactForm({
         <button
           type="submit"
           disabled={isLoading}
-          className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+          className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
         >
           {isLoading ? 'Creating…' : 'Create Contact'}
         </button>
@@ -1903,7 +1903,7 @@ function CampaignTableRow({
       title="Double-click to edit"
       className={`cursor-pointer transition-colors ${
         isSelected || isFocused
-          ? 'bg-indigo-600/20'
+          ? 'bg-brand-600/20'
           : 'hover:bg-slate-900/50'
       }`}
     >
@@ -1912,7 +1912,7 @@ function CampaignTableRow({
           type="checkbox"
           checked={isSelected}
           onChange={() => {}}
-          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
         />
       </td>
       {showCustomer && (
@@ -1936,7 +1936,7 @@ function CampaignTableRow({
           type="checkbox"
           checked={campaign.active}
           onChange={(e) => onToggleActive(e.target.checked)}
-          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+          className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
         />
       </td>
     </tr>
@@ -2105,7 +2105,7 @@ function EditModal({
                 type="submit"
                 form="edit-form"
                 disabled={isUpdating}
-                className="px-4 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
+                className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50"
               >
                 {isUpdating ? 'Saving…' : 'Save'}
               </button>
@@ -2332,8 +2332,8 @@ function CustomerEditForm({
                   title={contact.is_primary ? 'Remove primary' : 'Set as primary'}
                   className={`text-xs px-2 py-0.5 rounded border transition-colors ${
                     contact.is_primary
-                      ? 'bg-indigo-900/50 text-indigo-300 border-indigo-700'
-                      : 'text-zinc-500 border-zinc-700 hover:text-indigo-300 hover:border-indigo-700'
+                      ? 'bg-brand-900/50 text-brand-300 border-brand-700'
+                      : 'text-zinc-500 border-zinc-700 hover:text-brand-300 hover:border-brand-700'
                   }`}
                 >
                   Primary
@@ -2367,7 +2367,7 @@ function CustomerEditForm({
                 <input
                   {...regContact('name')}
                   placeholder="Name *"
-                  className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
                 />
                 {contactForm.errors.name && (
                   <p className="text-red-400 text-xs mt-0.5">{contactForm.errors.name.message}</p>
@@ -2376,18 +2376,18 @@ function CustomerEditForm({
               <input
                 {...regContact('role')}
                 placeholder="Role"
-                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
               />
               <input
                 {...regContact('email')}
                 type="email"
                 placeholder="Email"
-                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
               />
               <input
                 {...regContact('phone')}
                 placeholder="Phone"
-                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
               />
             </div>
             <div className="flex gap-2 justify-end">
@@ -2404,7 +2404,7 @@ function CustomerEditForm({
               <button
                 type="button"
                 onClick={handleContactSubmit(submitNewContact)}
-                className="px-3 py-1 text-xs bg-indigo-600 hover:bg-indigo-700 text-white rounded transition-colors"
+                className="px-3 py-1 text-xs bg-zinc-700 hover:bg-zinc-600 text-white rounded transition-colors"
               >
                 Add
               </button>
@@ -2812,7 +2812,7 @@ function CampaignEditForm({
 
         <div className="grid grid-cols-2 gap-3 items-end">
           <div className="flex items-center gap-2 pb-2">
-            <input type="checkbox" {...register('first_in_slot')} disabled={isLoading} className="rounded border-zinc-700 text-indigo-600 h-4 w-4 flex-shrink-0" />
+            <input type="checkbox" {...register('first_in_slot')} disabled={isLoading} className="rounded border-zinc-700 text-brand-600 h-4 w-4 flex-shrink-0" />
             <label className="text-sm font-medium text-zinc-300 flex items-center gap-0">
               First in slot
               <HelpTooltip text="This campaign's spot should open the commercial break rather than appear mid-break." />
@@ -2876,7 +2876,7 @@ function CampaignEditForm({
       </div>
 
       <div className="flex items-center gap-2">
-        <input type="checkbox" {...register('active')} disabled={isLoading} className="rounded border-zinc-700 text-indigo-600 h-4 w-4" />
+        <input type="checkbox" {...register('active')} disabled={isLoading} className="rounded border-zinc-700 text-brand-600 h-4 w-4" />
         <label className="text-sm font-medium text-zinc-300 flex items-center gap-0">
           Active
           <HelpTooltip text="Inactive campaigns are excluded from scheduling. At least one media clip must be uploaded before activating." />

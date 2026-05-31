@@ -1,5 +1,5 @@
 import { Control, UseFormRegister, Controller } from 'react-hook-form';
-import { IcecastConfig } from '@radio/shared';
+import { IcecastConfig } from '@soono/shared';
 import { PasswordInput } from '../../../components/PasswordInput';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
@@ -27,7 +27,7 @@ export function RelaySection({ control, register }: Props) {
           <textarea
             {...register('relay.relay_servers')}
             rows={3}
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500 font-mono text-sm"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500 font-mono text-sm"
             placeholder="server1.example.com:8000&#10;server2.example.com:8000"
           />
           <p className="text-zinc-500 text-xs mt-1">One server per line</p>

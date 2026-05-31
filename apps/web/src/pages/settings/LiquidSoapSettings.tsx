@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { LiquidsoapConfig, LiquidsoapConfigSchema } from '@radio/shared';
+import { LiquidsoapConfig, LiquidsoapConfigSchema } from '@soono/shared';
 import {
   fetchLiquidsoapConfig,
   updateLiquidsoapConfig,
@@ -60,7 +60,7 @@ export function LiquidSoapSettings() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+        <Loader className="w-8 h-8 animate-spin text-brand-500" />
       </div>
     );
   }
@@ -119,7 +119,7 @@ export function LiquidSoapSettings() {
           <button
             type="submit"
             disabled={mutation.isPending || isRestarting}
-            className="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-6 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {mutation.isPending || isRestarting ? (
               <>

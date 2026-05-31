@@ -152,7 +152,7 @@ export function CertificatesSettings() {
           accept=".pem,.crt,.key"
           onChange={handleFile}
           disabled={uploadMutation.isPending}
-          className="block w-full text-sm text-zinc-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-indigo-600 file:text-white hover:file:bg-indigo-700 file:cursor-pointer disabled:opacity-50"
+          className="block w-full text-sm text-zinc-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-brand-600 file:text-white hover:file:bg-brand-700 file:cursor-pointer disabled:opacity-50"
         />
         {uploadMutation.isPending && (
           <p className="text-sm text-zinc-400 mt-3 flex items-center gap-2">
@@ -169,7 +169,7 @@ export function CertificatesSettings() {
           className="w-full px-6 py-4 flex items-center justify-between hover:bg-zinc-800 transition-colors"
         >
           <h2 className="text-lg font-semibold text-white flex items-center gap-2">
-            <Wand2 className="w-5 h-5 text-indigo-400" />
+            <Wand2 className="w-5 h-5 text-brand-400" />
             Generate Self-Signed Certificate
           </h2>
           <ChevronDown
@@ -193,7 +193,7 @@ export function CertificatesSettings() {
                 value={genCommonName}
                 onChange={(e) => setGenCommonName(e.target.value)}
                 placeholder="e.g. localhost or radio.example.com"
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               <p className="text-xs text-zinc-500 mt-1">
                 The primary hostname this certificate is for. Browsers match against this and the alternative names below.
@@ -211,7 +211,7 @@ export function CertificatesSettings() {
                   onChange={(e) => setGenValidityDays(Number(e.target.value) || 365)}
                   min={1}
                   max={36500}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 />
               </div>
               <div>
@@ -223,7 +223,7 @@ export function CertificatesSettings() {
                   value={genFilename}
                   onChange={(e) => setGenFilename(e.target.value)}
                   placeholder="(derived from CN)"
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 />
               </div>
             </div>
@@ -239,7 +239,7 @@ export function CertificatesSettings() {
                   onChange={(e) => setGenCity(e.target.value)}
                   placeholder="e.g. Slobozia"
                   maxLength={64}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 />
               </div>
               <div>
@@ -252,7 +252,7 @@ export function CertificatesSettings() {
                   onChange={(e) => setGenCountry(e.target.value.toUpperCase())}
                   placeholder="e.g. RO"
                   maxLength={2}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500 uppercase"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500 uppercase"
                 />
                 <p className="text-xs text-zinc-500 mt-1">2-letter ISO 3166 code</p>
               </div>
@@ -267,7 +267,7 @@ export function CertificatesSettings() {
                 value={genAltNames}
                 onChange={(e) => setGenAltNames(e.target.value)}
                 placeholder="e.g. *.example.com, 192.168.1.10, localhost"
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               <p className="text-xs text-zinc-500 mt-1">
                 Comma-separated list of additional hostnames or IPs. IPv4 addresses are auto-detected and tagged as IP entries; everything else is treated as a DNS name.
@@ -278,7 +278,7 @@ export function CertificatesSettings() {
               type="button"
               onClick={handleGenerate}
               disabled={!genCommonName.trim() || generateMutation.isPending}
-              className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generateMutation.isPending ? (
                 <>
@@ -322,7 +322,7 @@ export function CertificatesSettings() {
                 className="flex items-center justify-between bg-zinc-800 rounded-lg px-4 py-3"
               >
                 <div className="flex items-center gap-3 min-w-0 flex-1">
-                  <FileLock className="w-5 h-5 text-indigo-400 flex-shrink-0" />
+                  <FileLock className="w-5 h-5 text-brand-400 flex-shrink-0" />
                   <div className="min-w-0 flex-1">
                     <p className="text-white font-mono text-sm truncate">{cert.name}</p>
                     <p className="text-xs text-zinc-500">
@@ -374,7 +374,7 @@ export function CertificatesSettings() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg w-[95vw] h-[95vh] max-w-5xl flex flex-col">
             <div className="flex items-center justify-between p-6 border-b border-zinc-800 flex-shrink-0">
               <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                <FileLock className="w-5 h-5 text-indigo-400" />
+                <FileLock className="w-5 h-5 text-brand-400" />
                 <span className="font-mono">{viewingCert}</span>
               </h2>
               <button

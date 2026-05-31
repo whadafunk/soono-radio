@@ -1,5 +1,5 @@
 import { UseFormRegister } from 'react-hook-form';
-import { LiquidsoapConfig } from '@radio/shared';
+import { LiquidsoapConfig } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
@@ -15,7 +15,7 @@ export function MasterBusSection({ register }: Props) {
           <input
             type="checkbox"
             {...register('master_bus.soft_limiter')}
-            className="w-4 h-4 mt-0.5 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+            className="w-4 h-4 mt-0.5 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
           />
           <span className="text-sm font-medium text-zinc-200">
             Soft limiter at −1 dBFS

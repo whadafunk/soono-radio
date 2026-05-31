@@ -5,19 +5,17 @@ import { zodResolver } from '@hookform/resolvers/zod';
 import { useEffect, useRef, useState } from 'react';
 import {
   ChevronLeft, BarChart2, Megaphone, Music2, Bell, Lock,
-  Trash2, Plus, Upload, X, Loader2,
+  Trash2, Plus, X,
 } from 'lucide-react';
 import {
   ShowPatch, ShowPatchSchema, ShowColor, SHOW_COLORS,
   EXTENSION_POLICIES, ExtensionPolicy,
   ShowPlaylist, Rotation, SupervisorConfig,
-} from '@radio/shared';
-import { Media } from '@radio/shared';
+} from '@soono/shared';
 import {
   fetchShow, updateShow, deleteShow, fetchClocks, fetchTemplateEntries,
   fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
-  fetchPlaylists, fetchLibrary, fetchLibraryItem, fetchIngestJob,
-  uploadLibraryFiles, fetchRotations, fetchShowCampaigns, fetchSupervisorConfig,
+  fetchPlaylists, fetchRotations, fetchShowCampaigns, fetchSupervisorConfig,
   ApiError,
 } from '../../api';
 import type { PlaylistSummary, ShowCampaign } from '../../api';
@@ -27,11 +25,11 @@ import { BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, INPUT, SELECT } f
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const COLOR_HEX: Record<ShowColor, string> = {
-  indigo: '#818cf8', violet: '#a78bfa', cyan:    '#22d3ee', emerald: '#34d399',
+  indigo: '#36c8c8', violet: '#a78bfa', cyan:    '#22d3ee', emerald: '#34d399',
   amber:  '#fbbf24', rose:   '#fb7185', orange:  '#fb923c', teal:    '#2dd4bf',
 };
 const COLOR_DOT: Record<ShowColor, string> = {
-  indigo: 'bg-indigo-500', violet: 'bg-violet-500', cyan:    'bg-cyan-500',    emerald: 'bg-emerald-500',
+  indigo: 'bg-brand-500', violet: 'bg-violet-500', cyan:    'bg-cyan-500',    emerald: 'bg-emerald-500',
   amber:  'bg-amber-500',  rose:   'bg-rose-500',   orange:  'bg-orange-500',  teal:    'bg-teal-500',
 };
 
@@ -179,11 +177,11 @@ export function ShowDetailPage() {
         host:               show.host ?? '',
         producer:           show.producer ?? '',
         default_clock_id:   show.default_clock_id,
-        jingle_playlist_id: show.jingle_playlist_id,
-        bed_playlist_id:    show.bed_playlist_id,
-        intro_media_id:     show.intro_media_id,
-        outro_media_id:     show.outro_media_id,
-        duration_minutes:   show.duration_minutes,
+        jingle_playlist_id:     show.jingle_playlist_id,
+        bed_playlist_id:        show.bed_playlist_id,
+        show_start_playlist_id: show.show_start_playlist_id,
+        show_end_playlist_id:   show.show_end_playlist_id,
+        duration_minutes:       show.duration_minutes,
         extension_policy:   show.extension_policy,
         color:              show.color,
         notes:              show.notes ?? '',
@@ -252,16 +250,17 @@ export function ShowDetailPage() {
     return (
       <div className="p-8 text-center">
         <p className="text-zinc-400 mb-4">Show not found.</p>
-        <Link to="/shows" className="text-indigo-400 hover:text-indigo-300 text-sm">← Back to Shows</Link>
+        <Link to="/shows" className="text-brand-400 hover:text-brand-300 text-sm">← Back to Shows</Link>
       </div>
     );
   }
 
   const hex = COLOR_HEX[selectedColor ?? show.color];
 
-  const jinglePlaylists = allPlaylists.filter((p) => p.type === 'jingle' && p.subcategory === 'show');
-  const bedPlaylists    = allPlaylists.filter((p) => p.type === 'bed');
-  const musicPlaylists  = allPlaylists.filter((p) => p.type === 'music');
+  const jinglePlaylists    = allPlaylists.filter((p) => p.type === 'jingle' && p.subcategory === 'show');
+  const envelopePlaylists  = allPlaylists.filter((p) => p.type === 'jingle');
+  const bedPlaylists       = allPlaylists.filter((p) => p.type === 'bed');
+  const musicPlaylists     = allPlaylists.filter((p) => p.type === 'music');
 
   return (
     <div className="pb-10 flex gap-6 items-start">
@@ -339,7 +338,7 @@ export function ShowDetailPage() {
                 onClick={() => setActiveTab(tab)}
                 className={`mr-6 py-3 text-sm font-medium border-b-2 -mb-px transition-colors ${
                   activeTab === tab
-                    ? 'border-indigo-500 text-white'
+                    ? 'border-brand-500 text-white'
                     : 'border-transparent text-zinc-400 hover:text-zinc-200'
                 }`}
               >
@@ -406,7 +405,7 @@ export function ShowDetailPage() {
                             step={DURATION_STEP}
                             value={field.value ?? show.duration_minutes}
                             onChange={(e) => field.onChange(Number(e.target.value))}
-                            className="flex-1 accent-indigo-500"
+                            className="flex-1 accent-brand-500"
                           />
                           <span className="text-xs text-zinc-500 w-8">{formatDuration(DURATION_MAX)}</span>
                         </div>
@@ -470,29 +469,41 @@ export function ShowDetailPage() {
             ) : (
               <>
                 <section className="space-y-4">
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Intro &amp; Outro</h2>
-                  <Controller
-                    control={control}
-                    name="intro_media_id"
-                    render={({ field }) => (
-                      <MediaPickerField
-                        label={<span className="flex items-center gap-1">Intro clip <HelpTooltip text="Audio played at the very start of the show, before the first scheduled segment begins." /></span>}
-                        value={field.value ?? null}
-                        onChange={(v) => { field.onChange(v); setValue('intro_media_id', v, { shouldDirty: true }); }}
-                      />
-                    )}
-                  />
-                  <Controller
-                    control={control}
-                    name="outro_media_id"
-                    render={({ field }) => (
-                      <MediaPickerField
-                        label={<span className="flex items-center gap-1">Outro clip <HelpTooltip text="Audio played at the very end of the show, after the last scheduled segment finishes." /></span>}
-                        value={field.value ?? null}
-                        onChange={(v) => { field.onChange(v); setValue('outro_media_id', v, { shouldDirty: true }); }}
-                      />
-                    )}
-                  />
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Show Envelopes</h2>
+                  <div>
+                    <label className="flex items-center gap-1 text-xs text-zinc-400 mb-1.5">
+                      Show intro playlist <HelpTooltip text="Jingle playlist for the show's opening clip, played before the first segment. The branding process LRP-picks from this playlist." />
+                    </label>
+                    <Controller
+                      control={control}
+                      name="show_start_playlist_id"
+                      render={({ field }) => (
+                        <PlaylistSelect
+                          playlists={envelopePlaylists}
+                          value={field.value ?? null}
+                          onChange={(v) => { field.onChange(v); setValue('show_start_playlist_id', v, { shouldDirty: true }); }}
+                          placeholder="No intro playlist assigned"
+                        />
+                      )}
+                    />
+                  </div>
+                  <div>
+                    <label className="flex items-center gap-1 text-xs text-zinc-400 mb-1.5">
+                      Show outro playlist <HelpTooltip text="Jingle playlist for the show's closing clip, played after the last segment. The branding process LRP-picks from this playlist." />
+                    </label>
+                    <Controller
+                      control={control}
+                      name="show_end_playlist_id"
+                      render={({ field }) => (
+                        <PlaylistSelect
+                          playlists={envelopePlaylists}
+                          value={field.value ?? null}
+                          onChange={(v) => { field.onChange(v); setValue('show_end_playlist_id', v, { shouldDirty: true }); }}
+                          placeholder="No outro playlist assigned"
+                        />
+                      )}
+                    />
+                  </div>
                 </section>
 
                 <section className="border-t border-zinc-800 pt-5">
@@ -558,14 +569,14 @@ export function ShowDetailPage() {
                   <li
                     key={entry.id}
                     className={`flex items-center justify-between text-xs rounded px-1.5 py-0.5 -mx-1.5 ${
-                      isNext ? 'bg-indigo-500/10 text-indigo-300' : ''
+                      isNext ? 'bg-brand-500/10 text-brand-300' : ''
                     }`}
                   >
-                    <span className={`font-medium ${isNext ? 'text-indigo-200' : 'text-zinc-300'}`}>
+                    <span className={`font-medium ${isNext ? 'text-brand-200' : 'text-zinc-300'}`}>
                       {DAY_NAMES[entry.day_of_week - 1]} {day.getDate()}
-                      {isNext && <span className="ml-1 text-indigo-400 text-[10px]">next</span>}
+                      {isNext && <span className="ml-1 text-brand-400 text-[10px]">next</span>}
                     </span>
-                    <span className={`font-mono ${isNext ? 'text-indigo-300' : 'text-zinc-400'}`}>
+                    <span className={`font-mono ${isNext ? 'text-brand-300' : 'text-zinc-400'}`}>
                       {entry.time_start}–{entry.time_end}
                     </span>
                   </li>
@@ -585,7 +596,7 @@ export function ShowDetailPage() {
                   <div className="flex items-center justify-between gap-1">
                     <span className={`font-medium truncate ${c.active ? 'text-zinc-200' : 'text-zinc-500 line-through'}`}>{c.name}</span>
                     {c.plays_per_show != null && (
-                      <span className="flex-shrink-0 text-indigo-400 font-mono">{c.plays_per_show}×</span>
+                      <span className="flex-shrink-0 text-brand-400 font-mono">{c.plays_per_show}×</span>
                     )}
                   </div>
                   <span className="text-zinc-500">{c.customer_name}</span>
@@ -656,7 +667,7 @@ function MusicPlaylistsSection({
       {allMusicPlaylists.length === 0 && (
         <p className="text-xs text-zinc-500 italic mb-3">
           No music playlists in library —{' '}
-          <Link to="/playlists" className="text-indigo-400 hover:text-indigo-300">create one first</Link>
+          <Link to="/playlists" className="text-brand-400 hover:text-brand-300">create one first</Link>
         </p>
       )}
 
@@ -685,7 +696,7 @@ function MusicPlaylistsSection({
                       const pl = allMusicPlaylists.find((p) => p.id === newId);
                       if (pl) update(lp.tempId, { playlist_id: newId, playlist_name: pl.name });
                     }}
-                    className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-indigo-500"
+                    className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-brand-500"
                   >
                     {availableForCard.map((p) => (
                       <option key={p.id} value={p.id} className="bg-zinc-900">{p.name}</option>
@@ -703,7 +714,7 @@ function MusicPlaylistsSection({
                       const v = parseInt(e.target.value, 10);
                       if (!isNaN(v) && v >= 1) update(lp.tempId, { weight: v });
                     }}
-                    className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                    className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-brand-500 text-center"
                   />
                 </div>
               </div>
@@ -716,7 +727,7 @@ function MusicPlaylistsSection({
         <button
           type="button"
           onClick={addPlaylist}
-          className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors mb-3"
+          className="text-xs text-brand-400 hover:text-brand-300 transition-colors mb-3"
         >
           + Add playlist
         </button>
@@ -727,7 +738,7 @@ function MusicPlaylistsSection({
           {rotations.length === 0 ? (
             <p className="text-xs text-zinc-500">
               No rotation documents —{' '}
-              <Link to="/rotations" className="text-indigo-400 hover:text-indigo-300 underline-offset-2 hover:underline">
+              <Link to="/rotations" className="text-brand-400 hover:text-brand-300 underline-offset-2 hover:underline">
                 create one in Rotations
               </Link>{' '}
               to control play order.
@@ -738,7 +749,7 @@ function MusicPlaylistsSection({
               <select
                 value={sharedRotationId ?? ''}
                 onChange={(e) => setRotation(e.target.value === '' ? null : Number(e.target.value))}
-                className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${!sharedRotationId ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-indigo-500'}`}
+                className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${!sharedRotationId ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-brand-500'}`}
               >
                 <option value="" disabled className="bg-zinc-900">— select a rotation —</option>
                 {rotations.map((r) => (
@@ -784,161 +795,6 @@ function PlaylistSelect({
   );
 }
 
-// ─── Media Picker Field (intro/outro) ─────────────────────────────────────────
-
-function MediaPickerField({
-  label, value, onChange,
-}: {
-  label: React.ReactNode;
-  value: number | null;
-  onChange: (id: number | null) => void;
-}) {
-  const [isOpen, setIsOpen] = useState(false);
-  const [query, setQuery] = useState('');
-  const [uploadState, setUploadState] = useState<'idle' | 'uploading' | 'processing'>('idle');
-  const [pollingJobId, setPollingJobId] = useState<string | null>(null);
-  const fileRef = useRef<HTMLInputElement>(null);
-
-  const { data: currentMedia } = useQuery<Media>({
-    queryKey: ['media', value],
-    queryFn: () => fetchLibraryItem(value!),
-    enabled: value != null,
-  });
-
-  const { data: searchResults } = useQuery({
-    queryKey: ['media-picker', query],
-    queryFn: () => fetchLibrary({ q: query || undefined, category: 'jingle,intro,outro,promo', limit: 40 }),
-    enabled: isOpen,
-  });
-
-  const { data: ingestJob } = useQuery({
-    queryKey: ['ingest-job', pollingJobId],
-    queryFn: () => fetchIngestJob(pollingJobId!),
-    enabled: !!pollingJobId,
-    refetchInterval: pollingJobId ? 2000 : false,
-  });
-
-  useEffect(() => {
-    if (!ingestJob) return;
-    if (ingestJob.status === 'completed' && ingestJob.media_id) {
-      onChange(ingestJob.media_id);
-      setPollingJobId(null);
-      setUploadState('idle');
-      setIsOpen(false);
-    } else if (ingestJob.status === 'failed') {
-      setPollingJobId(null);
-      setUploadState('idle');
-    }
-  }, [ingestJob, onChange]);
-
-  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    e.target.value = '';
-    setUploadState('uploading');
-    try {
-      const { jobs } = await uploadLibraryFiles([file], 'jingle');
-      setUploadState('processing');
-      setPollingJobId(jobs[0].job_id);
-    } catch {
-      setUploadState('idle');
-    }
-  };
-
-  const mediaLabel = currentMedia
-    ? [currentMedia.title, currentMedia.artist].filter(Boolean).join(' — ') || currentMedia.original_filename
-    : null;
-
-  return (
-    <div>
-      <label className="block text-xs font-medium text-zinc-400 mb-1.5">{label}</label>
-
-      <div className="flex items-center gap-2">
-        {/* Current selection display */}
-        <div className="flex-1 flex items-center gap-2 bg-zinc-900 border border-zinc-700 rounded-lg px-3 py-2 min-w-0">
-          {uploadState !== 'idle' ? (
-            <span className="flex items-center gap-1.5 text-xs text-zinc-400">
-              <Loader2 className="w-3 h-3 animate-spin" />
-              {uploadState === 'uploading' ? 'Uploading…' : 'Processing…'}
-            </span>
-          ) : mediaLabel ? (
-            <>
-              <span className="text-sm text-zinc-200 truncate flex-1">{mediaLabel}</span>
-              <button
-                type="button"
-                onClick={() => onChange(null)}
-                className="p-0.5 text-zinc-500 hover:text-zinc-300 flex-shrink-0"
-              >
-                <X className="w-3.5 h-3.5" />
-              </button>
-            </>
-          ) : (
-            <span className="text-sm text-zinc-500 italic">None</span>
-          )}
-        </div>
-
-        {/* Select button */}
-        <button
-          type="button"
-          onClick={() => { setIsOpen((o) => !o); setQuery(''); }}
-          className="px-2.5 py-2 text-xs bg-zinc-800 hover:bg-zinc-700 text-zinc-300 border border-zinc-700 rounded-lg transition-colors"
-        >
-          {isOpen ? 'Close' : 'Select'}
-        </button>
-
-        {/* Upload button */}
-        <button
-          type="button"
-          onClick={() => fileRef.current?.click()}
-          disabled={uploadState !== 'idle'}
-          className="p-2 text-zinc-400 hover:text-zinc-200 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded-lg transition-colors disabled:opacity-40"
-          title="Upload a clip"
-        >
-          <Upload className="w-3.5 h-3.5" />
-        </button>
-        <input ref={fileRef} type="file" accept="audio/*" className="hidden" onChange={handleFileChange} />
-      </div>
-
-      {/* Search dropdown */}
-      {isOpen && (
-        <div className="mt-1.5 border border-zinc-700 rounded-lg bg-zinc-900 overflow-hidden shadow-xl">
-          <div className="p-2 border-b border-zinc-800">
-            <input
-              autoFocus
-              value={query}
-              onChange={(e) => setQuery(e.target.value)}
-              placeholder="Search jingles, intros, promos…"
-              className="w-full bg-zinc-800 rounded px-2.5 py-1.5 text-sm text-white placeholder-zinc-500 focus:outline-none"
-            />
-          </div>
-          <ul className="max-h-48 overflow-y-auto divide-y divide-zinc-800/50">
-            {(searchResults?.items ?? []).length === 0 ? (
-              <li className="px-3 py-4 text-xs text-zinc-500 text-center">No results</li>
-            ) : (
-              searchResults?.items.map((item) => {
-                const label = [item.title, item.artist].filter(Boolean).join(' — ') || item.original_filename;
-                return (
-                  <li key={item.id}>
-                    <button
-                      type="button"
-                      onClick={() => { onChange(item.id); setIsOpen(false); }}
-                      className={`w-full text-left px-3 py-2 text-sm hover:bg-zinc-800 transition-colors ${
-                        item.id === value ? 'text-indigo-300 bg-indigo-500/10' : 'text-zinc-200'
-                      }`}
-                    >
-                      <span className="truncate block">{label}</span>
-                      <span className="text-xs text-zinc-500">{item.category}</span>
-                    </button>
-                  </li>
-                );
-              })
-            )}
-          </ul>
-        </div>
-      )}
-    </div>
-  );
-}
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
 

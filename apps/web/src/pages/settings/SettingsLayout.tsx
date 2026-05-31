@@ -20,7 +20,7 @@ export function SettingsLayout() {
               className={({ isActive }) =>
                 `px-4 py-3 text-sm font-medium border-b-2 transition-colors ${
                   isActive
-                    ? 'border-indigo-500 text-white'
+                    ? 'border-brand-500 text-white'
                     : 'border-transparent text-zinc-400 hover:text-zinc-200 hover:border-zinc-700'
                 }`
               }

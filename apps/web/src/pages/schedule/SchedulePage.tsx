@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye, CassetteTape, CalendarRange, HelpCircle } from 'lucide-react';
-import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@radio/shared';
+import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@soono/shared';
 import {
   fetchShows, fetchTemplateEntries,
   createTemplateEntry, updateTemplateEntry, deleteTemplateEntry,
@@ -27,7 +27,7 @@ const HOURS = Array.from({ length: 24 }, (_, i) => i);
 const DAY_NAMES = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'];
 
 const COLOR_HEX: Record<ShowColor, string> = {
-  indigo:  '#818cf8',
+  indigo: '#36c8c8',
   violet:  '#a78bfa',
   cyan:    '#22d3ee',
   emerald: '#34d399',
@@ -578,7 +578,7 @@ export function SchedulePage() {
               key={m}
               onClick={(e) => { e.stopPropagation(); setMode(m); dismiss(); }}
               className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
-                mode === m ? 'bg-indigo-600 text-white' : 'text-zinc-400 hover:text-zinc-200 bg-zinc-900'
+                mode === m ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200 bg-zinc-900'
               }`}
             >
               {m}
@@ -603,7 +603,7 @@ export function SchedulePage() {
             onClick={(e) => { e.stopPropagation(); setShowApplyPanel((v) => !v); setApplyResult(null); }}
             className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded-lg transition-colors ${
               showApplyPanel
-                ? 'bg-indigo-600 text-white border-indigo-600'
+                ? 'bg-zinc-700 text-white border-zinc-600'
                 : 'text-zinc-400 hover:text-zinc-200 border-zinc-700'
             }`}
           >
@@ -677,7 +677,7 @@ export function SchedulePage() {
                 onClick={() => { setApplyDays(d); setApplyResult(null); }}
                 className={`px-2.5 py-1 text-xs rounded-md border transition-colors ${
                   applyDays === d
-                    ? 'bg-indigo-600 text-white border-indigo-600'
+                    ? 'bg-zinc-700 text-white border-zinc-600'
                     : 'text-zinc-400 border-zinc-700 hover:border-zinc-500 hover:text-zinc-200'
                 }`}
               >
@@ -701,7 +701,7 @@ export function SchedulePage() {
               type="checkbox"
               checked={overrideCustom}
               onChange={(e) => { setOverrideCustom(e.target.checked); setApplyResult(null); }}
-              className="w-3.5 h-3.5 rounded accent-indigo-500"
+              className="w-3.5 h-3.5 rounded accent-brand-500"
             />
             <span className="text-xs text-zinc-400">Override custom</span>
             <div className="relative group">
@@ -715,7 +715,7 @@ export function SchedulePage() {
           <button
             onClick={() => { setApplyResult(null); applyTemplateMutation.mutate(overrideCustom ? 'override' : 'fill'); }}
             disabled={applyTemplateMutation.isPending}
-            className="px-3 py-1.5 text-xs font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-md transition-colors disabled:opacity-50"
+            className="px-3 py-1.5 text-xs font-medium bg-zinc-700 hover:bg-zinc-600 text-white rounded-md transition-colors disabled:opacity-50"
           >
             Apply
           </button>
@@ -739,7 +739,7 @@ export function SchedulePage() {
       {/* ── Grid wrapper ── */}
       {/* No overflow-hidden here — it would break sticky positioning on the header */}
       {mode !== 'intervals' && <div className={`rounded-xl border-4 flex flex-col ${
-        mode === 'template' ? 'border-indigo-500/50' : 'border-cyan-500/40'
+        mode === 'template' ? 'border-brand-500/50' : 'border-cyan-500/40'
       }`}>
 
         {/* Day headers — sticky so they stay visible when scrolling through 24h */}
@@ -769,7 +769,7 @@ export function SchedulePage() {
                 ) : (
                   <div className="flex items-baseline justify-center gap-1.5">
                     <span className="text-[15px] font-semibold text-zinc-400">{DAY_NAMES[i]}</span>
-                    <span className={`text-[15px] font-semibold ${today ? 'text-indigo-400' : 'text-zinc-100'}`}>{day.getDate()}</span>
+                    <span className={`text-[15px] font-semibold ${today ? 'text-brand-400' : 'text-zinc-100'}`}>{day.getDate()}</span>
                   </div>
                 )}
               </div>
@@ -1020,7 +1020,7 @@ function DayColumn({
   return (
     <div
       ref={containerRef}
-      className={`relative cursor-cell ${isToday ? 'bg-indigo-950/10' : ''}`}
+      className={`relative cursor-cell ${isToday ? 'bg-brand-950/10' : ''}`}
       style={{ height: TOTAL_HEIGHT }}
       onClick={handleClick}
     >
@@ -1137,7 +1137,7 @@ function CalendarDayColumn({
   return (
     <div
       ref={containerRef}
-      className={`relative cursor-cell ${isToday ? 'bg-indigo-950/10' : ''}`}
+      className={`relative cursor-cell ${isToday ? 'bg-brand-950/10' : ''}`}
       style={{ height: TOTAL_HEIGHT }}
       onClick={handleClick}
     >
@@ -1672,7 +1672,7 @@ function SlotPicker({
               {clock.name}
             </span>
             {clock.assigned_shows.length > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-900/40 text-indigo-300 flex-shrink-0 truncate max-w-[100px]">
+              <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand-900/40 text-brand-300 flex-shrink-0 truncate max-w-[100px]">
                 {clock.assigned_shows[0].name}{clock.assigned_shows.length > 1 ? ` +${clock.assigned_shows.length - 1}` : ''}
               </span>
             )}
@@ -1755,7 +1755,7 @@ function NewSlotPopover({
         <div className="flex-1">
           <label className="text-[11px] text-zinc-500 block mb-1">Start</label>
           <input type="time" value={timeStart} onChange={(e) => setTimeStart(e.target.value)}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-indigo-500" />
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-brand-500" />
         </div>
         <div className="flex-1">
           <label className="text-[11px] text-zinc-500 block mb-1">
@@ -1764,7 +1764,7 @@ function NewSlotPopover({
           {computedEnd
             ? <div className="h-[34px] flex items-center px-2 text-sm font-mono text-zinc-400 bg-zinc-800/50 border border-zinc-700/50 rounded-md">{computedEnd}</div>
             : <input type="time" value={timeEnd} onChange={(e) => setTimeEnd(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-indigo-500" />
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-brand-500" />
           }
         </div>
       </div>
@@ -1786,7 +1786,7 @@ function NewSlotPopover({
         <button
           onClick={() => onSave(selectedShowId, selectedClockId, timeStart, effectiveEnd)}
           disabled={isPending || !timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
-          className="w-full py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
+          className="w-full py-1.5 text-sm font-medium bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors disabled:opacity-40"
         >
           {isPending ? 'Scheduling…' : 'Schedule'}
         </button>
@@ -1883,7 +1883,7 @@ function EditSlotPopover({
             <button
               onClick={() => navigate(`/shows/${show.id}`)}
               title="Edit show"
-              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+              className="p-1.5 text-zinc-500 hover:text-brand-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>
@@ -1892,7 +1892,7 @@ function EditSlotPopover({
             <button
               onClick={() => navigate(`/clocks/${clock.id}`)}
               title="Edit clock"
-              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+              className="p-1.5 text-zinc-500 hover:text-brand-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>
@@ -1980,7 +1980,7 @@ function CalNewSlotPopover({
         <div className="flex-1">
           <label className="text-[11px] text-zinc-500 block mb-1">Start</label>
           <input type="time" value={timeStart} onChange={(e) => setTimeStart(e.target.value)}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-indigo-500" />
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-brand-500" />
         </div>
         <div className="flex-1">
           <label className="text-[11px] text-zinc-500 block mb-1">
@@ -1989,7 +1989,7 @@ function CalNewSlotPopover({
           {(computedEnd || templateEnd)
             ? <div className="h-[34px] flex items-center px-2 text-sm font-mono text-zinc-400 bg-zinc-800/50 border border-zinc-700/50 rounded-md">{effectiveEnd}</div>
             : <input type="time" value={timeEnd} onChange={(e) => setTimeEnd(e.target.value)}
-                className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-indigo-500" />
+                className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2 py-1.5 text-sm text-white font-mono focus:outline-none focus:border-brand-500" />
           }
         </div>
       </div>
@@ -2011,7 +2011,7 @@ function CalNewSlotPopover({
         <button
           onClick={() => onSave(date, selectedShowId, selectedClockId, timeStart, effectiveEnd, isOverride)}
           disabled={isPending || !timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
-          className="w-full py-1.5 text-sm font-medium bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg transition-colors disabled:opacity-40"
+          className="w-full py-1.5 text-sm font-medium bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors disabled:opacity-40"
         >
           {isPending ? 'Scheduling…' : isOverride ? 'Override for this day' : 'Schedule'}
         </button>
@@ -2126,7 +2126,7 @@ function CalEditSlotPopover({
             placeholder="Search playlists…"
             value={playlistSearch}
             onChange={(e) => setPlaylistSearch(e.target.value)}
-            className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-indigo-500"
+            className="w-full bg-zinc-800 border border-zinc-700 rounded-md px-2.5 py-1.5 text-xs text-zinc-200 placeholder:text-zinc-500 focus:outline-none focus:border-brand-500"
           />
         </div>
         <div className="max-h-52 overflow-y-auto">
@@ -2203,7 +2203,7 @@ function CalEditSlotPopover({
             <button
               onClick={() => navigate(`/shows/${show.id}`)}
               title="Edit show"
-              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+              className="p-1.5 text-zinc-500 hover:text-brand-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>
@@ -2212,7 +2212,7 @@ function CalEditSlotPopover({
             <button
               onClick={() => navigate(`/clocks/${clock.id}`)}
               title="Edit clock"
-              className="p-1.5 text-zinc-500 hover:text-indigo-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
+              className="p-1.5 text-zinc-500 hover:text-brand-400 border border-zinc-700 hover:border-zinc-600 rounded-lg transition-colors"
             >
               <Pencil className="w-3.5 h-3.5" />
             </button>
@@ -2287,7 +2287,7 @@ function CalEditSlotPopover({
                 ) : (
                   <button
                     onClick={() => { setPickingContent(type); setPlaylistSearch(''); }}
-                    className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors"
+                    className="text-xs text-brand-400 hover:text-brand-300 transition-colors"
                   >
                     + Assign playlist
                   </button>
@@ -3001,7 +3001,7 @@ function IntervalCreatePopover({ startMin, endMin, x, y, onClose, onSave }: {
             value={name}
             onChange={(e) => setName(e.target.value)}
             onKeyDown={(e) => { if (e.key === 'Enter' && name.trim()) onSave(name.trim(), color); }}
-            className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
             placeholder="Prime Time"
           />
         </div>
@@ -3023,7 +3023,7 @@ function IntervalCreatePopover({ startMin, endMin, x, y, onClose, onSave }: {
           <button
             onClick={() => { if (name.trim()) onSave(name.trim(), color); }}
             disabled={!name.trim()}
-            className="flex-1 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg disabled:opacity-40 transition-colors"
+            className="flex-1 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-500 rounded-lg disabled:opacity-40 transition-colors"
           >
             Create
           </button>
@@ -3066,7 +3066,7 @@ function IntervalEditPopover({ interval, x, y, onClose, onSave, onDelete }: {
             type="text"
             value={name}
             onChange={(e) => setName(e.target.value)}
-            className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-2.5 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
           />
         </div>
         <div className="grid grid-cols-2 gap-2">
@@ -3076,7 +3076,7 @@ function IntervalEditPopover({ interval, x, y, onClose, onSave, onDelete }: {
               type="time"
               value={startTime}
               onChange={(e) => setStartTime(e.target.value)}
-              className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+              className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
             />
           </div>
           <div>
@@ -3085,7 +3085,7 @@ function IntervalEditPopover({ interval, x, y, onClose, onSave, onDelete }: {
               type="time"
               value={endTime}
               onChange={(e) => setEndTime(e.target.value)}
-              className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+              className="w-full px-2 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
             />
           </div>
         </div>
@@ -3110,7 +3110,7 @@ function IntervalEditPopover({ interval, x, y, onClose, onSave, onDelete }: {
           <button
             onClick={() => { if (name.trim()) onSave({ name: name.trim(), color, default_start_time: startTime, default_end_time: endTime }); }}
             disabled={!name.trim()}
-            className="flex-1 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-500 rounded-lg disabled:opacity-40 transition-colors"
+            className="flex-1 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-500 rounded-lg disabled:opacity-40 transition-colors"
           >
             Save
           </button>

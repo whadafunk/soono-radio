@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader, Plus, X, Search, Music, Check } from 'lucide-react';
-import { CampaignMediaWithMedia } from '@radio/shared';
+import { CampaignMediaWithMedia } from '@soono/shared';
 import {
   fetchCampaignMedia,
   addCampaignMedia,
@@ -32,7 +32,7 @@ function SpotSweepPills({
   onChange: (spot: boolean, sweep: boolean) => void;
   disabled: boolean;
 }) {
-  const active = 'bg-indigo-600/20 border-indigo-600 text-indigo-200';
+  const active = 'bg-brand-600/20 border-brand-600 text-brand-200';
   const inactive = 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:text-zinc-200';
 
   function toggle(kind: 'spot' | 'sweep') {
@@ -214,7 +214,7 @@ function LibraryPickerModal({
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors disabled:opacity-50 ${
                   isAttached
-                    ? 'bg-indigo-600/10 hover:bg-indigo-600/20'
+                    ? 'bg-brand-600/10 hover:bg-brand-600/20'
                     : tooLong
                     ? 'opacity-50 cursor-not-allowed'
                     : 'hover:bg-zinc-800/60'
@@ -233,7 +233,7 @@ function LibraryPickerModal({
                 <span className="text-xs text-zinc-500 font-mono flex-shrink-0 w-10 text-right">
                   {formatDuration(mediaItem.duration_seconds)}
                 </span>
-                <span className={`flex items-center gap-1 text-xs flex-shrink-0 w-20 justify-end ${isAttached ? 'text-indigo-400' : tooLong ? 'text-amber-500' : 'text-zinc-600'}`}>
+                <span className={`flex items-center gap-1 text-xs flex-shrink-0 w-20 justify-end ${isAttached ? 'text-brand-400' : tooLong ? 'text-amber-500' : 'text-zinc-600'}`}>
                   {isAttached ? (
                     <><Check className="w-3.5 h-3.5" /> Added</>
                   ) : tooLong ? (

@@ -98,7 +98,7 @@ export function RawScriptEditor({
           <textarea
             value={content}
             onChange={(e) => setContent(e.target.value)}
-            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-white font-mono text-sm resize focus:outline-none focus:border-indigo-500 overflow-auto min-h-0"
+            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg p-3 text-white font-mono text-sm resize focus:outline-none focus:border-brand-500 overflow-auto min-h-0"
             disabled={loading}
             spellCheck="false"
           />
@@ -112,7 +112,7 @@ export function RawScriptEditor({
           <button
             onClick={handleSave}
             disabled={loading}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading && <Loader className="w-4 h-4 animate-spin" />}
             Save & Apply

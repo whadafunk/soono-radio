@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Loader, Check, AlertCircle, Eye, EyeOff, ExternalLink } from 'lucide-react';
-import { IntegrationsConfig, IntegrationsConfigSchema } from '@radio/shared';
+import { IntegrationsConfig, IntegrationsConfigSchema } from '@soono/shared';
 import { fetchIntegrationsConfig, updateIntegrationsConfig } from '../../api';
 
 function ThresholdSlider({
@@ -20,7 +20,7 @@ function ThresholdSlider({
     <div>
       <div className="flex items-center justify-between mb-2">
         <label className="text-sm font-medium text-zinc-300">{label}</label>
-        <span className="text-sm font-mono text-indigo-300">{pct}%</span>
+        <span className="text-sm font-mono text-brand-300">{pct}%</span>
       </div>
       <input
         type="range"
@@ -29,7 +29,7 @@ function ThresholdSlider({
         step={5}
         value={pct}
         onChange={(e) => onChange(parseInt(e.target.value, 10) / 100)}
-        className="w-full accent-indigo-500"
+        className="w-full accent-brand-500"
       />
       <p className="mt-1.5 text-xs text-zinc-500">{hint}</p>
     </div>
@@ -79,7 +79,7 @@ export function IntegrationsSettings() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+        <Loader className="w-8 h-8 animate-spin text-brand-500" />
       </div>
     );
   }
@@ -128,7 +128,7 @@ export function IntegrationsSettings() {
               href="https://acoustid.biz/new-application"
               target="_blank"
               rel="noopener noreferrer"
-              className="flex items-center gap-1 text-xs text-indigo-400 hover:text-indigo-300 transition-colors flex-shrink-0 mt-1"
+              className="flex items-center gap-1 text-xs text-brand-400 hover:text-brand-300 transition-colors flex-shrink-0 mt-1"
             >
               Get a free key
               <ExternalLink className="w-3 h-3" />
@@ -143,7 +143,7 @@ export function IntegrationsSettings() {
                 value={currentKey}
                 onChange={(e) => setDraft((d) => ({ ...(d ?? config!), acoustid_api_key: e.target.value }))}
                 placeholder="Paste your AcoustID client key…"
-                className="w-full pr-10 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-indigo-500 font-mono text-sm"
+                className="w-full pr-10 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-brand-500 font-mono text-sm"
               />
               <button
                 type="button"
@@ -180,7 +180,7 @@ export function IntegrationsSettings() {
           <button
             type="submit"
             disabled={mutation.isPending}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
           >
             {mutation.isPending ? <Loader className="w-4 h-4 animate-spin" /> : <Check className="w-4 h-4" />}
             Save

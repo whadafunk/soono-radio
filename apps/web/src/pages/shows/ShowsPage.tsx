@@ -8,7 +8,7 @@ import {
   ShowCreate, ShowCreateSchema,
   ShowColor, SHOW_COLORS,
   TemplateEntry,
-} from '@radio/shared';
+} from '@soono/shared';
 import { fetchShows, createShow, deleteShow, fetchTemplateEntries, fetchClocks } from '../../api';
 import { BTN_PRIMARY, BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, CARD, MODAL_OVERLAY, MODAL_BOX, INPUT, LABEL } from '../../ui';
 import { SaveStatus } from '../../components/SaveStatus';
@@ -16,7 +16,7 @@ import { SaveStatus } from '../../components/SaveStatus';
 // ─── Constants ────────────────────────────────────────────────────────────────
 
 const COLOR_META: Record<ShowColor, { dot: string; label: string }> = {
-  indigo:  { dot: 'bg-indigo-500',  label: 'Indigo'  },
+  indigo: { dot: 'bg-brand-500', label: 'Teal' },
   violet:  { dot: 'bg-violet-500',  label: 'Violet'  },
   cyan:    { dot: 'bg-cyan-500',    label: 'Cyan'    },
   emerald: { dot: 'bg-emerald-500', label: 'Emerald' },
@@ -179,7 +179,7 @@ export function ShowsPage() {
       >
         <span className="flex items-center gap-1">
           {children}
-          <Icon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-indigo-400' : 'text-zinc-400'}`} />
+          <Icon className={`w-4 h-4 flex-shrink-0 ${active ? 'text-brand-400' : 'text-zinc-400'}`} />
         </span>
       </th>
     );
@@ -229,7 +229,7 @@ export function ShowsPage() {
                     type="checkbox"
                     checked={allSelected}
                     onChange={toggleAll}
-                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                   />
                 </th>
                 <SortTh col="name">Name</SortTh>
@@ -247,7 +247,7 @@ export function ShowsPage() {
                   <tr
                     key={show.id}
                     className={`transition-colors cursor-pointer ${
-                      isSelected ? 'bg-indigo-600/10' : 'hover:bg-zinc-800/40'
+                      isSelected ? 'bg-brand-600/10' : 'hover:bg-zinc-800/40'
                     }`}
                     onClick={() => navigate(`/shows/${show.id}`)}
                   >
@@ -257,7 +257,7 @@ export function ShowsPage() {
                         checked={isSelected}
                         onChange={() => {}}
                         onClick={(e) => toggleSelect(show.id, e)}
-                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer"
+                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer"
                       />
                     </td>
                     <td className="px-4 py-3">

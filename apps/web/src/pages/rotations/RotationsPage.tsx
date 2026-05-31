@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Plus, Check, X, Trash2, Music, Megaphone, ChevronRight } from 'lucide-react';
-import { Rotation, RotationType, RotationKind, SongPosition, ROTATION_TYPES, ROTATION_KINDS, SONG_POSITIONS } from '@radio/shared';
+import { Rotation, RotationType, RotationKind, SongPosition, ROTATION_TYPES, ROTATION_KINDS, SONG_POSITIONS } from '@soono/shared';
 import { fetchRotations, createRotation, updateRotation, deleteRotation, fetchPlaylists } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { SaveStatus } from '../../components/SaveStatus';
@@ -21,7 +21,7 @@ const SONG_POSITION_LABELS: Record<SongPosition, string> = {
 const TYPE_META: Record<RotationType, { label: string; short: string; bg: string; border: string; text: string; desc: string }> = {
   random_separation: {
     label: 'Random Separation', short: 'Random Sep.',
-    bg: 'bg-indigo-500/15', border: 'border-indigo-500/40', text: 'text-indigo-300',
+    bg: 'bg-brand-500/15', border: 'border-brand-500/40', text: 'text-brand-300',
     desc: 'Picks tracks at random while enforcing a minimum gap before a track or artist can repeat.',
   },
   least_recently_played: {
@@ -332,7 +332,7 @@ export function RotationsPage() {
                     key={r.id}
                     onClick={() => selectRotation(r)}
                     className={`group w-full text-left px-4 py-3 border-b border-zinc-800/60 transition-colors ${
-                      isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'
+                      isSelected ? 'bg-brand-600/20 border-l-2 border-l-brand-500' : 'hover:bg-zinc-800/50'
                     }`}
                   >
                     <div className="flex items-center gap-2">
@@ -348,7 +348,7 @@ export function RotationsPage() {
                             return next;
                           });
                         }}
-                        className="w-3.5 h-3.5 rounded border-zinc-600 bg-zinc-800 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0 cursor-pointer flex-shrink-0"
+                        className="w-3.5 h-3.5 rounded border-zinc-600 bg-zinc-800 text-brand-600 focus:ring-brand-500 focus:ring-offset-0 cursor-pointer flex-shrink-0"
                       />
                       <KindIcon className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
                       <span className="text-sm font-medium text-white truncate flex-1">{r.name}</span>
@@ -419,7 +419,7 @@ export function RotationsPage() {
                 <input
                   value={draft.name}
                   onChange={(e) => updateDraft((d) => ({ ...d, name: e.target.value }))}
-                  className={`w-full px-3 py-2 bg-zinc-800 border rounded-lg text-sm text-white focus:outline-none ${nameExists(draft.name, draft.id) ? 'border-red-500 focus:border-red-500' : 'border-zinc-700 focus:border-indigo-500'}`}
+                  className={`w-full px-3 py-2 bg-zinc-800 border rounded-lg text-sm text-white focus:outline-none ${nameExists(draft.name, draft.id) ? 'border-red-500 focus:border-red-500' : 'border-zinc-700 focus:border-brand-500'}`}
                 />
                 {nameExists(draft.name, draft.id) && (
                   <p className="mt-1.5 text-xs text-red-400">A rotation with this name already exists.</p>
@@ -508,7 +508,7 @@ export function RotationsPage() {
                               v === null ? null : (d.hot_play_every_n_tracks ?? 3),
                           }));
                         }}
-                        className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 focus:outline-none focus:border-indigo-500"
+                        className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 focus:outline-none focus:border-brand-500"
                       >
                         <option value="">None</option>
                         {musicPlaylists.map((p) => (
@@ -530,7 +530,7 @@ export function RotationsPage() {
                               hot_play_every_n_tracks: Number.isFinite(n) && n >= 1 ? n : null,
                             }));
                           }}
-                          className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 text-center focus:outline-none focus:border-indigo-500"
+                          className="w-16 bg-zinc-800 border border-zinc-700 rounded px-2 py-1 text-sm text-zinc-200 text-center focus:outline-none focus:border-brand-500"
                         />
                         <span className="text-xs text-zinc-500">tracks</span>
                       </div>
@@ -557,7 +557,7 @@ export function RotationsPage() {
                       onChange={(e) =>
                         updateDraft((d) => ({ ...d, heavy_rotation_enabled: e.target.checked }))
                       }
-                      className="accent-indigo-500"
+                      className="accent-brand-500"
                     />
                     <span>Prioritize active music campaigns by pacing</span>
                   </label>
@@ -589,7 +589,7 @@ export function RotationsPage() {
                   onClick={() => setNewKind(k)}
                   className={`flex-1 flex items-center justify-center gap-1.5 px-3 py-2 rounded-lg text-sm border transition-colors ${
                     newKind === k
-                      ? 'bg-indigo-600/30 text-indigo-300 border-indigo-500/50'
+                      ? 'bg-brand-600/30 text-brand-300 border-brand-500/50'
                       : 'bg-zinc-800 text-zinc-400 border-zinc-700 hover:text-zinc-200'
                   }`}
                 >
@@ -662,7 +662,7 @@ function ParamsForm({
                 max={480}
                 value={(params.separation_minutes as number) ?? 60}
                 onChange={(e) => onChange('separation_minutes', Math.max(1, parseInt(e.target.value, 10) || 1))}
-                className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-brand-500"
               />
               <span className="text-xs text-zinc-400">min</span>
             </div>
@@ -679,7 +679,7 @@ function ParamsForm({
                 max={240}
                 value={(params.artist_separation_minutes as number) ?? 0}
                 onChange={(e) => onChange('artist_separation_minutes', Math.max(0, parseInt(e.target.value, 10) || 0))}
-                className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-brand-500"
               />
               <span className="text-xs text-zinc-400">min (0 = off)</span>
             </div>
@@ -711,7 +711,7 @@ function ParamsForm({
                 const v = parseInt(e.target.value, 10);
                 onChange('pool_size', isNaN(v) ? undefined : Math.max(1, v));
               }}
-              className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+              className="w-20 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-600"
             />
             <span className="text-xs text-zinc-400">tracks (blank = all)</span>
           </div>

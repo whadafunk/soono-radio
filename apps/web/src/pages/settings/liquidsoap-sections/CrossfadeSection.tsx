@@ -1,5 +1,5 @@
 import { UseFormRegister, FieldErrors } from 'react-hook-form';
-import { LiquidsoapConfig, CROSSFADE_TYPES } from '@radio/shared';
+import { LiquidsoapConfig, CROSSFADE_TYPES } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
@@ -22,7 +22,7 @@ export function CrossfadeSection({ register, errors }: Props) {
               type="number"
               step="0.1"
               {...register('crossfade.duration_seconds', { valueAsNumber: true })}
-              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             />
             {errors.crossfade?.duration_seconds && (
               <p className="text-red-400 text-xs mt-1">{errors.crossfade.duration_seconds.message}</p>
@@ -35,7 +35,7 @@ export function CrossfadeSection({ register, errors }: Props) {
             </label>
             <select
               {...register('crossfade.type')}
-              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             >
               {CROSSFADE_TYPES.map((t) => (
                 <option key={t} value={t}>

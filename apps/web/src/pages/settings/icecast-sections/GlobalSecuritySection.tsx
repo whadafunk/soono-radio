@@ -1,5 +1,5 @@
 import { Control, UseFormRegister, Controller } from 'react-hook-form';
-import { IcecastConfig } from '@radio/shared';
+import { IcecastConfig } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { PasswordInput } from '../../../components/PasswordInput';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
@@ -39,7 +39,7 @@ export function GlobalSecuritySection({ control, register, certsData }: Props) {
             </label>
             <input
               {...register('authentication.admin_user')}
-              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             />
           </div>
           <div>
@@ -74,7 +74,7 @@ export function GlobalSecuritySection({ control, register, certsData }: Props) {
                     const name = e.target.value;
                     field.onChange(name ? `/etc/icecast2/certs/${name}` : null);
                   }}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 >
                   <option value="">— None (SSL sockets will fail) —</option>
                   {certsData?.certificates.map((cert) => (

@@ -1,6 +1,6 @@
 import { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight, X, SlidersHorizontal } from 'lucide-react';
-import type { FacetsResponse } from '@radio/shared';
+import type { FacetsResponse } from '@soono/shared';
 
 export interface FacetFilters {
   genres: string[];
@@ -88,7 +88,7 @@ function Section({
         <span className="flex items-center gap-1.5">
           {title}
           {activeCount != null && activeCount > 0 && (
-            <span className="bg-indigo-600 text-white rounded-full px-1.5 py-0.5 text-[10px] leading-none font-bold">
+            <span className="bg-zinc-600 text-zinc-200 rounded-full px-1.5 py-0.5 text-[10px] leading-none font-bold">
               {activeCount}
             </span>
           )}
@@ -118,7 +118,7 @@ function CheckItem({
     >
       <span
         className={`w-3.5 h-3.5 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
-          checked ? 'bg-indigo-600 border-indigo-600' : 'border-zinc-600'
+          checked ? 'bg-brand-600 border-brand-600' : 'border-zinc-600'
         }`}
       >
         {checked && <span className="block w-1.5 h-1.5 bg-white rounded-sm" />}
@@ -198,7 +198,7 @@ export function FacetDrawer({
                 value={artistSearch}
                 onChange={(e) => setArtistSearch(e.target.value)}
                 placeholder="Search artists…"
-                className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+                className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-brand-500"
               />
             </div>
             {visibleArtists.map((a) => (
@@ -266,7 +266,7 @@ export function FacetDrawer({
                   type="radio"
                   checked={filters.identified === v}
                   onChange={() => onChange({ ...filters, identified: v })}
-                  className="w-3.5 h-3.5 text-indigo-600 border-zinc-600 bg-zinc-800 focus:ring-indigo-500"
+                  className="w-3.5 h-3.5 text-brand-600 border-zinc-600 bg-zinc-800 focus:ring-brand-500"
                 />
                 <span className="text-sm text-zinc-300">
                   {v === 'all' ? 'All tracks' : v === 'yes' ? 'Identified' : 'Unidentified'}
@@ -301,7 +301,7 @@ export function FacetDrawer({
                   value={filters.bpm_min}
                   onChange={(e) => onChange({ ...filters, bpm_min: e.target.value })}
                   placeholder="Min"
-                  className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+                  className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-brand-500"
                 />
                 <span className="text-zinc-600 text-xs">–</span>
                 <input
@@ -309,7 +309,7 @@ export function FacetDrawer({
                   value={filters.bpm_max}
                   onChange={(e) => onChange({ ...filters, bpm_max: e.target.value })}
                   placeholder="Max"
-                  className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-indigo-500"
+                  className="w-full px-2 py-1 text-xs bg-zinc-800 border border-zinc-700 rounded text-zinc-200 placeholder-zinc-600 focus:outline-none focus:border-brand-500"
                 />
               </div>
             </div>

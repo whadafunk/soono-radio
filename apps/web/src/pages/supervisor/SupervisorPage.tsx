@@ -16,7 +16,15 @@ import {
   PauseCircle,
   PlayCircle,
 } from 'lucide-react';
-import type { SupervisorV2PlanItem, SupervisorV2StopSetEstimate } from '@radio/shared';
+import { useState } from 'react';
+import type {
+  SupervisorV2PlanItem,
+  SupervisorV2StopSetEstimate,
+  SupervisorV2CurrentSegment,
+  SupervisorV2NextPlan,
+  SupervisorV2RecentPlay,
+  SupervisorV2SegmentConfig,
+} from '@soono/shared';
 import {
   fetchSupervisorV2Status,
   postSupervisorSkip,
@@ -53,7 +61,7 @@ const CONTENT_TYPE_META: Record<
   string,
   { label: string; Icon: React.ElementType; color: string; barColor: string }
 > = {
-  music:       { label: 'Music',      Icon: Music2,    color: 'text-indigo-400',  barColor: 'bg-indigo-500'  },
+  music:       { label: 'Music',      Icon: Music2,    color: 'text-brand-400',  barColor: 'bg-brand-500'  },
   jingle:      { label: 'Jingle',     Icon: Volume2,   color: 'text-cyan-400',    barColor: 'bg-cyan-500'    },
   branding:    { label: 'Branding',   Icon: Radio,     color: 'text-violet-400',  barColor: 'bg-violet-500'  },
   station_id:  { label: 'Station ID', Icon: Radio,     color: 'text-violet-400',  barColor: 'bg-violet-500'  },
@@ -85,7 +93,7 @@ function ContentTypeCell({ type }: { type: string }) {
 function StatusBadge({ status }: { status: string }) {
   const cfg: Record<string, { cls: string; label: string }> = {
     pending:            { cls: 'bg-zinc-800 text-zinc-400',              label: 'pending'    },
-    playing:            { cls: 'bg-indigo-600/60 text-indigo-200',       label: 'playing'    },
+    playing:            { cls: 'bg-brand-600/60 text-brand-200',       label: 'playing'    },
     played:             { cls: 'bg-zinc-800/60 text-zinc-500',           label: 'played'     },
     dropped:            { cls: 'bg-red-900/40 text-red-400',             label: 'dropped'    },
     skipped:            { cls: 'bg-zinc-800/60 text-zinc-500',           label: 'skipped'    },
@@ -523,6 +531,188 @@ function CampaignPacingPanel({ estimates }: { estimates: SupervisorV2StopSetEsti
   );
 }
 
+// ─── Now Playing ─────────────────────────────────────────────────────────────
+
+function NowPlayingPanel({ planItems }: { planItems: SupervisorV2PlanItem[] }) {
+  const playing = planItems.find((i) => i.status === 'playing');
+  if (!playing) return null;
+  const meta = CONTENT_TYPE_META[playing.content_type] ?? { label: playing.content_type, Icon: Circle, color: 'text-zinc-400' };
+  const { Icon, color } = meta;
+  return (
+    <div className="flex items-center gap-3 px-4 py-3 bg-zinc-800/50 border border-zinc-700 rounded-lg">
+      <Icon className={`w-5 h-5 flex-shrink-0 ${color}`} />
+      <div className="min-w-0">
+        <p className="text-white font-semibold truncate">
+          {playing.media_title ?? <span className="text-zinc-400 italic">untitled</span>}
+        </p>
+        <p className="text-xs text-zinc-400 truncate">{meta.label} · {fmtMmSs(playing.planned_duration_seconds)}</p>
+      </div>
+    </div>
+  );
+}
+
+// ─── Current Segment Header ───────────────────────────────────────────────────
+
+function CurrentSegmentLabel({ segment, nextPlan }: {
+  segment: SupervisorV2CurrentSegment | null | undefined;
+  nextPlan: SupervisorV2NextPlan | null | undefined;
+}) {
+  if (!segment) return null;
+  const remainingMins = Math.floor(segment.remaining_seconds / 60);
+  const remainingSecs = Math.floor(segment.remaining_seconds % 60);
+  return (
+    <div className="flex items-center gap-4 text-xs text-zinc-400">
+      <span>
+        <span className="text-zinc-300 font-medium uppercase tracking-wide text-[11px]">{segment.type}</span>
+        {' · '}
+        <span className="text-zinc-300">{segment.name}</span>
+      </span>
+      <span className="text-zinc-600">·</span>
+      <span>
+        {remainingMins}m {remainingSecs.toString().padStart(2, '0')}s remaining
+      </span>
+      {nextPlan && (
+        <>
+          <span className="text-zinc-600">·</span>
+          <span>
+            Next: <span className="text-zinc-300">{nextPlan.segment_type} · {nextPlan.segment_name}</span>
+            {' '}
+            <span className={`inline-block px-1 py-0.5 rounded text-[10px] font-mono uppercase ${nextPlan.status === 'finalized' ? 'text-green-400' : 'text-amber-400'}`}>
+              {nextPlan.status}
+            </span>
+          </span>
+        </>
+      )}
+    </div>
+  );
+}
+
+// ─── Recent Plays ─────────────────────────────────────────────────────────────
+
+function RecentPlaysPanel({ plays }: { plays: SupervisorV2RecentPlay[] }) {
+  const [open, setOpen] = useState(false);
+  if (plays.length === 0) return null;
+  return (
+    <section>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 text-base font-semibold text-white mb-3 hover:text-zinc-300 transition-colors"
+      >
+        <span>Recent Plays</span>
+        <span className="text-xs font-normal text-zinc-400">{plays.length} items</span>
+        <span className="text-zinc-500 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
+          <table className="w-full text-sm">
+            <thead className="bg-zinc-950/50 border-b border-zinc-800">
+              <tr>
+                <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2 w-28">Type</th>
+                <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Title</th>
+                <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Artist</th>
+                <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2 w-20">Dur</th>
+                <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2 w-24">When</th>
+              </tr>
+            </thead>
+            <tbody>
+              {plays.map((play, i) => (
+                <tr key={i} className="border-t border-zinc-800/60">
+                  <td className="px-3 py-2">
+                    {play.content_type ? <ContentTypeCell type={play.content_type} /> : <span className="text-zinc-500 text-xs italic">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-300 truncate max-w-xs">
+                    {play.title ?? <span className="text-zinc-500 italic">untitled</span>}
+                  </td>
+                  <td className="px-3 py-2 text-zinc-400 truncate max-w-xs text-xs">
+                    {play.artist ?? <span className="text-zinc-600">—</span>}
+                  </td>
+                  <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
+                    {play.duration_seconds != null ? fmtMmSs(play.duration_seconds) : '—'}
+                  </td>
+                  <td className="px-3 py-2 text-right text-xs text-zinc-500">
+                    {fmtRelativeTime(play.started_at_ms)}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+// ─── Config Inspector ─────────────────────────────────────────────────────────
+
+function ConfigInspectorPanel({
+  segment,
+  config,
+}: {
+  segment: SupervisorV2CurrentSegment | null | undefined;
+  config: SupervisorV2SegmentConfig | null | undefined;
+}) {
+  const [open, setOpen] = useState(false);
+  if (!segment || !config) return null;
+  return (
+    <section>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 text-base font-semibold text-white mb-3 hover:text-zinc-300 transition-colors"
+      >
+        <span>Segment Configuration</span>
+        <span className="text-zinc-500 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
+        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 space-y-3 text-sm">
+          <div className="grid grid-cols-2 gap-x-6 gap-y-2">
+            <div>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide mb-0.5">Segment</p>
+              <p className="text-zinc-300">{segment.name} <span className="text-zinc-500 text-xs">({segment.type})</span></p>
+            </div>
+            <div>
+              <p className="text-xs text-zinc-500 uppercase tracking-wide mb-0.5">Duration</p>
+              <p className="text-zinc-300 font-mono">{fmtMmSs(segment.duration_seconds)}</p>
+            </div>
+            {segment.show_name && (
+              <div>
+                <p className="text-xs text-zinc-500 uppercase tracking-wide mb-0.5">Show</p>
+                <p className="text-zinc-300">{segment.show_name}</p>
+              </div>
+            )}
+          </div>
+          <div className="border-t border-zinc-800 pt-3 grid grid-cols-2 gap-x-6 gap-y-2 text-xs">
+            <div>
+              <p className="text-zinc-500 uppercase tracking-wide mb-1">Rotations</p>
+              {config.rotation_ids.length > 0
+                ? config.rotation_ids.map((id) => (
+                    <span key={id} className="inline-block mr-1 mb-1 px-1.5 py-0.5 bg-zinc-800 rounded font-mono text-zinc-300">#{id}</span>
+                  ))
+                : <span className="text-zinc-600 italic">none</span>}
+            </div>
+            <div className="space-y-1">
+              {config.jingle_playlist_id != null && (
+                <p><span className="text-zinc-500">Jingles:</span> <span className="font-mono text-zinc-300">playlist #{config.jingle_playlist_id}</span></p>
+              )}
+              {config.show_jingle_playlist_id != null && (
+                <p><span className="text-zinc-500">Show jingles:</span> <span className="font-mono text-zinc-300">playlist #{config.show_jingle_playlist_id}</span></p>
+              )}
+              {config.station_id_playlist_id != null && (
+                <p><span className="text-zinc-500">Station IDs:</span> <span className="font-mono text-zinc-300">playlist #{config.station_id_playlist_id}</span></p>
+              )}
+              {config.start_clip_playlist_id != null && (
+                <p><span className="text-zinc-500">Start clip:</span> <span className="font-mono text-zinc-300">playlist #{config.start_clip_playlist_id}</span></p>
+              )}
+              {config.end_clip_playlist_id != null && (
+                <p><span className="text-zinc-500">End clip:</span> <span className="font-mono text-zinc-300">playlist #{config.end_clip_playlist_id}</span></p>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
 const PROCESSES = [
   'music',
   'campaign',
@@ -647,6 +837,10 @@ export function SupervisorPage() {
         </div>
       )}
 
+      {/* D1: Now Playing + segment context */}
+      <NowPlayingPanel planItems={data?.plan_items ?? []} />
+      <CurrentSegmentLabel segment={data?.current_segment} nextPlan={data?.next_plan} />
+
       <SegmentTimeline
         segmentStartedAtMs={data?.segment_started_at_ms ?? null}
         segmentDurationSeconds={data?.segment_duration_seconds ?? null}
@@ -664,7 +858,13 @@ export function SupervisorPage() {
 
       <ActivePlanPanel items={data?.plan_items ?? []} />
 
+      {/* D1: Recent plays */}
+      <RecentPlaysPanel plays={data?.recent_plays ?? []} />
+
       <CampaignPacingPanel estimates={data?.stop_set_estimates ?? []} />
+
+      {/* D2: Config inspector */}
+      <ConfigInspectorPanel segment={data?.current_segment} config={data?.segment_config} />
     </div>
   );
 }

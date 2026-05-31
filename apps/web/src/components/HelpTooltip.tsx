@@ -65,7 +65,7 @@ export function HelpTooltip({ text }: HelpTooltipProps) {
         onMouseEnter={handleShow}
         onMouseLeave={() => setShowTooltip(false)}
         onClick={() => setShowTooltip(!showTooltip)}
-        className="ml-1 inline-flex items-center justify-center w-4 h-4 text-zinc-400 hover:text-indigo-400 transition-colors"
+        className="ml-1 inline-flex items-center justify-center w-4 h-4 text-zinc-400 hover:text-brand-400 transition-colors"
       >
         <HelpCircle className="w-4 h-4" />
       </button>

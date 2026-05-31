@@ -1,6 +1,6 @@
 import { Control, UseFormRegister, Controller, FieldErrors, useWatch } from 'react-hook-form';
 import { useQuery } from '@tanstack/react-query';
-import { LiquidsoapConfig } from '@radio/shared';
+import { LiquidsoapConfig } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { PasswordInput } from '../../../components/PasswordInput';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
@@ -27,7 +27,7 @@ export function HarborSection({ control, register, errors }: Props) {
           <input
             type="checkbox"
             {...register('harbor.enabled')}
-            className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+            className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
           />
           <span className="text-sm font-medium text-zinc-200">Accept live broadcasts</span>
           <HelpTooltip text="When enabled, broadcasters (e.g., BUTT) can connect directly to the Mix Engine, which takes over the stream and crossfades back to the queue when they disconnect." />
@@ -42,7 +42,7 @@ export function HarborSection({ control, register, errors }: Props) {
             <input
               type="number"
               {...register('harbor.port', { valueAsNumber: true })}
-              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             />
           </div>
           <div>
@@ -52,7 +52,7 @@ export function HarborSection({ control, register, errors }: Props) {
             </label>
             <input
               {...register('harbor.mount_name')}
-              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               placeholder="live"
             />
           </div>
@@ -80,7 +80,7 @@ export function HarborSection({ control, register, errors }: Props) {
             <input
               type="checkbox"
               {...register('harbor.tls.enabled')}
-              className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+              className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
             />
             <span className="text-sm font-medium text-zinc-200">Encrypt harbor with TLS</span>
             <HelpTooltip text="When the DJ broadcasts from over the internet, encrypt the audio in transit. Needs a certificate uploaded to the Certificates page." />
@@ -105,7 +105,7 @@ export function HarborSection({ control, register, errors }: Props) {
                           e.target.value ? `/etc/icecast2/certs/${e.target.value}` : null,
                         )
                       }
-                      className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                      className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                     >
                       <option value="">— None (TLS will fail to start) —</option>
                       {certsData?.certificates.map((cert) => (

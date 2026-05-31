@@ -34,7 +34,7 @@ export function SchedulingSettings() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+        <Loader className="w-8 h-8 animate-spin text-brand-500" />
       </div>
     );
   }
@@ -86,7 +86,7 @@ export function SchedulingSettings() {
               value={localPct}
               onChange={(e) => setLocalPct(Number(e.target.value))}
               onPointerUp={(e) => mutation.mutate({ promo_margin: Number((e.target as HTMLInputElement).value) / 100 })}
-              className="w-64 accent-indigo-500"
+              className="w-64 accent-brand-500"
             />
             <span className="text-white font-medium w-10">{localPct}%</span>
           </div>

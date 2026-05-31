@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useMutation } from '@tanstack/react-query';
 import { Play, Loader2, ArrowLeft, Music, Mic, Megaphone, Radio } from 'lucide-react';
 import { fetchSimulate } from '../../api';
-import type { SimulatedPlay } from '@radio/shared';
+import type { SimulatedPlay } from '@soono/shared';
 
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const ONE_DAY_MS = 24 * ONE_HOUR_MS;
@@ -51,7 +51,7 @@ const SEGMENT_TYPE_ICONS: Record<string, typeof Music> = {
 };
 
 const SEGMENT_TYPE_COLORS: Record<string, string> = {
-  music: 'text-indigo-300',
+  music: 'text-brand-300',
   news: 'text-amber-300',
   bulletin: 'text-amber-300',
   voice_track: 'text-emerald-300',
@@ -114,7 +114,7 @@ export function SchedulePreviewPage() {
               type="datetime-local"
               value={fromStr}
               onChange={(e) => setFromStr(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-brand-500"
             />
           </div>
           <div>
@@ -123,7 +123,7 @@ export function SchedulePreviewPage() {
               type="datetime-local"
               value={toStr}
               onChange={(e) => setToStr(e.target.value)}
-              className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-indigo-500"
+              className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-sm text-white focus:outline-none focus:border-brand-500"
             />
           </div>
           <div className="flex items-end">
@@ -131,7 +131,7 @@ export function SchedulePreviewPage() {
               type="button"
               onClick={() => sim.mutate()}
               disabled={sim.isPending}
-              className="flex items-center gap-2 px-4 py-1.5 bg-indigo-600 hover:bg-indigo-500 text-white rounded text-sm transition disabled:opacity-40"
+              className="flex items-center gap-2 px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
             >
               {sim.isPending ? (
                 <Loader2 className="w-4 h-4 animate-spin" />

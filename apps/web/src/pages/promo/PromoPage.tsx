@@ -4,7 +4,7 @@ import {
   Plus, Megaphone, Trash2, CheckCircle2, Search, X, Music,
   Loader, Check, ChevronUp, ChevronDown, AlertTriangle, PauseCircle, ChevronsUpDown,
 } from 'lucide-react';
-import { PromoWithShow, PromoCreate, PromoPatch, PromoMediaWithMedia, Show } from '@radio/shared';
+import { PromoWithShow, PromoCreate, PromoPatch, PromoMediaWithMedia, Show } from '@soono/shared';
 import {
   fetchPromos, createPromo, updatePromo, deletePromo,
   fetchPromoMedia, addPromoMedia, removePromoMedia,
@@ -122,7 +122,7 @@ function MediaPickerModal({
                 type="button"
                 disabled={isPending}
                 onClick={() => (added ? onRemove(attachmentId) : onAdd(item.id))}
-                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors disabled:opacity-50 ${added ? 'bg-indigo-600/10 hover:bg-indigo-600/20' : 'hover:bg-zinc-800/60'}`}
+                className={`w-full flex items-center gap-3 px-4 py-2.5 text-left transition-colors disabled:opacity-50 ${added ? 'bg-brand-600/10 hover:bg-brand-600/20' : 'hover:bg-zinc-800/60'}`}
               >
                 <div className="flex-1 min-w-0">
                   <p className="text-sm text-zinc-200 truncate">
@@ -131,7 +131,7 @@ function MediaPickerModal({
                   {item.artist && <p className="text-xs text-zinc-500 truncate">{item.artist}</p>}
                 </div>
                 <span className="text-xs text-zinc-500 font-mono w-10 text-right flex-shrink-0">{formatDuration(item.duration_seconds)}</span>
-                <span className={`flex items-center gap-1 text-xs w-16 justify-end flex-shrink-0 ${added ? 'text-indigo-400' : 'text-zinc-600'}`}>
+                <span className={`flex items-center gap-1 text-xs w-16 justify-end flex-shrink-0 ${added ? 'text-brand-400' : 'text-zinc-600'}`}>
                   {added ? <><Check className="w-3.5 h-3.5" /> Added</> : <><Plus className="w-3.5 h-3.5" /> Add</>}
                 </span>
               </button>
@@ -295,7 +295,7 @@ function PromoModal({
     else updateMutation.mutate(payload);
   }
 
-  const input = 'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-indigo-500 focus:border-indigo-500';
+  const input = 'w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100 placeholder-zinc-500 focus:outline-none focus:ring-1 focus:ring-brand-500 focus:border-brand-500';
   const label = 'block text-sm font-medium text-zinc-200 mb-1';
   const hint = 'mt-1 text-xs text-zinc-500';
 
@@ -349,7 +349,7 @@ function PromoModal({
                   type="checkbox"
                   checked={noAirDuringShow}
                   onChange={(e) => setNoAirDuringShow(e.target.checked)}
-                  className="mt-0.5 rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-zinc-900 cursor-pointer"
+                  className="mt-0.5 rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500 focus:ring-offset-zinc-900 cursor-pointer"
                 />
                 <div>
                   <span className="text-sm text-zinc-200 group-hover:text-white transition-colors">Do not air during the show</span>
@@ -424,7 +424,7 @@ function PromoModal({
               <button
                 type="button"
                 onClick={() => setActive((v) => !v)}
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${active ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+                className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${active ? 'bg-brand-600' : 'bg-zinc-700'}`}
               >
                 <span className={`inline-block h-3.5 w-3.5 transform rounded-full bg-white transition-transform ${active ? 'translate-x-[18px]' : 'translate-x-[2px]'}`} />
               </button>
@@ -475,7 +475,7 @@ function PromoModal({
               type="submit"
               onClick={submit}
               disabled={isPending}
-              className="px-4 py-2 text-sm bg-indigo-600 hover:bg-indigo-500 text-white rounded-lg disabled:opacity-50 transition-colors"
+              className="px-4 py-2 text-sm bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg disabled:opacity-50 transition-colors"
             >
               {isPending ? 'Saving…' : isNew ? 'Create' : 'Save'}
             </button>
@@ -506,7 +506,7 @@ function SortTh({
       <span className="flex items-center gap-1">
         {label}
         {active ? (
-          sortDir === 'asc' ? <ChevronUp className="w-3 h-3 text-indigo-400" /> : <ChevronDown className="w-3 h-3 text-indigo-400" />
+          sortDir === 'asc' ? <ChevronUp className="w-3 h-3 text-brand-400" /> : <ChevronDown className="w-3 h-3 text-brand-400" />
         ) : (
           <ChevronsUpDown className="w-3 h-3 opacity-30" />
         )}
@@ -601,7 +601,7 @@ export function PromoPage() {
         </div>
         <button
           onClick={() => setSelected(null)}
-          className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 text-white text-sm font-medium rounded-lg transition-colors"
+          className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white text-sm font-medium rounded-lg transition-colors"
         >
           <Plus className="w-4 h-4" /> New Promo
         </button>
@@ -688,7 +688,7 @@ export function PromoPage() {
                     type="checkbox"
                     checked={allChecked}
                     onChange={toggleAll}
-                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-zinc-900 cursor-pointer"
+                    className="rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500 focus:ring-offset-zinc-900 cursor-pointer"
                   />
                 </th>
                 <SortTh col="name" label="Name" sortCol={sortCol} sortDir={sortDir} onSort={toggleSort} />
@@ -714,7 +714,7 @@ export function PromoPage() {
                         type="checkbox"
                         checked={checkedIds.has(p.id)}
                         onChange={() => toggleOne(p.id)}
-                        className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500 focus:ring-offset-zinc-900 cursor-pointer"
+                        className="rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500 focus:ring-offset-zinc-900 cursor-pointer"
                       />
                     </td>
                     <td className="px-4 py-3">

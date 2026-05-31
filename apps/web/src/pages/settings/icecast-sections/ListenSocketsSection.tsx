@@ -1,5 +1,5 @@
 import { Control, UseFormRegister, useFieldArray } from 'react-hook-form';
-import { IcecastConfig } from '@radio/shared';
+import { IcecastConfig } from '@soono/shared';
 import { Plus, Trash2 } from 'lucide-react';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
@@ -19,7 +19,7 @@ export function ListenSocketsSection({ control, register }: Props) {
     <button
       type="button"
       onClick={() => append({ port: 8000, bind_address: '0.0.0.0' })}
-      className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded transition-colors"
+      className="flex items-center gap-2 px-3 py-1 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded transition-colors"
     >
       <Plus className="w-4 h-4" />
       Add Socket
@@ -45,7 +45,7 @@ export function ListenSocketsSection({ control, register }: Props) {
                   <input
                     {...register(`network.listen_sockets.${idx}.port`, { valueAsNumber: true })}
                     type="number"
-                    className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                   />
                 </div>
                 <div>
@@ -55,7 +55,7 @@ export function ListenSocketsSection({ control, register }: Props) {
                   </label>
                   <select
                     {...register(`network.listen_sockets.${idx}.bind_address`)}
-                    className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                   >
                     <option value="0.0.0.0">0.0.0.0 (all interfaces)</option>
                   </select>
@@ -64,7 +64,7 @@ export function ListenSocketsSection({ control, register }: Props) {
                   <input
                     {...register(`network.listen_sockets.${idx}.ssl`)}
                     type="checkbox"
-                    className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0"
+                    className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-brand-600 focus:ring-brand-500 focus:ring-offset-0"
                   />
                   SSL/TLS (HTTPS)
                   <HelpTooltip text="Serve HTTPS on this port. Requires a certificate uploaded on the Certificates page and selected in Global Security." />
@@ -73,7 +73,7 @@ export function ListenSocketsSection({ control, register }: Props) {
                   <input
                     {...register(`network.listen_sockets.${idx}.shoutcast_compat`)}
                     type="checkbox"
-                    className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0"
+                    className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-brand-600 focus:ring-brand-500 focus:ring-offset-0"
                   />
                   SHOUTcast compatible
                   <HelpTooltip text="Marks this listen-socket so it accepts the legacy SHOUTcast source handshake." />

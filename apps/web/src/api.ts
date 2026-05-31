@@ -37,7 +37,7 @@ import {
   SupervisorV2StatusSchema,
   SupervisorV2ControlResponse,
   SupervisorV2ControlResponseSchema,
-} from '@radio/shared';
+} from '@soono/shared';
 
 const API_BASE = '/api';
 
@@ -742,7 +742,7 @@ import {
   BroadcastIntervalSlot,
   BroadcastIntervalSlotCreate,
   BroadcastIntervalSlotPatch,
-} from '@radio/shared';
+} from '@soono/shared';
 
 export type CampaignMediaAdd = CampaignMediaCreate & {
   title?: string | null;
@@ -1300,7 +1300,7 @@ import type {
   SpotBudgetOverview,
   CampaignAvailable,
   CampaignPacingDetail,
-} from '@radio/shared';
+} from '@soono/shared';
 
 export function fetchSpotBudget(
   start: string,

@@ -1,5 +1,5 @@
 import { Control, UseFormRegister, Controller, useFieldArray } from 'react-hook-form';
-import { IcecastConfig } from '@radio/shared';
+import { IcecastConfig } from '@soono/shared';
 import { Plus, Trash2 } from 'lucide-react';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { PasswordInput } from '../../../components/PasswordInput';
@@ -20,7 +20,7 @@ export function MountPointsSection({ control, register }: Props) {
     <button
       type="button"
       onClick={() => append({ name: '/new', max_listeners: -1, public: false })}
-      className="flex items-center gap-2 px-3 py-1 bg-indigo-600 hover:bg-indigo-700 text-white text-sm rounded transition-colors"
+      className="flex items-center gap-2 px-3 py-1 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded transition-colors"
     >
       <Plus className="w-4 h-4" />
       Add Mount
@@ -45,7 +45,7 @@ export function MountPointsSection({ control, register }: Props) {
                   </label>
                   <input
                     {...register(`mounts.${idx}.name`)}
-                    className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                    className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                     placeholder="/stream"
                   />
                 </div>
@@ -58,7 +58,7 @@ export function MountPointsSection({ control, register }: Props) {
                     <input
                       {...register(`mounts.${idx}.max_listeners`, { valueAsNumber: true })}
                       type="number"
-                      className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                      className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                       placeholder="-1 (unlimited)"
                     />
                   </div>
@@ -89,7 +89,7 @@ export function MountPointsSection({ control, register }: Props) {
                     </label>
                     <input
                       {...register(`mounts.${idx}.fallback_mount`)}
-                      className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                      className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                       placeholder="(optional)"
                     />
                   </div>
@@ -100,7 +100,7 @@ export function MountPointsSection({ control, register }: Props) {
                     </label>
                     <input
                       {...register(`mounts.${idx}.shoutcast_mount`)}
-                      className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                      className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                       placeholder="(optional)"
                     />
                   </div>
@@ -116,7 +116,7 @@ export function MountPointsSection({ control, register }: Props) {
                       <label className="block text-sm font-medium text-zinc-300 mb-1">Stream Name</label>
                       <input
                         {...register(`mounts.${idx}.stream_name`)}
-                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                         placeholder="My Awesome Radio"
                       />
                     </div>
@@ -125,7 +125,7 @@ export function MountPointsSection({ control, register }: Props) {
                       <textarea
                         {...register(`mounts.${idx}.stream_description`)}
                         rows={2}
-                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                        className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                         placeholder="What plays on this stream"
                       />
                     </div>
@@ -134,7 +134,7 @@ export function MountPointsSection({ control, register }: Props) {
                         <label className="block text-sm font-medium text-zinc-300 mb-1">Genre</label>
                         <input
                           {...register(`mounts.${idx}.genre`)}
-                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                           placeholder="Various"
                         />
                       </div>
@@ -142,7 +142,7 @@ export function MountPointsSection({ control, register }: Props) {
                         <label className="block text-sm font-medium text-zinc-300 mb-1">Stream URL</label>
                         <input
                           {...register(`mounts.${idx}.stream_url`)}
-                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                           placeholder="https://your-station.example.com"
                         />
                       </div>
@@ -155,7 +155,7 @@ export function MountPointsSection({ control, register }: Props) {
                         </label>
                         <select
                           {...register(`mounts.${idx}.type`)}
-                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                         >
                           <option value="">(none)</option>
                           <option value="audio/mpeg">audio/mpeg (MP3)</option>
@@ -176,7 +176,7 @@ export function MountPointsSection({ control, register }: Props) {
                           {...register(`mounts.${idx}.bitrate`, {
                             setValueAs: (v) => (v === '' || v == null ? undefined : Number(v)),
                           })}
-                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-indigo-500"
+                          className="w-full px-3 py-2 bg-zinc-700 border border-zinc-600 rounded text-white focus:outline-none focus:border-brand-500"
                         >
                           <option value="">(none)</option>
                           <option value="32">32 kbps</option>
@@ -194,7 +194,7 @@ export function MountPointsSection({ control, register }: Props) {
                       <input
                         {...register(`mounts.${idx}.public`)}
                         type="checkbox"
-                        className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-0"
+                        className="w-4 h-4 rounded bg-zinc-700 border-zinc-600 text-brand-600 focus:ring-brand-500 focus:ring-offset-0"
                       />
                       List on public Icecast directories (YP)
                       <HelpTooltip text="If enabled, this stream is announced to Icecast Yellow Pages directories like dir.xiph.org." />

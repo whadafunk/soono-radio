@@ -4,7 +4,7 @@ import {
   Loader, UploadCloud, Check, AlertCircle, X,
   Music, Bell, Sparkles, Tag, Megaphone, Waves, Mic, Trash2,
 } from 'lucide-react';
-import { MEDIA_CATEGORIES, MediaCategory, IngestJob } from '@radio/shared';
+import { MEDIA_CATEGORIES, MediaCategory, IngestJob } from '@soono/shared';
 import { fetchIngestJobs, clearIngestJobs, uploadLibraryFiles } from '../../api';
 
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
@@ -253,7 +253,7 @@ export function LibraryUpload() {
         onClick={() => fileInputRef.current?.click()}
         className={`border-2 border-dashed rounded-lg p-12 text-center cursor-pointer transition-colors ${
           dragActive
-            ? 'border-indigo-500 bg-indigo-600/10'
+            ? 'border-brand-500 bg-brand-600/10'
             : 'border-zinc-700 hover:border-zinc-600 bg-zinc-900'
         }`}
       >
@@ -305,7 +305,7 @@ export function LibraryUpload() {
               </div>
               <div className="h-1 bg-zinc-800 rounded-full overflow-hidden">
                 <div
-                  className="h-full bg-indigo-500 rounded-full transition-all duration-500"
+                  className="h-full bg-brand-500 rounded-full transition-all duration-500"
                   style={{ width: `${pct}%` }}
                 />
               </div>
@@ -324,14 +324,14 @@ export function LibraryUpload() {
                   onClick={() => setIngestTab(key)}
                   className={`flex items-center gap-2 px-4 py-3 text-sm font-medium transition-colors border-b-2 -mb-px ${
                     ingestTab === key
-                      ? 'border-indigo-500 text-indigo-300'
+                      ? 'border-brand-500 text-brand-300'
                       : 'border-transparent text-zinc-500 hover:text-zinc-300'
                   }`}
                 >
                   {label}
                   <span className={`px-1.5 py-0.5 rounded text-xs font-semibold ${
                     ingestTab === key
-                      ? key === 'failed' ? 'bg-red-900/40 text-red-300' : 'bg-indigo-900/40 text-indigo-300'
+                      ? key === 'failed' ? 'bg-red-900/40 text-red-300' : 'bg-brand-900/40 text-brand-300'
                       : 'bg-zinc-800 text-zinc-500'
                   }`}>
                     {count}
@@ -429,7 +429,7 @@ function UploadingRow({ upload, onDismiss }: { upload: ActiveUpload; onDismiss: 
         </div>
         {upload.status === 'uploading' && (
           <div className="mt-1 h-1 bg-zinc-800 rounded-full overflow-hidden">
-            <div className="h-full bg-indigo-500 transition-all" style={{ width: `${pct}%` }} />
+            <div className="h-full bg-brand-500 transition-all" style={{ width: `${pct}%` }} />
           </div>
         )}
       </div>

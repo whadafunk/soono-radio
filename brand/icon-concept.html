@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #09090b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .row { display: flex; gap: 80px; padding: 64px; align-items: center; }
+  .variant { display: flex; flex-direction: column; align-items: center; gap: 20px; }
+  .label { color: #52525b; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-family: sans-serif; }
+</style>
+</head>
+<body>
+<div class="row">
+
+  <!--
+    HAZE ARC:
+    Outer speaker arc spans ±55° from the right axis (55° → 305° in SVG).
+    Haze arc is slightly inset from those endpoints — 8° gap on each side:
+      Start: 63°  → (68.15, 85.65)   faded/transparent end
+      End:   297° → (68.15, 14.35)   opaque/defined-edge end
+
+    Single path, large-arc=1 sweep=1, going clockwise through bottom → left → top.
+    Gradient: vertical, transparent at y=85.65 → opaque at y=14.35.
+    The 8° gap at the bright end (top) reads as a visible defined gap.
+    The 8° gap at the faded end (bottom) is invisible — it fades to nothing.
+
+    Speaker arcs shifted to start from center x=50 to look properly "from center":
+    They are right-facing arcs at ±55°, anchored to origin for correct speaker shape.
+  -->
+
+  <!-- WHITE -->
+  <div class="variant">
+  <svg width="200" height="200" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="hazeW" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+        <stop offset="0%"   stop-color="white" stop-opacity="0"/>
+        <stop offset="100%" stop-color="white" stop-opacity="0.88"/>
+      </linearGradient>
+    </defs>
+
+    <!-- HAZE — single continuous arc, gradient stroke -->
+    <path d="M 50,90 A 40,40 0 1,1 68.15,14.35"
+      stroke="url(#hazeW)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+
+    <!-- SPEAKER RIPPLE ARCS — right side, ~110° (±55°), centered at origin -->
+    <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7"
+      stroke="white" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3"
+      stroke="white" stroke-width="3.5" stroke-linecap="round" opacity="0.65"/>
+    <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9"
+      stroke="white" stroke-width="5.5" stroke-linecap="round" opacity="0.4"/>
+
+    <!-- TWO HANDS -->
+    <line x1="50" y1="50" x2="32.7" y2="40" stroke="white" stroke-width="4"   stroke-linecap="round"/>
+    <line x1="50" y1="50" x2="50"   y2="18" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+
+    <!-- CENTER -->
+    <circle cx="50" cy="50" r="4"   stroke="white" stroke-width="2" fill="#09090b"/>
+    <circle cx="50" cy="50" r="1.5" fill="white"/>
+  </svg>
+  <div class="label">White</div>
+  </div>
+
+  <!-- VIOLET -->
+  <div class="variant">
+  <svg width="200" height="200" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="hazeV" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+        <stop offset="0%"   stop-color="#a78bfa" stop-opacity="0"/>
+        <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.88"/>
+      </linearGradient>
+    </defs>
+
+    <path d="M 50,90 A 40,40 0 1,1 68.15,14.35"
+      stroke="url(#hazeV)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+
+    <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7"
+      stroke="#a78bfa" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3"
+      stroke="#a78bfa" stroke-width="2" stroke-linecap="round" opacity="0.65"/>
+    <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9"
+      stroke="#a78bfa" stroke-width="1.6" stroke-linecap="round" opacity="0.4"/>
+
+    <line x1="50" y1="50" x2="32.7" y2="40" stroke="#a78bfa" stroke-width="4"   stroke-linecap="round"/>
+    <line x1="50" y1="50" x2="50"   y2="18" stroke="#a78bfa" stroke-width="2.2" stroke-linecap="round"/>
+
+    <circle cx="50" cy="50" r="4"   stroke="#a78bfa" stroke-width="2" fill="#09090b"/>
+    <circle cx="50" cy="50" r="1.5" fill="#a78bfa"/>
+  </svg>
+  <div class="label">Violet</div>
+  </div>
+
+  <!-- APP ICON -->
+  <div class="variant">
+  <svg width="200" height="200" viewBox="-10 -10 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="hazeApp" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+        <stop offset="0%"   stop-color="white" stop-opacity="0"/>
+        <stop offset="100%" stop-color="white" stop-opacity="0.88"/>
+      </linearGradient>
+    </defs>
+    <rect x="-10" y="-10" width="120" height="120" rx="26" fill="#18181b"/>
+
+    <path d="M 50,90 A 40,40 0 1,1 68.15,14.35"
+      stroke="url(#hazeApp)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+
+    <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7"
+      stroke="white" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3"
+      stroke="white" stroke-width="3.5" stroke-linecap="round" opacity="0.65"/>
+    <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9"
+      stroke="white" stroke-width="5.5" stroke-linecap="round" opacity="0.4"/>
+
+    <line x1="50" y1="50" x2="32.7" y2="40" stroke="white" stroke-width="4"   stroke-linecap="round"/>
+    <line x1="50" y1="50" x2="50"   y2="18" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+
+    <circle cx="50" cy="50" r="4"   stroke="white" stroke-width="2" fill="#18181b"/>
+    <circle cx="50" cy="50" r="1.5" fill="white"/>
+  </svg>
+  <div class="label">App icon</div>
+  </div>
+
+</div>
+</body>
+</html>

@@ -15,7 +15,7 @@ import {
   supervisorHold,
   supervisorReleaseHold,
 } from '../api';
-import type { SupervisorStatus } from '@radio/shared';
+import type { SupervisorStatus } from '@soono/shared';
 import { useEffect, useRef, useState } from 'react';
 
 export function Dashboard() {
@@ -181,7 +181,7 @@ export function Dashboard() {
                   max {configLoading ? '—' : config?.limits.max_clients ?? 500}
                 </p>
               </div>
-              <Users className="w-8 h-8 text-indigo-500" />
+              <Users className="w-8 h-8 text-brand-500" />
             </div>
           </div>
 
@@ -237,10 +237,10 @@ export function Dashboard() {
             href={`http://${config?.server.hostname || 'localhost'}:${config?.network.listen_sockets?.[0]?.port || 8000}/admin/`}
             target="_blank"
             rel="noopener noreferrer"
-            className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 hover:border-indigo-600 transition-colors cursor-pointer"
+            className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 hover:border-brand-600 transition-colors cursor-pointer"
           >
             <p className="text-zinc-400 text-sm font-medium">Server (Admin)</p>
-            <p className="text-sm text-indigo-400 mt-2 font-mono underline">
+            <p className="text-sm text-brand-400 mt-2 font-mono underline">
               {config?.server.hostname || 'localhost'}:{config?.network.listen_sockets?.[0]?.port || 8000}/admin
             </p>
             <p className="text-xs text-zinc-500 mt-2">{config?.server.location || 'no location'}</p>
@@ -317,7 +317,7 @@ export function Dashboard() {
   );
 }
 
-import type { IcecastConfig, NowPlaying, RecentPlay } from '@radio/shared';
+import type { IcecastConfig, NowPlaying, RecentPlay } from '@soono/shared';
 
 function NowPlayingCard({
   nowPlaying,
@@ -404,7 +404,7 @@ function NowPlayingCard({
             <div className="mt-3">
               <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                 <div
-                  className={`h-full ${sourceLive ? 'bg-red-500' : 'bg-indigo-500'} transition-all`}
+                  className={`h-full ${sourceLive ? 'bg-red-500' : 'bg-brand-500'} transition-all`}
                   style={{ width: `${progress * 100}%` }}
                 />
               </div>
@@ -470,7 +470,7 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
               </span>
             )}
             {held && (
-              <span className="text-violet-300 bg-violet-900/30 border border-violet-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
+              <span className="text-brand-300 bg-brand-900/30 border border-brand-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
                 HELD
               </span>
             )}
@@ -508,7 +508,7 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
               <h2 className="text-lg font-semibold text-white flex items-center gap-2 flex-wrap">
                 <span>{scheduled.clock_name}</span>
                 <span className="text-zinc-500">·</span>
-                <span className="text-indigo-300">{scheduled.segment_name}</span>
+                <span className="text-brand-300">{scheduled.segment_name}</span>
                 <span className="text-xs text-zinc-500 font-mono lowercase">
                   {scheduled.segment_type}
                 </span>
@@ -524,7 +524,7 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
                 </span>
                 <div className="flex-1 h-2 bg-zinc-800 rounded overflow-hidden">
                   <div
-                    className="h-full bg-indigo-500 transition-all"
+                    className="h-full bg-brand-500 transition-all"
                     style={{ width: `${Math.min(100, Math.max(0, progressPct))}%` }}
                   />
                 </div>
@@ -578,7 +578,7 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
               type="button"
               disabled={pending}
               onClick={() => releaseM.mutate()}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-violet-700 hover:bg-violet-600 text-white rounded text-sm transition disabled:opacity-40"
+              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
             >
               <Unlock className="w-4 h-4" />
               Release hold
@@ -819,7 +819,7 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
           title={playing || buffering ? 'Stop monitoring' : 'Listen live'}
           className={`flex-shrink-0 w-8 h-8 flex items-center justify-center rounded-full transition-colors ${
             playing
-              ? 'bg-indigo-600 hover:bg-indigo-700 text-white'
+              ? 'bg-zinc-700 hover:bg-zinc-600 text-white'
               : buffering
                 ? 'bg-zinc-700 text-zinc-400'
                 : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-300 hover:text-white'
@@ -837,7 +837,7 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-1.5">
             <span className="text-xs font-medium text-zinc-300">Monitor</span>
-            {playing && <span className="w-1.5 h-1.5 rounded-full bg-indigo-400 animate-pulse" />}
+            {playing && <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" />}
           </div>
           {config.mounts.length > 1 ? (
             <select
@@ -869,7 +869,7 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
             step={0.05}
             value={volume}
             onChange={(e) => setVolume(Number(e.target.value))}
-            className="w-20 accent-indigo-500"
+            className="w-20 accent-brand-500"
           />
         </div>
       </div>

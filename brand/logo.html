@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@500&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #09090b;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 48px;
+    min-height: 100vh;
+    padding: 64px 0;
+    font-family: Inter, sans-serif;
+  }
+  .label { color: #3f3f46; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; }
+  .row { display: flex; flex-direction: column; align-items: flex-start; gap: 12px; }
+</style>
+</head>
+<body>
+
+<!-- Shared icon path macro — drawn inline for each color.
+     Center (34,34), r=26. Medium 500. -->
+
+<!-- 1. White -->
+<div class="row">
+<svg width="480" height="136" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g1" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="white" stop-opacity="0"/>
+      <stop offset="100%" stop-color="white" stop-opacity="0.88"/>
+    </linearGradient>
+  </defs>
+  <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#g1)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+  <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"     stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"      stroke="white" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+  <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8"   stroke="white" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+  <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="white" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="34" y1="34" x2="34"   y2="13.2" stroke="white" stroke-width="1.4" stroke-linecap="round"/>
+  <circle cx="34" cy="34" r="2.6" stroke="white" stroke-width="1.3" fill="#09090b"/>
+  <circle cx="34" cy="34" r="1"   fill="white"/>
+  <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="white">Soono</text>
+</svg>
+<div class="label">White</div>
+</div>
+
+<!-- 2. Violet -->
+<div class="row">
+<svg width="480" height="136" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g2" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#a78bfa" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#a78bfa" stop-opacity="0.88"/>
+    </linearGradient>
+  </defs>
+  <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#g2)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+  <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"     stroke="#a78bfa" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"      stroke="#a78bfa" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+  <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8"   stroke="#a78bfa" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+  <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#a78bfa" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#a78bfa" stroke-width="1.4" stroke-linecap="round"/>
+  <circle cx="34" cy="34" r="2.6" stroke="#a78bfa" stroke-width="1.3" fill="#09090b"/>
+  <circle cx="34" cy="34" r="1"   fill="#a78bfa"/>
+  <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#a78bfa">Soono</text>
+</svg>
+<div class="label">Violet — #a78bfa</div>
+</div>
+
+<!-- 3. Sky blue -->
+<div class="row">
+<svg width="480" height="136" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g3" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#38bdf8" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#38bdf8" stop-opacity="0.88"/>
+    </linearGradient>
+  </defs>
+  <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#g3)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+  <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"     stroke="#38bdf8" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"      stroke="#38bdf8" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+  <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8"   stroke="#38bdf8" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+  <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#38bdf8" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#38bdf8" stroke-width="1.4" stroke-linecap="round"/>
+  <circle cx="34" cy="34" r="2.6" stroke="#38bdf8" stroke-width="1.3" fill="#09090b"/>
+  <circle cx="34" cy="34" r="1"   fill="#38bdf8"/>
+  <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#38bdf8">Soono</text>
+</svg>
+<div class="label">Sky — #38bdf8</div>
+</div>
+
+<!-- 4. Emerald -->
+<div class="row">
+<svg width="480" height="136" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g4" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#34d399" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#34d399" stop-opacity="0.88"/>
+    </linearGradient>
+  </defs>
+  <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#g4)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+  <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"     stroke="#34d399" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"      stroke="#34d399" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+  <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8"   stroke="#34d399" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+  <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#34d399" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#34d399" stroke-width="1.4" stroke-linecap="round"/>
+  <circle cx="34" cy="34" r="2.6" stroke="#34d399" stroke-width="1.3" fill="#09090b"/>
+  <circle cx="34" cy="34" r="1"   fill="#34d399"/>
+  <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#34d399">Soono</text>
+</svg>
+<div class="label">Emerald — #34d399</div>
+</div>
+
+<!-- 5. Amber -->
+<div class="row">
+<svg width="480" height="136" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <linearGradient id="g5" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+      <stop offset="0%"   stop-color="#fbbf24" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#fbbf24" stop-opacity="0.88"/>
+    </linearGradient>
+  </defs>
+  <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#g5)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+  <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"     stroke="#fbbf24" stroke-width="1.6" stroke-linecap="round"/>
+  <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"      stroke="#fbbf24" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+  <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8"   stroke="#fbbf24" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+  <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#fbbf24" stroke-width="2.6" stroke-linecap="round"/>
+  <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#fbbf24" stroke-width="1.4" stroke-linecap="round"/>
+  <circle cx="34" cy="34" r="2.6" stroke="#fbbf24" stroke-width="1.3" fill="#09090b"/>
+  <circle cx="34" cy="34" r="1"   fill="#fbbf24"/>
+  <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#fbbf24">Soono</text>
+</svg>
+<div class="label">Amber — #fbbf24</div>
+</div>
+
+</body>
+</html>

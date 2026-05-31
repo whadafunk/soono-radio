@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { useQuery, useMutation } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
-import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
+import { IcecastConfig, IcecastConfigSchema } from '@soono/shared';
 import {
   fetchIcecastConfig,
   updateIcecastConfig,
@@ -70,7 +70,7 @@ export function IcecastSettings() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+        <Loader className="w-8 h-8 animate-spin text-brand-500" />
       </div>
     );
   }
@@ -96,7 +96,7 @@ export function IcecastSettings() {
             onClick={() => setShowAdvanced((v) => !v)}
             className={`flex items-center gap-2 px-3 py-2 text-sm font-medium rounded-lg transition-colors border ${
               showAdvanced
-                ? 'bg-indigo-600/20 border-indigo-600 text-indigo-300'
+                ? 'bg-brand-600/20 border-brand-600 text-brand-300'
                 : 'bg-zinc-900 border-zinc-800 text-zinc-300 hover:bg-zinc-800'
             }`}
           >
@@ -147,7 +147,7 @@ export function IcecastSettings() {
           <button
             type="submit"
             disabled={mutation.isPending || isRestarting}
-            className="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-6 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {mutation.isPending || isRestarting ? (
               <>

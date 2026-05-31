@@ -1,5 +1,5 @@
 import { UseFormRegister, useWatch, Control } from 'react-hook-form';
-import { LiquidsoapConfig } from '@radio/shared';
+import { LiquidsoapConfig } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
@@ -21,7 +21,7 @@ export function DuckingSection({ register, control }: Props) {
           <input
             type="checkbox"
             {...register('ducking.enabled')}
-            className="w-4 h-4 mt-0.5 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+            className="w-4 h-4 mt-0.5 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
           />
           <span className="text-sm font-medium text-zinc-200">
             Duck the queue under the live source
@@ -48,7 +48,7 @@ export function DuckingSection({ register, control }: Props) {
                 max={0}
                 step={0.5}
                 {...register('ducking.depth_db', { valueAsNumber: true })}
-                className="w-full accent-indigo-500"
+                className="w-full accent-brand-500"
               />
             </div>
 
@@ -66,7 +66,7 @@ export function DuckingSection({ register, control }: Props) {
                 max={500}
                 step={10}
                 {...register('ducking.attack_ms', { valueAsNumber: true })}
-                className="w-full accent-indigo-500"
+                className="w-full accent-brand-500"
               />
             </div>
 
@@ -84,7 +84,7 @@ export function DuckingSection({ register, control }: Props) {
                 max={3000}
                 step={50}
                 {...register('ducking.release_ms', { valueAsNumber: true })}
-                className="w-full accent-indigo-500"
+                className="w-full accent-brand-500"
               />
             </div>
           </div>

@@ -6,7 +6,7 @@ import {
   Trash2, Activity, RefreshCcw, Tag, Fingerprint, AlertTriangle, Wand2,
   SlidersHorizontal, ListPlus, Plus,
 } from 'lucide-react';
-import { MEDIA_CATEGORIES, playlistMediaCategory, PLAYLIST_SUBCATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@radio/shared';
+import { MEDIA_CATEGORIES, playlistMediaCategory, PLAYLIST_SUBCATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@soono/shared';
 import { FacetDrawer, FacetFilters, EMPTY_FACET_FILTERS, countActiveFacets } from './FacetDrawer';
 
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
@@ -281,7 +281,7 @@ export function LibraryBrowse() {
             onClick={() => handleTabChange(tab)}
             className={`px-4 py-2 text-sm font-medium transition-colors border-b-2 -mb-px ${
               activeTab === tab
-                ? 'border-indigo-500 text-indigo-300'
+                ? 'border-brand-500 text-brand-300'
                 : 'border-transparent text-zinc-400 hover:text-zinc-200'
             }`}
           >
@@ -310,7 +310,7 @@ export function LibraryBrowse() {
             value={q}
             onChange={(e) => setQ(e.target.value)}
             placeholder={TAB_SEARCH_PLACEHOLDER[activeTab]}
-            className="w-full pl-10 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full pl-10 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
           />
         </div>
 
@@ -318,14 +318,14 @@ export function LibraryBrowse() {
           onClick={() => setFacetsOpen((v) => !v)}
           className={`relative flex items-center gap-1.5 px-3 py-2 border rounded-lg transition-colors ${
             facetsOpen || countActiveFacets(facetFilters) > 0
-              ? 'bg-indigo-600/20 border-indigo-600 text-indigo-300'
+              ? 'bg-brand-600/20 border-brand-600 text-brand-300'
               : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
           }`}
         >
           <SlidersHorizontal className="w-4 h-4" />
           Filters
           {countActiveFacets(facetFilters) > 0 && (
-            <span className="ml-0.5 bg-indigo-600 text-white text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
+            <span className="ml-0.5 bg-zinc-600 text-zinc-200 text-[10px] font-bold px-1.5 py-0.5 rounded-full leading-none">
               {countActiveFacets(facetFilters)}
             </span>
           )}
@@ -380,7 +380,7 @@ export function LibraryBrowse() {
 
           {isLoading && items.length === 0 ? (
             <div className="flex items-center justify-center py-16">
-              <Loader className="w-6 h-6 animate-spin text-indigo-500" />
+              <Loader className="w-6 h-6 animate-spin text-brand-500" />
             </div>
           ) : items.length === 0 ? (
             <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-8 text-center text-zinc-400">
@@ -532,7 +532,7 @@ function AddToPlaylistModal({
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               placeholder="Search playlists…"
-              className="w-full pl-9 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
+              className="w-full pl-9 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-500"
               autoFocus
             />
           </div>
@@ -559,7 +559,7 @@ function AddToPlaylistModal({
                   {JINGLE_SUBCATEGORY_LABELS[pl.subcategory] ?? pl.subcategory}
                 </span>
               )}
-              {busy && <Loader className="w-3.5 h-3.5 text-indigo-400 animate-spin flex-shrink-0" />}
+              {busy && <Loader className="w-3.5 h-3.5 text-brand-400 animate-spin flex-shrink-0" />}
             </button>
           ))}
         </div>
@@ -574,13 +574,13 @@ function AddToPlaylistModal({
                   onChange={(e) => setNewName(e.target.value)}
                   onKeyDown={(e) => { if (e.key === 'Enter') handleCreate(); if (e.key === 'Escape') setCreating(false); }}
                   placeholder="New playlist name…"
-                  className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
+                  className="flex-1 px-3 py-1.5 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-500"
                   autoFocus
                 />
                 <button
                   onClick={handleCreate}
                   disabled={busy || !newName.trim()}
-                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded transition-colors disabled:opacity-50"
+                  className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-700 rounded transition-colors disabled:opacity-50"
                 >
                   {busy ? <Loader className="w-3 h-3 animate-spin" /> : <Check className="w-3 h-3" />}
                   Create &amp; add
@@ -597,7 +597,7 @@ function AddToPlaylistModal({
                       onClick={() => setNewSubcategory(sub)}
                       className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
                         newSubcategory === sub
-                          ? 'bg-indigo-600 text-white'
+                          ? 'bg-zinc-700 text-white'
                           : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
                       }`}
                     >
@@ -610,7 +610,7 @@ function AddToPlaylistModal({
           ) : (
             <button
               onClick={() => setCreating(true)}
-              className="flex items-center gap-2 text-sm text-indigo-400 hover:text-indigo-300 transition-colors"
+              className="flex items-center gap-2 text-sm text-brand-400 hover:text-brand-300 transition-colors"
             >
               <Plus className="w-3.5 h-3.5" />
               New playlist
@@ -686,8 +686,8 @@ function BulkActionBar({
   }
 
   return (
-    <div className="bg-indigo-600/10 border border-indigo-700/50 rounded-lg px-4 py-3 flex flex-wrap items-center gap-2">
-      <span className="text-sm text-indigo-200 font-medium">
+    <div className="bg-brand-600/10 border border-brand-700/50 rounded-lg px-4 py-3 flex flex-wrap items-center gap-2">
+      <span className="text-sm text-brand-200 font-medium">
         {ids.length} selected
       </span>
       <span className="text-zinc-600 mx-1">|</span>
@@ -840,7 +840,7 @@ function BulkActionBar({
               } catch (err) { showToast('error', (err as Error).message); }
               finally { setBusy(null); }
             }}
-            className="text-indigo-300 hover:text-indigo-100 underline underline-offset-2"
+            className="text-brand-300 hover:text-brand-100 underline underline-offset-2"
           >
             skip them
           </button>
@@ -856,7 +856,7 @@ function BulkActionBar({
               } catch (err) { showToast('error', (err as Error).message); }
               finally { setBusy(null); }
             }}
-            className="text-indigo-300 hover:text-indigo-100 underline underline-offset-2"
+            className="text-brand-300 hover:text-brand-100 underline underline-offset-2"
           >
             re-identify all {ids.length}
           </button>
@@ -997,7 +997,7 @@ function CategoryMultiSelect({
         onClick={() => setOpen((v) => !v)}
         className={`flex items-center gap-2 px-3 py-2 border rounded-lg transition-colors ${
           value.size > 0
-            ? 'bg-indigo-600/20 border-indigo-600 text-indigo-200'
+            ? 'bg-brand-600/20 border-brand-600 text-brand-200'
             : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
         }`}
       >
@@ -1025,7 +1025,7 @@ function CategoryMultiSelect({
               >
                 <span
                   className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                    checked ? 'bg-indigo-600 border-indigo-600' : 'border-zinc-600'
+                    checked ? 'bg-brand-600 border-brand-600' : 'border-zinc-600'
                   }`}
                 >
                   {checked && <Check className="w-3 h-3 text-white" />}
@@ -1091,7 +1091,7 @@ function ColumnPicker({
               >
                 <span
                   className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${
-                    checked ? 'bg-indigo-600 border-indigo-600' : 'border-zinc-600'
+                    checked ? 'bg-brand-600 border-brand-600' : 'border-zinc-600'
                   }`}
                 >
                   {checked && <Check className="w-3 h-3 text-white" />}
@@ -1152,7 +1152,7 @@ function LibraryTable({
                   if (el) el.indeterminate = someSelected;
                 }}
                 onChange={toggleSelectAll}
-                className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+                className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
               />
             </th>
             <th className="w-10 border-r border-r-zinc-700 [box-shadow:1px_0_0_0_rgba(255,255,255,0.04)]"></th>
@@ -1177,7 +1177,7 @@ function LibraryTable({
               key={m.id}
               onClick={() => onSelect(m.id)}
               className={`border-t border-zinc-800/60 hover:bg-zinc-800/40 cursor-pointer ${
-                selection.has(m.id) ? 'bg-indigo-600/5' : ''
+                selection.has(m.id) ? 'bg-brand-600/5' : ''
               }`}
             >
               <td className="px-2 py-2 text-center" onClick={(e) => e.stopPropagation()}>
@@ -1185,7 +1185,7 @@ function LibraryTable({
                   type="checkbox"
                   checked={selection.has(m.id)}
                   onChange={() => toggleSelect(m.id)}
-                  className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+                  className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
                 />
               </td>
               <td className="px-2 py-2 text-center" onClick={(e) => e.stopPropagation()}>
@@ -1482,7 +1482,7 @@ function DetailDrawer({
 
         {isLoading || !data ? (
           <div className="flex-1 flex items-center justify-center">
-            <Loader className="w-6 h-6 animate-spin text-indigo-500" />
+            <Loader className="w-6 h-6 animate-spin text-brand-500" />
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -1552,14 +1552,14 @@ function DetailDrawer({
               <input
                 value={draft.title ?? ''}
                 onChange={(e) => setDraft({ ...draft, title: e.target.value || null })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
             </Field>
             <Field label="Artist">
               <input
                 value={draft.artist ?? ''}
                 onChange={(e) => setDraft({ ...draft, artist: e.target.value || null })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
             </Field>
             <div className="grid grid-cols-2 gap-3">
@@ -1567,14 +1567,14 @@ function DetailDrawer({
                 <input
                   value={draft.album ?? ''}
                   onChange={(e) => setDraft({ ...draft, album: e.target.value || null })}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 />
               </Field>
               <Field label="Genre">
                 <input
                   value={draft.genre ?? ''}
                   onChange={(e) => setDraft({ ...draft, genre: e.target.value || null })}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 />
               </Field>
             </div>
@@ -1589,14 +1589,14 @@ function DetailDrawer({
                       year: e.target.value === '' ? null : parseInt(e.target.value, 10),
                     })
                   }
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 />
               </Field>
               <Field label="Category">
                 <select
                   value={draft.category ?? data.category}
                   onChange={(e) => setDraft({ ...draft, category: e.target.value as MediaCategory })}
-                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
                 >
                   {MEDIA_CATEGORIES.map((c) => (
                     <option key={c} value={c}>
@@ -1611,7 +1611,7 @@ function DetailDrawer({
                 value={draft.notes ?? ''}
                 onChange={(e) => setDraft({ ...draft, notes: e.target.value || null })}
                 rows={3}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
             </Field>
             <label className="flex items-center gap-2 cursor-pointer">
@@ -1619,7 +1619,7 @@ function DetailDrawer({
                 type="checkbox"
                 checked={draft.favorite ?? false}
                 onChange={(e) => setDraft({ ...draft, favorite: e.target.checked })}
-                className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+                className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
               />
               <span className="text-sm text-zinc-200">Favorite</span>
             </label>
@@ -1629,7 +1629,7 @@ function DetailDrawer({
                 <p className="text-xs font-medium text-zinc-400 mb-2">Audio Analysis</p>
                 {data.analysis_status === 'analysing' && (
                   <div className="flex items-center gap-2 text-xs text-zinc-400">
-                    <Loader className="w-3.5 h-3.5 animate-spin text-indigo-400" />
+                    <Loader className="w-3.5 h-3.5 animate-spin text-brand-400" />
                     Running analysis…
                   </div>
                 )}
@@ -1696,7 +1696,7 @@ function DetailDrawer({
           <button
             onClick={() => saveMutation.mutate()}
             disabled={busy || !data}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
           >
             {saveMutation.isPending ? <Loader className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
             Save
@@ -1763,7 +1763,7 @@ function AcoustIDPickerModal({
       >
         <div className="flex items-center justify-between p-5 border-b border-zinc-800">
           <div className="flex items-center gap-2">
-            <Fingerprint className="w-4 h-4 text-indigo-400" />
+            <Fingerprint className="w-4 h-4 text-brand-400" />
             <h3 className="text-base font-semibold text-white">ID Results</h3>
             {top && (
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
@@ -1771,7 +1771,7 @@ function AcoustIDPickerModal({
                   ? 'bg-zinc-700/60 text-zinc-300 border border-zinc-600/60'
                   : top.source === 'musicbrainz'
                     ? 'bg-amber-900/40 text-amber-300 border border-amber-800/60'
-                    : 'bg-indigo-900/40 text-indigo-300 border border-indigo-800/60'
+                    : 'bg-brand-900/40 text-brand-300 border border-brand-800/60'
               }`}>
                 {top.source === 'filename'
                   ? 'Cover — from filename'
@@ -1793,7 +1793,7 @@ function AcoustIDPickerModal({
               onClick={() => onPick(c)}
               className={`w-full text-left px-4 py-3 rounded-lg transition-colors group ${
                 isRecommended(c, i)
-                  ? 'bg-indigo-950/50 border border-indigo-800/50 hover:bg-indigo-950/80'
+                  ? 'bg-brand-950/50 border border-brand-800/50 hover:bg-brand-950/80'
                   : 'hover:bg-zinc-800'
               }`}
             >
@@ -1802,7 +1802,7 @@ function AcoustIDPickerModal({
                   <div className="flex items-center gap-2 flex-wrap">
                     <p className="text-white font-medium truncate">{c.title ?? <span className="text-zinc-500 italic">Unknown title</span>}</p>
                     {isRecommended(c, i) && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-700/50 text-indigo-300 font-medium flex-shrink-0">
+                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-brand-700/50 text-brand-300 font-medium flex-shrink-0">
                         Recommended
                       </span>
                     )}
@@ -1824,7 +1824,7 @@ function AcoustIDPickerModal({
                   )}
                 </div>
                 <div className="flex-shrink-0 flex flex-col items-end gap-1 pt-0.5">
-                  <span className={`text-xs font-mono ${isRecommended(c, i) ? 'text-indigo-300' : 'text-zinc-300'}`}>
+                  <span className={`text-xs font-mono ${isRecommended(c, i) ? 'text-brand-300' : 'text-zinc-300'}`}>
                     {c.source === 'filename' ? '—' : `${Math.round(c.score * 100)}%`}
                   </span>
                   {c.source !== 'filename' && (
@@ -1833,7 +1833,7 @@ function AcoustIDPickerModal({
                         className={`h-full rounded-full transition-colors ${
                           c.source === 'musicbrainz'
                             ? 'bg-amber-500 group-hover:bg-amber-400'
-                            : 'bg-indigo-500 group-hover:bg-indigo-400'
+                            : 'bg-brand-500 group-hover:bg-brand-400'
                         }`}
                         style={{ width: `${Math.round(c.score * 100)}%` }}
                       />
@@ -1911,7 +1911,7 @@ function RetranscodeDialog({
               type="checkbox"
               checked={trimSilence}
               onChange={(e) => setTrimSilence(e.target.checked)}
-              className="w-4 h-4 mt-0.5 rounded border-zinc-700 bg-zinc-800 text-indigo-600 focus:ring-indigo-500"
+              className="w-4 h-4 mt-0.5 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
             />
             <span className="text-sm text-zinc-200">
               Trim leading and trailing silence
@@ -1924,7 +1924,7 @@ function RetranscodeDialog({
           <button
             onClick={() => onApply({ mode, channels, trim_silence: trimSilence })}
             disabled={busy}
-            className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50"
           >
             {busy ? <Loader className="w-4 h-4 animate-spin" /> : <RefreshCcw className="w-4 h-4" />}
             Re-transcode
@@ -1958,7 +1958,7 @@ function RadioPill({
       onClick={onClick}
       className={`text-left px-3 py-2 rounded-lg border transition-colors ${
         checked
-          ? 'bg-indigo-600/20 border-indigo-600 text-indigo-200'
+          ? 'bg-brand-600/20 border-brand-600 text-brand-200'
           : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
       }`}
     >
@@ -1975,7 +1975,7 @@ const MOOD_COLORS: Record<string, string> = {
   acoustic:   'bg-amber-500/20 text-amber-300 border-amber-700/50',
   electronic: 'bg-blue-500/20 text-blue-300 border-blue-700/50',
   aggressive: 'bg-red-500/20 text-red-300 border-red-700/50',
-  sad:        'bg-indigo-500/20 text-indigo-300 border-indigo-700/50',
+  sad:        'bg-brand-500/20 text-brand-300 border-brand-700/50',
 };
 
 function MoodTags({ raw }: { raw: string | null | undefined }) {

@@ -7,7 +7,7 @@ import {
   SupervisorConfig, SupervisorConfigSchema,
   JOIN_POLICIES, EXTENSION_POLICIES,
   JoinPolicy, ExtensionPolicy,
-} from '@radio/shared';
+} from '@soono/shared';
 import {
   fetchSupervisorConfig,
   updateSupervisorConfig,
@@ -56,7 +56,7 @@ export function SupervisorSettings() {
   if (isLoading) {
     return (
       <div className="flex items-center justify-center h-96">
-        <Loader className="w-8 h-8 animate-spin text-indigo-500" />
+        <Loader className="w-8 h-8 animate-spin text-brand-500" />
       </div>
     );
   }
@@ -105,7 +105,7 @@ export function SupervisorSettings() {
                 max={60000}
                 step={500}
                 {...register('scheduler_tick_ms', { valueAsNumber: true })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               {errors.scheduler_tick_ms && (
                 <p className="text-red-400 text-xs mt-1">{errors.scheduler_tick_ms.message}</p>
@@ -123,7 +123,7 @@ export function SupervisorSettings() {
                 max={60000}
                 step={500}
                 {...register('metadata_poll_ms', { valueAsNumber: true })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               {errors.metadata_poll_ms && (
                 <p className="text-red-400 text-xs mt-1">{errors.metadata_poll_ms.message}</p>
@@ -144,7 +144,7 @@ export function SupervisorSettings() {
                 min={1}
                 max={20}
                 {...register('queue_depth_threshold', { valueAsNumber: true })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               {errors.queue_depth_threshold && (
                 <p className="text-red-400 text-xs mt-1">{errors.queue_depth_threshold.message}</p>
@@ -165,7 +165,7 @@ export function SupervisorSettings() {
                 min={0}
                 max={720}
                 {...register('separation_minutes', { valueAsNumber: true })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               {errors.separation_minutes && (
                 <p className="text-red-400 text-xs mt-1">{errors.separation_minutes.message}</p>
@@ -202,7 +202,7 @@ export function SupervisorSettings() {
           <button
             type="submit"
             disabled={mutation.isPending || isRestarting}
-            className="flex items-center gap-2 px-6 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="flex items-center gap-2 px-6 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {mutation.isPending || isRestarting ? (
               <>
@@ -245,7 +245,7 @@ function HandoverPolicyRow<T extends string>({
       </label>
       <select
         {...register(fieldName as keyof SupervisorConfig)}
-        className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+        className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
       >
         {options.map((o) => (
           <option key={o} value={o} className="bg-zinc-900">{labels[o]}</option>

@@ -44,7 +44,7 @@ import {
   playlistMediaCategory,
   type Playlist,
   type ShowPlaylist,
-} from '@radio/shared';
+} from '@soono/shared';
 import {
   fetchClocks,
   fetchClockSegments,
@@ -89,7 +89,7 @@ const SWEEP_SOURCE_LABELS: Record<typeof SWEEP_SOURCES[number], string> = {
 // ─── Segment metadata ─────────────────────────────────────────────────────────
 
 const SEGMENT_META: Record<ClockSegmentType, { label: string; color: string; bg: string; border: string; text: string }> = {
-  music:         { label: 'Music',          color: '#6366f1', bg: 'bg-indigo-500/15',  border: 'border-indigo-500/40',  text: 'text-indigo-300'  },
+  music:         { label: 'Music',          color: '#6366f1', bg: 'bg-brand-500/15',  border: 'border-brand-500/40',  text: 'text-brand-300'  },
   live:          { label: 'Live',           color: '#10b981', bg: 'bg-emerald-500/15', border: 'border-emerald-500/40', text: 'text-emerald-300' },
   stop_set:      { label: 'Stop Set',       color: '#f59e0b', bg: 'bg-amber-500/15',   border: 'border-amber-500/40',   text: 'text-amber-300'   },
   news:          { label: 'News',           color: '#f43f5e', bg: 'bg-rose-500/15',    border: 'border-rose-500/40',    text: 'text-rose-300'    },
@@ -476,7 +476,7 @@ export function ClocksPage() {
         <div className="w-72 flex-shrink-0 flex flex-col bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
           <div className="px-4 py-4 border-b border-zinc-700 bg-zinc-800/50 flex items-center justify-between">
             <span className="text-sm font-semibold text-zinc-200 uppercase tracking-wider">Clocks</span>
-            <button onClick={() => setCreatingNew(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-indigo-600 hover:bg-indigo-700 rounded-md transition-colors">
+            <button onClick={() => setCreatingNew(true)} className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-white bg-brand-600 hover:bg-brand-700 rounded-md transition-colors">
               <Plus className="w-3.5 h-3.5" />
               New Clock
             </button>
@@ -493,12 +493,12 @@ export function ClocksPage() {
                   if (e.key === 'Escape') { setCreatingNew(false); setNewName(''); }
                 }}
                 placeholder="Clock name…"
-                className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
               />
               <button
                 onClick={() => newName.trim() && !createMutation.isPending && createMutation.mutate({ name: newName.trim() })}
                 disabled={!newName.trim() || createMutation.isPending}
-                className="p-1 text-indigo-400 hover:text-indigo-300 transition-colors disabled:opacity-40 disabled:cursor-default"
+                className="p-1 text-brand-400 hover:text-brand-300 transition-colors disabled:opacity-40 disabled:cursor-default"
               >
                 <Check className="w-3.5 h-3.5" />
               </button>
@@ -519,7 +519,7 @@ export function ClocksPage() {
               const confirmingDelete = listConfirmDeleteId === clock.id;
               const assignedShows = clock.assigned_shows ?? [];
               return (
-                <div key={clock.id} className={`group relative border-b border-zinc-800/60 transition-colors ${isSelected ? 'bg-indigo-600/20 border-l-2 border-l-indigo-500' : 'hover:bg-zinc-800/50'}`}>
+                <div key={clock.id} className={`group relative border-b border-zinc-800/60 transition-colors ${isSelected ? 'bg-brand-600/20 border-l-2 border-l-brand-500' : 'hover:bg-zinc-800/50'}`}>
                   <button onClick={() => handleClockClick(clock)} className="w-full text-left px-4 py-3">
                     <div className="flex items-center gap-2 pr-6">
                       <Clock className="w-3.5 h-3.5 text-zinc-400 flex-shrink-0" />
@@ -602,7 +602,7 @@ export function ClocksPage() {
                   <input
                     value={draftClock.name}
                     onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
-                    className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
+                    className="flex-1 min-w-0 text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-brand-500 focus:outline-none transition-colors pb-0.5"
                   />
                   <BadgeTooltip text={draftClock.slot_count > 0 ? `Active in ${draftClock.slot_count} schedule slot${draftClock.slot_count !== 1 ? 's' : ''}. Visit the Schedule page to view placement.` : 'Not placed on any schedule template or calendar entry. It won\'t air until assigned to a time slot.'}>
                     <span className={`flex-shrink-0 text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
@@ -631,13 +631,13 @@ export function ClocksPage() {
                       <input
                         value={draftClock.name}
                         onChange={(e) => updateDraftClock((c) => ({ ...c, name: e.target.value }))}
-                        className="w-full text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none transition-colors pb-0.5"
+                        className="w-full text-lg font-semibold text-white bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-brand-500 focus:outline-none transition-colors pb-0.5"
                       />
                       <input
                         value={draftClock.description ?? ''}
                         onChange={(e) => updateDraftClock((c) => ({ ...c, description: e.target.value || null }))}
                         placeholder="Add a description…"
-                        className="mt-1 text-sm text-zinc-400 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-indigo-500 focus:outline-none w-full transition-colors pb-0.5 placeholder:text-zinc-600"
+                        className="mt-1 text-sm text-zinc-400 bg-transparent border-b border-transparent hover:border-zinc-700 focus:border-brand-500 focus:outline-none w-full transition-colors pb-0.5 placeholder:text-zinc-600"
                       />
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0 mt-0.5">
@@ -663,7 +663,7 @@ export function ClocksPage() {
                         <select
                           value={draftClock.join_policy ?? ''}
                           onChange={(e) => updateDraftClock((c) => ({ ...c, join_policy: e.target.value === '' ? null : e.target.value as typeof JOIN_POLICIES[number] }))}
-                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-indigo-500"
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 focus:outline-none focus:border-brand-500"
                         >
                           <option value="" className="bg-zinc-900 text-zinc-400">Station default — {JOIN_POLICY_LABELS[supervisorConfig?.join_policy ?? 'join_top'].label}</option>
                           {JOIN_POLICIES.map((o) => (
@@ -1188,7 +1188,7 @@ function SegmentDrawer({
             key={t.id}
             onClick={() => setTab(t.id)}
             className={`px-3 py-2 text-xs font-medium border-b-2 transition-colors -mb-px ${
-              tab === t.id ? 'border-indigo-500 text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'
+              tab === t.id ? 'border-brand-500 text-white' : 'border-transparent text-zinc-400 hover:text-zinc-200'
             }`}
           >
             {t.label}
@@ -1205,7 +1205,7 @@ function SegmentDrawer({
               <input
                 value={draft.name}
                 onChange={(e) => update({ name: e.target.value })}
-                className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500"
+                className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500"
               />
             </Field>
 
@@ -1232,7 +1232,7 @@ function SegmentDrawer({
                     sweeper_config: d.sweeper_config,
                   });
                 }}
-                className={`w-full px-3 py-1.5 rounded border text-sm bg-zinc-900 focus:outline-none focus:border-indigo-500 ${meta.border} ${meta.text} ${locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
+                className={`w-full px-3 py-1.5 rounded border text-sm bg-zinc-900 focus:outline-none focus:border-brand-500 ${meta.border} ${meta.text} ${locked ? 'opacity-50 cursor-not-allowed' : 'cursor-pointer'}`}
               >
                 {CLOCK_SEGMENT_TYPES.map((t) => (
                   <option key={t} value={t} className="bg-zinc-900 text-white">{SEGMENT_META[t].label}</option>
@@ -1254,7 +1254,7 @@ function SegmentDrawer({
                   value={draft.duration_seconds}
                   disabled={locked}
                   onChange={(e) => { if (locked) return; const v = parseInt(e.target.value, 10); if (!isNaN(v) && v >= 1 && v <= 7200) update({ duration_seconds: v }); }}
-                  className={`w-20 text-center bg-zinc-900 border border-zinc-700 rounded text-sm text-white py-1.5 focus:outline-none focus:border-indigo-500 ${locked ? 'cursor-not-allowed' : ''}`}
+                  className={`w-20 text-center bg-zinc-900 border border-zinc-700 rounded text-sm text-white py-1.5 focus:outline-none focus:border-brand-500 ${locked ? 'cursor-not-allowed' : ''}`}
                 />
                 <button
                   onClick={() => !locked && update({ duration_seconds: Math.min(7200, draft.duration_seconds + DURATION_STEP[draft.type]) })}
@@ -1269,7 +1269,7 @@ function SegmentDrawer({
               <label className="block text-xs font-medium text-zinc-300 mb-2">
                 Source{' '}
                 {draft.type === 'music' && (
-                  <span className={`ml-1 text-[10px] font-normal px-1 py-0.5 rounded ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-400' : 'bg-indigo-900/30 text-indigo-400'}`}>
+                  <span className={`ml-1 text-[10px] font-normal px-1 py-0.5 rounded ${assignedShows.length > 0 ? 'bg-emerald-900/30 text-emerald-400' : 'bg-brand-900/30 text-brand-400'}`}>
                     {assignedShows.length > 0 ? 'Show' : 'Segment'}
                   </span>
                 )}
@@ -1291,7 +1291,7 @@ function SegmentDrawer({
                 return (
                   <p className="text-xs text-zinc-500 col-span-2">
                     No rotation documents —{' '}
-                    <Link to="/rotations" className="text-indigo-400 hover:text-indigo-300 underline-offset-2 hover:underline">
+                    <Link to="/rotations" className="text-brand-400 hover:text-brand-300 underline-offset-2 hover:underline">
                       create one in Rotations
                     </Link>{' '}
                     to control play order for Segment Playlist mode.
@@ -1311,7 +1311,7 @@ function SegmentDrawer({
                           ),
                         });
                       }}
-                      className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${hasNoRotation ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-indigo-500'}`}
+                      className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${hasNoRotation ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-brand-500'}`}
                     >
                       <option value="" disabled className="bg-zinc-900">— select a rotation —</option>
                       {musicRotations.map((r) => (
@@ -1339,7 +1339,7 @@ function SegmentDrawer({
                       const v = parseInt(e.target.value, 10);
                       update({ silence_threshold_seconds: !isNaN(v) && v >= 1 ? v : null });
                     }}
-                    className="w-28 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+                    className="w-28 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-600"
                   />
                   <span className="text-sm text-zinc-500">s</span>
                 </div>
@@ -1356,7 +1356,7 @@ function SegmentDrawer({
                     type="checkbox"
                     checked={draft.accept_live}
                     onChange={(e) => update({ accept_live: e.target.checked })}
-                    className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                    className="rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500"
                   />
                   <span className="text-sm text-zinc-300">Allow DJ to go live during this segment</span>
                 </label>
@@ -1391,7 +1391,7 @@ function SegmentDrawer({
                         const next = { ...flexPolicy, late_seconds: e.target.checked ? null : 0 };
                         update({ start_policy: next.late_seconds === 0 && next.early_seconds === 0 ? { type: 'hard' } : next });
                       }}
-                      className="accent-indigo-500"
+                      className="accent-brand-500"
                     />
                     <span className="text-xs text-zinc-300">Start late</span>
                     <HelpTooltip text="Wait for the previous segment to finish naturally. Empty limit = natural end; set seconds to force a cut after N seconds of overtime." />
@@ -1409,7 +1409,7 @@ function SegmentDrawer({
                           const v = parseInt(e.target.value);
                           update({ start_policy: { ...flexPolicy, late_seconds: isNaN(v) || v <= 0 ? null : v } });
                         }}
-                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
+                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 text-center"
                       />
                       <span className="text-xs text-zinc-300">sec late{flexPolicy.late_seconds === null ? ' (natural end)' : ''}</span>
                     </div>
@@ -1425,7 +1425,7 @@ function SegmentDrawer({
                         const next = { ...flexPolicy, early_seconds: e.target.checked ? null : 0 };
                         update({ start_policy: next.late_seconds === 0 && next.early_seconds === 0 ? { type: 'hard' } : next });
                       }}
-                      className="accent-indigo-500"
+                      className="accent-brand-500"
                     />
                     <span className="text-xs text-zinc-300">Start early</span>
                     <HelpTooltip text="Start early if the previous segment finishes ahead of schedule. Empty limit = fill gap immediately; set seconds to cap how early it can pull forward." />
@@ -1443,7 +1443,7 @@ function SegmentDrawer({
                           const v = parseInt(e.target.value);
                           update({ start_policy: { ...flexPolicy, early_seconds: isNaN(v) || v <= 0 ? null : v } });
                         }}
-                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 text-center"
+                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 text-center"
                       />
                       <span className="text-xs text-zinc-300">sec early{flexPolicy.early_seconds === null ? ' (fill gap)' : ''}</span>
                     </div>
@@ -1485,7 +1485,7 @@ function SegmentDrawer({
                   {(draft.type === 'voice_track' || draft.type === 'bulletin' || draft.type === 'news') && (
                     <label className="flex items-center gap-2.5 cursor-pointer">
                       <input type="checkbox" checked={draft.can_reschedule} onChange={(e) => update({ can_reschedule: e.target.checked })}
-                        className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500" />
+                        className="rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500" />
                       <div>
                         <span className="text-xs font-medium text-zinc-200">Reschedule if late</span>
                         <p className="text-xs text-zinc-400">Defer the whole segment to the next available slot rather than playing it late.</p>
@@ -1519,7 +1519,7 @@ function SegmentDrawer({
                           type="checkbox"
                           checked={draft.interstitial_jingles_enabled}
                           onChange={(e) => update({ interstitial_jingles_enabled: e.target.checked })}
-                          className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                          className="rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500"
                         />
                         <span className="text-sm text-zinc-300">Insert jingles between tracks</span>
                       </label>
@@ -1536,7 +1536,7 @@ function SegmentDrawer({
                             const v = parseInt(e.target.value, 10);
                             update({ jingle_every_n_tracks: !isNaN(v) && v >= 1 ? v : null });
                           }}
-                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-600"
                         />
                       </Field>
                     )}
@@ -1553,7 +1553,7 @@ function SegmentDrawer({
                           type="checkbox"
                           checked={draft.interstitial_station_id_enabled}
                           onChange={(e) => update({ interstitial_station_id_enabled: e.target.checked })}
-                          className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+                          className="rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500"
                         />
                         <span className="text-sm text-zinc-300">Insert station IDs between tracks</span>
                       </label>
@@ -1570,7 +1570,7 @@ function SegmentDrawer({
                             const v = parseInt(e.target.value, 10);
                             update({ station_id_every_n_tracks: !isNaN(v) && v >= 1 ? v : null });
                           }}
-                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-600"
+                          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-600"
                         />
                       </Field>
                     )}
@@ -1763,7 +1763,7 @@ function MusicSourceEditor({
                     const v = parseInt(e.target.value, 10);
                     if (!isNaN(v) && v >= 1) updateSource(srcIdx, { weight: v });
                   }}
-                  className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                  className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-brand-500 text-center"
                 />
               </div>
             </div>
@@ -1773,10 +1773,10 @@ function MusicSourceEditor({
       {musicPlaylists.length === 0 ? (
         <p className="text-xs text-zinc-500">
           No music playlists —{' '}
-          <Link to="/playlists" className="text-indigo-400 hover:text-indigo-300">create one first</Link>
+          <Link to="/playlists" className="text-brand-400 hover:text-brand-300">create one first</Link>
         </p>
       ) : musicPlaylists.length > playlistSources.length && (
-        <button type="button" onClick={addPlaylist} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+        <button type="button" onClick={addPlaylist} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
           + Add playlist
         </button>
       )}
@@ -1835,7 +1835,7 @@ function SourcesEditor({
                 if (!v) onChange([{ type: 'live' }]);
                 else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
               }}
-              className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+              className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-brand-500"
             >
               <option value="" className="bg-zinc-900">None</option>
               {bedPlaylists.map((p) => (
@@ -1874,7 +1874,7 @@ function SourcesEditor({
         <select
           value={currentType}
           onChange={(e) => onChange([makeDefaultSource(e.target.value as 'live' | 'recording')])}
-          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+          className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-brand-500"
         >
           <option value="live" className="bg-zinc-900">Harbor (live)</option>
           <option value="recording" className="bg-zinc-900">Recording</option>
@@ -1895,7 +1895,7 @@ function SourcesEditor({
                   if (!v) onChange([{ type: 'live' }]);
                   else onChange([{ type: 'live' }, { type: 'playlist', playlist_id: Number(v), weight: 1, hot_play: false, heavy_rotation: false }]);
                 }}
-                className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+                className="flex-1 px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-brand-500"
               >
                 <option value="" className="bg-zinc-900">None</option>
                 {bedPlaylists.map((p) => (
@@ -2000,7 +2000,7 @@ function SourcesEditor({
         );
       })}
       {canAdd && (
-        <button onClick={addSource} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+        <button onClick={addSource} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
           + Add source
         </button>
       )}
@@ -2079,7 +2079,7 @@ function StopSetSlot({
         <select
           value={rotation ?? ''}
           onChange={(e) => onRotationChange(e.target.value === '' ? undefined : (e.target.value as SimpleRotationType))}
-          className="px-2 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500 w-36"
+          className="px-2 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-brand-500 w-36"
         >
           <option value="" className="bg-zinc-900">Default</option>
           <option value="round_robin" className="bg-zinc-900">Round robin</option>
@@ -2191,7 +2191,7 @@ function SourceRow({
           <select
             value={typeSelectorValue}
             onChange={(e) => handleTypeChange(e.target.value)}
-            className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+            className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-brand-500"
           >
             {typeOptions(availableTypes)}
           </select>
@@ -2226,7 +2226,7 @@ function SourceRow({
                   const v = parseInt(e.target.value, 10);
                   if (!isNaN(v) && v >= 1) onChange({ ...playlistSrc, weight: v });
                 }}
-                className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-brand-500 text-center"
               />
             </div>
           )}
@@ -2240,7 +2240,7 @@ function SourceRow({
       <select
         value={source.type}
         onChange={(e) => handleTypeChange(e.target.value)}
-        className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+        className="flex-1 min-w-0 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 cursor-pointer focus:outline-none focus:border-brand-500"
       >
         {typeOptions(availableTypes)}
       </select>
@@ -2260,7 +2260,7 @@ function SourceRow({
                 onChange({ ...s, weight: v });
               }
             }}
-            className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+            className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-brand-500 text-center"
           />
         </div>
       )}
@@ -2272,7 +2272,7 @@ function SourceRow({
             const s = source as Extract<SegmentSourceEntry, { rotation?: SimpleRotationType }>;
             onChange({ ...s, rotation: e.target.value === '' ? undefined : e.target.value as SimpleRotationType });
           }}
-          className="px-1.5 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+          className="px-1.5 py-1 bg-zinc-800 border border-zinc-700/60 rounded text-xs text-zinc-300 focus:outline-none focus:border-brand-500"
         >
           <option value="" className="bg-zinc-900">Default</option>
           <option value="round_robin" className="bg-zinc-900">Round robin</option>
@@ -2335,7 +2335,7 @@ function SegmentSweeperEditor({
         <button
           type="button"
           onClick={toggle}
-          className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors ${enabled ? 'bg-indigo-600' : 'bg-zinc-700'}`}
+          className={`relative inline-flex h-4 w-8 items-center rounded-full transition-colors ${enabled ? 'bg-brand-600' : 'bg-zinc-700'}`}
         >
           <span className={`inline-block h-3 w-3 transform rounded-full bg-white transition-transform ${enabled ? 'translate-x-4' : 'translate-x-0.5'}`} />
         </button>
@@ -2348,14 +2348,14 @@ function SegmentSweeperEditor({
               <span className="text-xs text-zinc-300">Per hour</span>
               <input type="number" min={0} max={20} value={config.per_hour}
                 onChange={(e) => update({ per_hour: Math.max(0, Math.min(20, parseInt(e.target.value) || 0)) })}
-                className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-brand-500 text-center"
               />
             </div>
             <div className="flex items-center gap-2">
               <span className="text-xs text-zinc-300">Min gap</span>
               <input type="number" min={1} value={config.min_gap_minutes}
                 onChange={(e) => update({ min_gap_minutes: Math.max(1, parseInt(e.target.value) || 1) })}
-                className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                className="w-14 px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-brand-500 text-center"
               />
               <span className="text-xs text-zinc-300">min</span>
             </div>
@@ -2367,7 +2367,7 @@ function SegmentSweeperEditor({
                 <div key={i} className="flex items-center gap-2">
                   <select value={src.type}
                     onChange={(e) => updateSource(i, { type: e.target.value as typeof SWEEP_SOURCES[number] })}
-                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500"
+                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-brand-500"
                   >
                     {SWEEP_SOURCES.filter((t) => t === src.type || !usedByOthers.has(t)).map((t) => (
                       <option key={t} value={t} className="bg-zinc-900">{SWEEP_SOURCE_LABELS[t]}</option>
@@ -2377,12 +2377,12 @@ function SegmentSweeperEditor({
                     <span className="text-xs text-zinc-300">wt</span>
                     <input type="number" min={1} value={src.weight}
                       onChange={(e) => updateSource(i, { weight: Math.max(1, parseInt(e.target.value) || 1) })}
-                      className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-indigo-500 text-center"
+                      className="w-12 px-1.5 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-white focus:outline-none focus:border-brand-500 text-center"
                     />
                   </div>
                   <select value={src.rotation_id ?? ''}
                     onChange={(e) => updateSource(i, { rotation_id: e.target.value === '' ? null : Number(e.target.value) })}
-                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-indigo-500 max-w-[160px]"
+                    className="px-2 py-1 bg-zinc-800 border border-zinc-700 rounded text-xs text-zinc-300 focus:outline-none focus:border-brand-500 max-w-[160px]"
                     title="Sweeper rotation document"
                   >
                     <option value="" className="bg-zinc-900">Default rotation</option>
@@ -2399,7 +2399,7 @@ function SegmentSweeperEditor({
               );
             })}
             {config.sources.length < SWEEP_SOURCES.length && (
-              <button type="button" onClick={addSource} className="text-xs text-indigo-400 hover:text-indigo-300 transition-colors">
+              <button type="button" onClick={addSource} className="text-xs text-brand-400 hover:text-brand-300 transition-colors">
                 + Add type
               </button>
             )}
@@ -2428,7 +2428,7 @@ function ClockActions({ dirty, isPending, confirmDelete, slotCount, assignedShow
       <button
         onClick={onSave}
         disabled={!dirty || isPending}
-        className="px-3 py-1.5 text-xs text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-default"
+        className="px-3 py-1.5 text-xs text-white bg-brand-600 hover:bg-brand-700 rounded-lg transition-colors disabled:opacity-40 disabled:cursor-default"
       >
         {isPending ? 'Saving…' : 'Save'}
       </button>
@@ -2494,7 +2494,7 @@ function PlaylistIdInput({ value, onChange }: { value: number | null; onChange: 
         const v = parseInt(e.target.value, 10);
         onChange(isNaN(v) ? null : v);
       }}
-      className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-indigo-500 placeholder:text-zinc-500"
+      className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-500"
     />
   );
 }
@@ -2520,7 +2520,7 @@ function PlaylistDropdown({ value, onChange, playlists, categories, filter, inva
         const v = parseInt(e.target.value, 10);
         onChange(isNaN(v) || v <= 0 ? null : v);
       }}
-      className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${invalid ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-indigo-500'}`}
+      className={`w-full px-3 py-1.5 bg-zinc-900 border rounded text-sm text-zinc-300 cursor-pointer focus:outline-none ${invalid ? 'border-red-500 focus:border-red-400' : 'border-zinc-700 focus:border-brand-500'}`}
     >
       {allowNone && <option value="" className="bg-zinc-900 text-zinc-500">— None —</option>}
       {!allowNone && filtered.length === 0 && (
@@ -2614,7 +2614,7 @@ function DriftOrderRow({
         type="checkbox"
         checked={active}
         onChange={(e) => onToggle(e.target.checked)}
-        className="rounded border-zinc-600 bg-zinc-800 text-indigo-500 focus:ring-indigo-500"
+        className="rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500"
       />
       {active && index !== undefined && (
         <span className="text-xs text-zinc-400 w-3 text-right shrink-0">{index}.</span>

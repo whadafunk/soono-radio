@@ -1,0 +1,854 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,300;0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+  :root {
+    --brand:      #36c8c8;
+    --brand-deep: #0d9488;
+    --ink:        #09090b;
+    --ink-soft:   #18181b;
+    --surface:    #f4f4f5;
+    --muted:      #a1a1aa;
+    --hairline:   #27272a;
+  }
+
+  body {
+    background: var(--ink);
+    color: #e4e4e7;
+    font-family: Inter, sans-serif;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  /* ── Layout ── */
+  .page { max-width: 960px; margin: 0 auto; padding: 80px 48px 120px; }
+
+  .section { margin-top: 80px; }
+  .section + .section { border-top: 1px solid var(--hairline); padding-top: 80px; }
+
+  .section-label {
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    color: var(--brand);
+    margin-bottom: 28px;
+  }
+  h2 {
+    font-size: 22px;
+    font-weight: 500;
+    color: #fff;
+    margin-bottom: 8px;
+  }
+  .desc {
+    color: var(--muted);
+    font-size: 13px;
+    max-width: 560px;
+    margin-bottom: 40px;
+  }
+
+  /* ── Cover ── */
+  .cover {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding-bottom: 80px;
+    border-bottom: 1px solid var(--hairline);
+  }
+  .cover-product {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.2em;
+    text-transform: uppercase;
+    color: var(--brand);
+  }
+  .cover h1 { font-size: 40px; font-weight: 300; color: #fff; letter-spacing: -0.5px; }
+  .cover h1 span { font-weight: 600; }
+  .cover-sub { color: var(--muted); font-size: 14px; max-width: 480px; }
+
+  /* ── Logo grid ── */
+  .logo-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+  }
+  .logo-cell {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+    padding: 40px;
+    background: var(--ink-soft);
+  }
+  .logo-cell.light { background: var(--surface); }
+  .logo-cell.span2 { grid-column: span 2; }
+
+  .cell-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+  .logo-cell.light .cell-label { color: #a1a1aa; }
+
+  /* ── Icon grid ── */
+  .icon-row {
+    display: flex;
+    gap: 2px;
+  }
+  .icon-cell {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 16px;
+    padding: 40px;
+    background: var(--ink-soft);
+    flex: 1;
+  }
+  .icon-cell.light { background: var(--surface); }
+  .icon-cell .cell-label { color: var(--muted); }
+  .icon-cell.light .cell-label { color: #a1a1aa; }
+  .icon-size { font-size: 10px; color: #52525b; letter-spacing: 0.08em; }
+
+  /* ── Color palette ── */
+  .palette {
+    display: grid;
+    grid-template-columns: repeat(5, 1fr);
+    gap: 2px;
+  }
+  .swatch {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+  }
+  .swatch-color {
+    height: 100px;
+    border-radius: 0;
+  }
+  .swatch-info {
+    padding: 16px;
+    background: var(--ink-soft);
+  }
+  .swatch-name {
+    font-size: 12px;
+    font-weight: 500;
+    color: #e4e4e7;
+    margin-bottom: 4px;
+  }
+  .swatch-hex {
+    font-size: 11px;
+    color: var(--muted);
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.04em;
+  }
+  .swatch-role {
+    font-size: 10px;
+    color: #52525b;
+    margin-top: 4px;
+  }
+
+  /* ── Typography ── */
+  .type-stack { display: flex; flex-direction: column; gap: 2px; }
+  .type-row {
+    display: flex;
+    align-items: baseline;
+    gap: 32px;
+    padding: 28px 32px;
+    background: var(--ink-soft);
+  }
+  .type-meta {
+    flex-shrink: 0;
+    width: 140px;
+  }
+  .type-meta-name { font-size: 11px; color: var(--muted); }
+  .type-meta-spec { font-size: 10px; color: #52525b; margin-top: 2px; }
+  .type-sample { color: #fff; }
+
+  /* ── Clear space ── */
+  .clearspace-wrap {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 60px;
+    background: var(--ink-soft);
+    position: relative;
+  }
+  .clearspace-inner {
+    position: relative;
+    display: inline-block;
+  }
+  .clearspace-box {
+    position: absolute;
+    inset: -32px;
+    border: 1px dashed #3f3f46;
+  }
+  .clearspace-arrow {
+    position: absolute;
+    font-size: 10px;
+    color: #52525b;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .clearspace-arrow.top    { top: -24px; left: 50%; transform: translateX(-50%); }
+  .clearspace-arrow.bottom { bottom: -24px; left: 50%; transform: translateX(-50%); }
+  .clearspace-arrow.left   { left: -48px; top: 50%; transform: translateY(-50%) rotate(-90deg); }
+  .clearspace-arrow.right  { right: -48px; top: 50%; transform: translateY(-50%) rotate(90deg); }
+
+  /* ── Usage rules ── */
+  .rules-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+  }
+  .rule-cell {
+    padding: 32px;
+    background: var(--ink-soft);
+  }
+  .rule-tag {
+    display: inline-block;
+    font-size: 9px;
+    font-weight: 700;
+    letter-spacing: 0.15em;
+    text-transform: uppercase;
+    padding: 3px 8px;
+    border-radius: 2px;
+    margin-bottom: 16px;
+  }
+  .rule-tag.do   { background: #14532d; color: #86efac; }
+  .rule-tag.dont { background: #450a0a; color: #fca5a5; }
+  .rule-title { font-size: 13px; font-weight: 500; color: #e4e4e7; margin-bottom: 6px; }
+  .rule-body  { font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+  /* ── Divider ── */
+  hr { border: none; border-top: 1px solid var(--hairline); margin: 0; }
+
+  /* ── Mockups ── */
+  .mockup-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+  }
+  .mockup-cell {
+    background: #111113;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    padding: 56px 40px;
+    gap: 20px;
+  }
+  .mockup-cell.light-bg { background: #e4e4e7; }
+  .mockup-cell.span2 { grid-column: span 2; }
+  .mockup-label {
+    font-size: 10px;
+    letter-spacing: 0.12em;
+    text-transform: uppercase;
+    color: #52525b;
+  }
+  .mockup-cell.light-bg .mockup-label { color: #a1a1aa; }
+</style>
+</head>
+<body>
+<div class="page">
+
+  <!-- Cover -->
+  <div class="cover">
+    <div class="cover-product">Soono · Brand Identity</div>
+    <h1>Brand <span>Guidelines</span></h1>
+    <div class="cover-sub">Logo usage, color palette, typography, and clear space rules for the Soono brand.</div>
+  </div>
+
+  <!-- ── 1. LOGO ── -->
+  <div class="section">
+    <div class="section-label">01 — Logo</div>
+    <h2>Logo Variants</h2>
+    <p class="desc">Three approved logo variants cover every surface. Never mix background and foreground colors across variants.</p>
+
+    <div class="logo-grid">
+
+      <!-- Brand teal on dark (primary) -->
+      <div class="logo-cell span2">
+        <svg width="480" height="136" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="lA" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#lA)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+          <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"   stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"    stroke="#36c8c8" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8" stroke="#36c8c8" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+          <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#36c8c8" stroke-width="2.6" stroke-linecap="round"/>
+          <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#36c8c8" stroke-width="1.4" stroke-linecap="round"/>
+          <circle cx="34" cy="34" r="2.6" stroke="#36c8c8" stroke-width="1.3" fill="#18181b"/>
+          <circle cx="34" cy="34" r="1"   fill="#36c8c8"/>
+          <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#36c8c8">Soono</text>
+        </svg>
+        <div class="cell-label">Primary — brand teal on dark · #36c8c8</div>
+      </div>
+
+      <!-- White on dark -->
+      <div class="logo-cell">
+        <svg width="320" height="92" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="lB" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="white" stop-opacity="0"/>
+              <stop offset="100%" stop-color="white" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#lB)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+          <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"   stroke="white" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"    stroke="white" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8" stroke="white" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+          <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="white" stroke-width="2.6" stroke-linecap="round"/>
+          <line x1="34" y1="34" x2="34"   y2="13.2" stroke="white" stroke-width="1.4" stroke-linecap="round"/>
+          <circle cx="34" cy="34" r="2.6" stroke="white" stroke-width="1.3" fill="#18181b"/>
+          <circle cx="34" cy="34" r="1"   fill="white"/>
+          <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="white">Soono</text>
+        </svg>
+        <div class="cell-label">Monochrome white — on dark</div>
+      </div>
+
+      <!-- Deep teal on light -->
+      <div class="logo-cell light">
+        <svg width="320" height="92" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="lC" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#0d9488" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#0d9488" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#lC)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+          <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"   stroke="#0d9488" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"    stroke="#0d9488" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8" stroke="#0d9488" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+          <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#0d9488" stroke-width="2.6" stroke-linecap="round"/>
+          <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#0d9488" stroke-width="1.4" stroke-linecap="round"/>
+          <circle cx="34" cy="34" r="2.6" stroke="#0d9488" stroke-width="1.3" fill="#f4f4f5"/>
+          <circle cx="34" cy="34" r="1"   fill="#0d9488"/>
+          <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#0d9488">Soono</text>
+        </svg>
+        <div class="cell-label">Monochrome deep teal — on light · #0d9488</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── 2. ICON ── -->
+  <div class="section">
+    <div class="section-label">02 — Icon mark</div>
+    <h2>Standalone Icon</h2>
+    <p class="desc">Use the icon mark alone only at sizes where the wordmark would become illegible — app icons, favicons, and small UI contexts.</p>
+
+    <div class="icon-row">
+
+      <!-- Brand teal on dark, large -->
+      <div class="icon-cell">
+        <svg width="80" height="80" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="iA" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#iA)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+          <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="#36c8c8" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="#36c8c8" stroke-width="2"   stroke-linecap="round" opacity="0.65"/>
+          <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round" opacity="0.4"/>
+          <line x1="50" y1="50" x2="32.7" y2="40" stroke="#36c8c8" stroke-width="4"   stroke-linecap="round"/>
+          <line x1="50" y1="50" x2="50"   y2="18" stroke="#36c8c8" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="50" cy="50" r="4"   stroke="#36c8c8" stroke-width="2" fill="#09090b"/>
+          <circle cx="50" cy="50" r="1.5" fill="#36c8c8"/>
+        </svg>
+        <div class="cell-label">Primary teal</div>
+        <div class="icon-size">80 × 80</div>
+      </div>
+
+      <!-- White on dark -->
+      <div class="icon-cell">
+        <svg width="80" height="80" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="iB" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="white" stop-opacity="0"/>
+              <stop offset="100%" stop-color="white" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#iB)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+          <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="white" stroke-width="2"   stroke-linecap="round" opacity="0.65"/>
+          <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="white" stroke-width="1.6" stroke-linecap="round" opacity="0.4"/>
+          <line x1="50" y1="50" x2="32.7" y2="40" stroke="white" stroke-width="4"   stroke-linecap="round"/>
+          <line x1="50" y1="50" x2="50"   y2="18" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="50" cy="50" r="4"   stroke="white" stroke-width="2" fill="#09090b"/>
+          <circle cx="50" cy="50" r="1.5" fill="white"/>
+        </svg>
+        <div class="cell-label">White</div>
+        <div class="icon-size">80 × 80</div>
+      </div>
+
+      <!-- App icon -->
+      <div class="icon-cell">
+        <svg width="80" height="80" viewBox="-10 -10 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="iC" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <rect x="-10" y="-10" width="120" height="120" rx="26" fill="#18181b"/>
+          <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#iC)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+          <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="#36c8c8" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="#36c8c8" stroke-width="2"   stroke-linecap="round" opacity="0.65"/>
+          <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round" opacity="0.4"/>
+          <line x1="50" y1="50" x2="32.7" y2="40" stroke="#36c8c8" stroke-width="4"   stroke-linecap="round"/>
+          <line x1="50" y1="50" x2="50"   y2="18" stroke="#36c8c8" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="50" cy="50" r="4"   stroke="#36c8c8" stroke-width="2" fill="#18181b"/>
+          <circle cx="50" cy="50" r="1.5" fill="#36c8c8"/>
+        </svg>
+        <div class="cell-label">App icon</div>
+        <div class="icon-size">80 × 80</div>
+      </div>
+
+      <!-- Deep teal on light -->
+      <div class="icon-cell light">
+        <svg width="80" height="80" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="iD" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#0d9488" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#0d9488" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#iD)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+          <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="#0d9488" stroke-width="2.5" stroke-linecap="round"/>
+          <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="#0d9488" stroke-width="2"   stroke-linecap="round" opacity="0.65"/>
+          <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="#0d9488" stroke-width="1.6" stroke-linecap="round" opacity="0.4"/>
+          <line x1="50" y1="50" x2="32.7" y2="40" stroke="#0d9488" stroke-width="4"   stroke-linecap="round"/>
+          <line x1="50" y1="50" x2="50"   y2="18" stroke="#0d9488" stroke-width="2.2" stroke-linecap="round"/>
+          <circle cx="50" cy="50" r="4"   stroke="#0d9488" stroke-width="2" fill="#f4f4f5"/>
+          <circle cx="50" cy="50" r="1.5" fill="#0d9488"/>
+        </svg>
+        <div class="cell-label">Deep teal on light</div>
+        <div class="icon-size">80 × 80</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── 3. COLOR ── -->
+  <div class="section">
+    <div class="section-label">03 — Color</div>
+    <h2>Palette</h2>
+    <p class="desc">Two teal values anchor the brand — one for dark surfaces, one for light. Backgrounds are near-black and near-white zinc.</p>
+
+    <div class="palette">
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#36c8c8"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Brand Teal</div>
+          <div class="swatch-hex">#36C8C8</div>
+          <div class="swatch-role">Primary on dark</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#0d9488"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Deep Teal</div>
+          <div class="swatch-hex">#0D9488</div>
+          <div class="swatch-role">Primary on light</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#09090b"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Ink</div>
+          <div class="swatch-hex">#09090B</div>
+          <div class="swatch-role">Dark background</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#18181b; border-top: 1px solid #27272a;"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Ink Soft</div>
+          <div class="swatch-hex">#18181B</div>
+          <div class="swatch-role">Cards on dark</div>
+        </div>
+      </div>
+
+      <div class="swatch">
+        <div class="swatch-color" style="background:#f4f4f5"></div>
+        <div class="swatch-info">
+          <div class="swatch-name">Surface</div>
+          <div class="swatch-hex">#F4F4F5</div>
+          <div class="swatch-role">Light background</div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── 4. TYPOGRAPHY ── -->
+  <div class="section">
+    <div class="section-label">04 — Typography</div>
+    <h2>Type Scale</h2>
+    <p class="desc">Inter is the sole typeface. The wordmark uses weight 500 (Medium). UI follows a simple three-level scale.</p>
+
+    <div class="type-stack">
+
+      <div class="type-row">
+        <div class="type-meta">
+          <div class="type-meta-name">Wordmark</div>
+          <div class="type-meta-spec">Inter 500 · 40px · −1.2 ls</div>
+        </div>
+        <div class="type-sample" style="font-size:40px; font-weight:500; letter-spacing:-1.2px;">Soono</div>
+      </div>
+
+      <div class="type-row">
+        <div class="type-meta">
+          <div class="type-meta-name">Heading</div>
+          <div class="type-meta-spec">Inter 500 · 22px · −0.3 ls</div>
+        </div>
+        <div class="type-sample" style="font-size:22px; font-weight:500; letter-spacing:-0.3px;">Radio automation, reimagined.</div>
+      </div>
+
+      <div class="type-row">
+        <div class="type-meta">
+          <div class="type-meta-name">Body</div>
+          <div class="type-meta-spec">Inter 400 · 14px · 0 ls</div>
+        </div>
+        <div class="type-sample" style="font-size:14px; font-weight:400; color:#a1a1aa;">Soono is an all-in-one broadcast automation platform for station operators.</div>
+      </div>
+
+      <div class="type-row">
+        <div class="type-meta">
+          <div class="type-meta-name">Label / Cap</div>
+          <div class="type-meta-spec">Inter 600 · 10px · +0.18 ls · uppercase</div>
+        </div>
+        <div class="type-sample" style="font-size:10px; font-weight:600; letter-spacing:0.18em; text-transform:uppercase; color:#36c8c8;">Section label</div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ── 5. CLEAR SPACE ── -->
+  <div class="section">
+    <div class="section-label">05 — Clear space</div>
+    <h2>Minimum Clear Space</h2>
+    <p class="desc">Always maintain a clear zone equal to the height of the icon (≈ 68px at full size) on all four sides. Scale proportionally at smaller sizes.</p>
+
+    <div class="clearspace-wrap">
+      <div class="clearspace-inner">
+        <div class="clearspace-box"></div>
+        <div class="clearspace-arrow top">1× icon height</div>
+        <div class="clearspace-arrow bottom">1× icon height</div>
+        <div class="clearspace-arrow left">1×</div>
+        <div class="clearspace-arrow right">1×</div>
+        <svg width="320" height="92" viewBox="0 0 240 68" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="cs" x1="34" y1="60" x2="45.8" y2="10.8" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#cs)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+          <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"   stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round"/>
+          <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"    stroke="#36c8c8" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+          <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8" stroke="#36c8c8" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+          <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#36c8c8" stroke-width="2.6" stroke-linecap="round"/>
+          <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#36c8c8" stroke-width="1.4" stroke-linecap="round"/>
+          <circle cx="34" cy="34" r="2.6" stroke="#36c8c8" stroke-width="1.3" fill="#18181b"/>
+          <circle cx="34" cy="34" r="1"   fill="#36c8c8"/>
+          <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#36c8c8">Soono</text>
+        </svg>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 6. USAGE RULES ── -->
+  <div class="section">
+    <div class="section-label">06 — Usage</div>
+    <h2>Dos &amp; Don'ts</h2>
+    <p class="desc">These rules protect legibility and brand consistency across all placements.</p>
+
+    <div class="rules-grid">
+
+      <div class="rule-cell">
+        <div class="rule-tag do">Do</div>
+        <div class="rule-title">Use approved variants only</div>
+        <div class="rule-body">Brand teal on dark, white on dark, deep teal on light. No other color combinations.</div>
+      </div>
+
+      <div class="rule-cell">
+        <div class="rule-tag dont">Don't</div>
+        <div class="rule-title">Don't place on busy backgrounds</div>
+        <div class="rule-body">The haze gradient requires a flat, dark or light background to read correctly. Avoid photos, gradients, or patterns.</div>
+      </div>
+
+      <div class="rule-cell">
+        <div class="rule-tag do">Do</div>
+        <div class="rule-title">Scale uniformly</div>
+        <div class="rule-body">Always scale both the icon and wordmark together as a unit. The icon-to-text ratio is fixed.</div>
+      </div>
+
+      <div class="rule-cell">
+        <div class="rule-tag dont">Don't</div>
+        <div class="rule-title">Don't recolor the icon independently</div>
+        <div class="rule-body">Never apply a different color to the icon while keeping the wordmark in another color — both must use the same value.</div>
+      </div>
+
+      <div class="rule-cell">
+        <div class="rule-tag do">Do</div>
+        <div class="rule-title">Use the icon alone at small sizes</div>
+        <div class="rule-body">Below 120px wide, drop the wordmark and use the icon mark only (favicons, app icons, avatar thumbnails).</div>
+      </div>
+
+      <div class="rule-cell">
+        <div class="rule-tag dont">Don't</div>
+        <div class="rule-title">Don't stretch, rotate, or add effects</div>
+        <div class="rule-body">No drop shadows, outlines, gradients applied to the logo, rotation, or non-uniform scaling.</div>
+      </div>
+
+    </div>
+  </div>
+
+
+  <!-- ── 7. IN USE ── -->
+  <div class="section">
+    <div class="section-label">07 — In use</div>
+    <h2>Brand Mockups</h2>
+    <p class="desc">How the logo and mark appear on physical and digital surfaces.</p>
+
+    <div class="mockup-grid">
+
+      <!-- Business card front (dark) -->
+      <div class="mockup-cell">
+        <svg width="340" height="192" viewBox="0 0 340 192" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <!-- card body -->
+          <rect width="340" height="192" rx="10" fill="#09090b"/>
+          <rect x="0.5" y="0.5" width="339" height="191" rx="9.5" stroke="#27272a"/>
+          <!-- subtle teal glow bottom-left -->
+          <radialGradient id="glow1" cx="0" cy="1" r="1">
+            <stop offset="0%" stop-color="#36c8c8" stop-opacity="0.12"/>
+            <stop offset="100%" stop-color="#36c8c8" stop-opacity="0"/>
+          </radialGradient>
+          <rect width="340" height="192" rx="10" fill="url(#glow1)"/>
+          <!-- logo top-left -->
+          <defs>
+            <linearGradient id="bc1" x1="34" y1="27.6" x2="40.7" y2="3.8" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <g transform="translate(28, 28) scale(0.46)">
+            <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#bc1)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+            <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"   stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"    stroke="#36c8c8" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+            <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8" stroke="#36c8c8" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+            <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#36c8c8" stroke-width="2.6" stroke-linecap="round"/>
+            <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#36c8c8" stroke-width="1.4" stroke-linecap="round"/>
+            <circle cx="34" cy="34" r="2.6" stroke="#36c8c8" stroke-width="1.3" fill="#09090b"/>
+            <circle cx="34" cy="34" r="1"   fill="#36c8c8"/>
+            <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#36c8c8">Soono</text>
+          </g>
+          <!-- contact info bottom -->
+          <text x="28" y="133" font-family="Inter, sans-serif" font-weight="500" font-size="13" fill="#e4e4e7">Alex Rivera</text>
+          <text x="28" y="151" font-family="Inter, sans-serif" font-weight="400" font-size="10.5" fill="#71717a">Head of Broadcasting</text>
+          <text x="28" y="172" font-family="Inter, sans-serif" font-weight="400" font-size="10" fill="#52525b">alex@soono.fm  ·  soono.fm</text>
+        </svg>
+        <div class="mockup-label">Business card — front</div>
+      </div>
+
+      <!-- Business card back (dark, icon centered) -->
+      <div class="mockup-cell">
+        <svg width="340" height="192" viewBox="0 0 340 192" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <rect width="340" height="192" rx="10" fill="#0d1a1a"/>
+          <rect x="0.5" y="0.5" width="339" height="191" rx="9.5" stroke="#1a3333"/>
+          <!-- large faint icon watermark -->
+          <defs>
+            <linearGradient id="bc2wm" x1="170" y1="252" x2="221" y2="52" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.06"/>
+            </linearGradient>
+            <linearGradient id="bc2" x1="170" y1="252" x2="221" y2="52" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.88"/>
+            </linearGradient>
+          </defs>
+          <!-- faint large bg icon -->
+          <g transform="translate(170,96) scale(2.2) translate(-50,-50)" opacity="0.07">
+            <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="#36c8c8" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+            <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="#36c8c8" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="#36c8c8" stroke-width="2"   stroke-linecap="round"/>
+            <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round"/>
+            <line x1="50" y1="50" x2="32.7" y2="40" stroke="#36c8c8" stroke-width="4"   stroke-linecap="round"/>
+            <line x1="50" y1="50" x2="50"   y2="18" stroke="#36c8c8" stroke-width="2.2" stroke-linecap="round"/>
+            <circle cx="50" cy="50" r="4"   stroke="#36c8c8" stroke-width="2" fill="none"/>
+            <circle cx="50" cy="50" r="1.5" fill="#36c8c8"/>
+          </g>
+          <!-- centered icon -->
+          <g transform="translate(170,96) scale(0.7) translate(-50,-50)">
+            <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#bc2)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+            <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="#36c8c8" stroke-width="2.5" stroke-linecap="round"/>
+            <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="#36c8c8" stroke-width="2"   stroke-linecap="round" opacity="0.65"/>
+            <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round" opacity="0.4"/>
+            <line x1="50" y1="50" x2="32.7" y2="40" stroke="#36c8c8" stroke-width="4"   stroke-linecap="round"/>
+            <line x1="50" y1="50" x2="50"   y2="18" stroke="#36c8c8" stroke-width="2.2" stroke-linecap="round"/>
+            <circle cx="50" cy="50" r="4"   stroke="#36c8c8" stroke-width="2" fill="#0d1a1a"/>
+            <circle cx="50" cy="50" r="1.5" fill="#36c8c8"/>
+          </g>
+        </svg>
+        <div class="mockup-label">Business card — back</div>
+      </div>
+
+      <!-- Seamless pattern swatch -->
+      <div class="mockup-cell span2" style="padding: 0; overflow: hidden; min-height: 320px; position: relative;">
+        <svg width="100%" height="320" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <!-- single tile: 110×110, icon centered at 55,55, r=36 -->
+            <pattern id="soono-pattern" x="0" y="0" width="110" height="110" patternUnits="userSpaceOnUse">
+
+              <!-- primary icon, full size -->
+              <g transform="translate(55,55) scale(0.9) translate(-50,-50)">
+                <linearGradient id="ph1" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+                  <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.55"/>
+                </linearGradient>
+                <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#ph1)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+                <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="#36c8c8" stroke-width="2.5" stroke-linecap="round" opacity="0.55"/>
+                <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="#36c8c8" stroke-width="2"   stroke-linecap="round" opacity="0.35"/>
+                <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round" opacity="0.2"/>
+                <line x1="50" y1="50" x2="32.7" y2="40" stroke="#36c8c8" stroke-width="4"   stroke-linecap="round" opacity="0.55"/>
+                <line x1="50" y1="50" x2="50"   y2="18" stroke="#36c8c8" stroke-width="2.2" stroke-linecap="round" opacity="0.55"/>
+                <circle cx="50" cy="50" r="4"   stroke="#36c8c8" stroke-width="2" fill="#09090b" opacity="0.55"/>
+                <circle cx="50" cy="50" r="1.5" fill="#36c8c8" opacity="0.55"/>
+              </g>
+
+            </pattern>
+
+            <!-- offset pattern: shifted half tile for brick-like offset -->
+            <pattern id="soono-pattern-offset" x="55" y="55" width="110" height="110" patternUnits="userSpaceOnUse">
+              <g transform="translate(55,55) scale(0.9) translate(-50,-50)">
+                <linearGradient id="ph2" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+                  <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+                  <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.22"/>
+                </linearGradient>
+                <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#ph2)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+                <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="#36c8c8" stroke-width="2.5" stroke-linecap="round" opacity="0.22"/>
+                <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="#36c8c8" stroke-width="2"   stroke-linecap="round" opacity="0.14"/>
+                <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round" opacity="0.08"/>
+                <line x1="50" y1="50" x2="32.7" y2="40" stroke="#36c8c8" stroke-width="4"   stroke-linecap="round" opacity="0.22"/>
+                <line x1="50" y1="50" x2="50"   y2="18" stroke="#36c8c8" stroke-width="2.2" stroke-linecap="round" opacity="0.22"/>
+                <circle cx="50" cy="50" r="4"   stroke="#36c8c8" stroke-width="2" fill="#09090b" opacity="0.22"/>
+                <circle cx="50" cy="50" r="1.5" fill="#36c8c8" opacity="0.22"/>
+              </g>
+            </pattern>
+          </defs>
+          <rect width="100%" height="320" fill="#09090b"/>
+          <!-- offset ghost layer first -->
+          <rect width="100%" height="320" fill="url(#soono-pattern-offset)"/>
+          <!-- primary layer on top -->
+          <rect width="100%" height="320" fill="url(#soono-pattern)"/>
+          <!-- subtle vignette overlay -->
+          <radialGradient id="vignette" cx="50%" cy="50%" r="70%">
+            <stop offset="0%"   stop-color="#09090b" stop-opacity="0"/>
+            <stop offset="100%" stop-color="#09090b" stop-opacity="0.55"/>
+          </radialGradient>
+          <rect width="100%" height="320" fill="url(#vignette)"/>
+        </svg>
+        <div class="mockup-label" style="position:absolute; bottom:20px; left:50%; transform:translateX(-50%);">Seamless icon pattern</div>
+      </div>
+
+      <!-- Mug -->
+      <div class="mockup-cell span2">
+        <svg width="320" height="260" viewBox="0 0 320 260" fill="none" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <!-- mug body gradient (left dark, center lit, right shadow) -->
+            <linearGradient id="mugBody" x1="60" y1="0" x2="260" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#1c1c1e"/>
+              <stop offset="30%"  stop-color="#2a2a2d"/>
+              <stop offset="60%"  stop-color="#232325"/>
+              <stop offset="100%" stop-color="#141415"/>
+            </linearGradient>
+            <!-- rim gradient -->
+            <linearGradient id="mugRim" x1="60" y1="0" x2="260" y2="0" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#2a2a2d"/>
+              <stop offset="50%"  stop-color="#3f3f42"/>
+              <stop offset="100%" stop-color="#1c1c1e"/>
+            </linearGradient>
+            <!-- handle gradient -->
+            <linearGradient id="mugHandle" x1="250" y1="80" x2="290" y2="180" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#2e2e31"/>
+              <stop offset="100%" stop-color="#141415"/>
+            </linearGradient>
+            <!-- logo on mug -->
+            <linearGradient id="mugLogo" x1="148" y1="175" x2="160" y2="108" gradientUnits="userSpaceOnUse">
+              <stop offset="0%"   stop-color="#36c8c8" stop-opacity="0"/>
+              <stop offset="100%" stop-color="#36c8c8" stop-opacity="0.88"/>
+            </linearGradient>
+            <!-- bottom ellipse shadow -->
+            <radialGradient id="mugShadow" cx="0.5" cy="0.5" r="0.5">
+              <stop offset="0%"   stop-color="#000" stop-opacity="0.5"/>
+              <stop offset="100%" stop-color="#000" stop-opacity="0"/>
+            </radialGradient>
+          </defs>
+
+          <!-- drop shadow -->
+          <ellipse cx="162" cy="248" rx="88" ry="10" fill="url(#mugShadow)"/>
+
+          <!-- mug body -->
+          <path d="M 68,52 Q 65,238 75,242 L 248,242 Q 258,238 255,52 Z"
+            fill="url(#mugBody)"/>
+
+          <!-- handle -->
+          <path d="M 248,100 Q 295,100 295,140 Q 295,185 248,185"
+            stroke="url(#mugHandle)" stroke-width="16" fill="none" stroke-linecap="round"/>
+          <!-- handle inner highlight -->
+          <path d="M 248,108 Q 282,108 282,140 Q 282,175 248,177"
+            stroke="#2e2e31" stroke-width="5" fill="none" stroke-linecap="round" opacity="0.6"/>
+
+          <!-- rim top ellipse -->
+          <ellipse cx="161" cy="52" rx="93" ry="14" fill="url(#mugRim)"/>
+          <!-- rim inner dark -->
+          <ellipse cx="161" cy="52" rx="80" ry="10" fill="#111113"/>
+          <!-- coffee surface -->
+          <ellipse cx="161" cy="52" rx="78" ry="9" fill="#1a0f08"/>
+          <!-- coffee sheen -->
+          <ellipse cx="148" cy="50" rx="22" ry="4" fill="#2a1a10" opacity="0.6"/>
+
+          <!-- bottom rim -->
+          <ellipse cx="161" cy="242" rx="87" ry="8" fill="#1a1a1c"/>
+
+          <!-- left edge highlight -->
+          <path d="M 68,70 Q 67,180 70,230" stroke="#3a3a3d" stroke-width="1.5" fill="none" opacity="0.6"/>
+          <!-- right edge shadow -->
+          <path d="M 252,70 Q 253,180 250,230" stroke="#0a0a0b" stroke-width="2" fill="none" opacity="0.8"/>
+
+          <!-- logo on mug face -->
+          <g transform="translate(161,142) scale(0.52) translate(-114,-34)">
+            <path d="M 34,60 A 26,26 0 1,1 45.8,10.8" stroke="url(#mugLogo)" stroke-width="3.6" stroke-linecap="butt" fill="none"/>
+            <path d="M 38.85,27.1 A 8.45,8.45 0 0,1 38.85,40.9"   stroke="#36c8c8" stroke-width="1.6" stroke-linecap="round"/>
+            <path d="M 43.7,20.2  A 16.9,16.9 0 0,1 43.7,47.8"    stroke="#36c8c8" stroke-width="1.3" stroke-linecap="round" opacity="0.65"/>
+            <path d="M 48.55,13.2 A 25.35,25.35 0 0,1 48.55,54.8" stroke="#36c8c8" stroke-width="1.0" stroke-linecap="round" opacity="0.4"/>
+            <line x1="34" y1="34" x2="22.7" y2="27.5" stroke="#36c8c8" stroke-width="2.6" stroke-linecap="round"/>
+            <line x1="34" y1="34" x2="34"   y2="13.2" stroke="#36c8c8" stroke-width="1.4" stroke-linecap="round"/>
+            <circle cx="34" cy="34" r="2.6" stroke="#36c8c8" stroke-width="1.3" fill="#232325"/>
+            <circle cx="34" cy="34" r="1"   fill="#36c8c8"/>
+            <text x="74" y="48" font-family="Inter, sans-serif" font-weight="500" font-size="40" letter-spacing="-1.2" fill="#36c8c8">Soono</text>
+          </g>
+        </svg>
+        <div class="mockup-label">Branded mug</div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+</body>
+</html>

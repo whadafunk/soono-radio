@@ -1,6 +1,6 @@
 import { UseFormRegister, useWatch, Control, Controller } from 'react-hook-form';
 import { useQuery } from '@tanstack/react-query';
-import { LiquidsoapConfig } from '@radio/shared';
+import { LiquidsoapConfig } from '@soono/shared';
 import { fetchPlaylists } from '../../../api';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
@@ -38,7 +38,7 @@ export function SilenceDetectionSection({ register, control }: Props) {
             max={60}
             step={1}
             {...register('silence_detection.threshold_seconds', { valueAsNumber: true })}
-            className="w-full accent-indigo-500"
+            className="w-full accent-brand-500"
           />
           <div className="flex justify-between text-xs text-zinc-600 mt-1">
             <span>1 s</span>
@@ -52,7 +52,7 @@ export function SilenceDetectionSection({ register, control }: Props) {
           </label>
           <select
             {...register('silence_detection.fallback')}
-            className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-brand-500"
           >
             <option value="none" className="bg-zinc-900">None — accept silence</option>
             <option value="playlist" className="bg-zinc-900">Switch to playlist</option>
@@ -71,7 +71,7 @@ export function SilenceDetectionSection({ register, control }: Props) {
                 <select
                   value={field.value ?? ''}
                   onChange={(e) => field.onChange(e.target.value === '' ? null : Number(e.target.value))}
-                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-indigo-500"
+                  className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-zinc-300 cursor-pointer focus:outline-none focus:border-brand-500"
                 >
                   <option value="" className="bg-zinc-900">— select a playlist —</option>
                   {playlists.map((p) => (

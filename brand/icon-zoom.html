@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #09090b;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 80px;
+  }
+  .variant { display: flex; flex-direction: column; align-items: center; gap: 16px; }
+  .label { color: #52525b; font-size: 11px; letter-spacing: 0.1em; text-transform: uppercase; font-family: sans-serif; }
+</style>
+</head>
+<body>
+
+  <!-- A: Uniform width (previous) -->
+  <div class="variant">
+  <svg width="280" height="280" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="hazeA" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="white" stop-opacity="0"/>
+        <stop offset="100%" stop-color="white" stop-opacity="0.88"/>
+      </linearGradient>
+    </defs>
+    <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#hazeA)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+    <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="white" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="white" stroke-width="2" stroke-linecap="round" opacity="0.65"/>
+    <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="white" stroke-width="1.6" stroke-linecap="round" opacity="0.4"/>
+    <line x1="50" y1="50" x2="32.7" y2="40" stroke="white" stroke-width="4" stroke-linecap="round"/>
+    <line x1="50" y1="50" x2="50" y2="18" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="50" cy="50" r="4" stroke="white" stroke-width="2" fill="#09090b"/>
+    <circle cx="50" cy="50" r="1.5" fill="white"/>
+  </svg>
+  <div class="label">Uniform ripples</div>
+  </div>
+
+  <!-- B: Growing width (current) -->
+  <div class="variant">
+  <svg width="280" height="280" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <linearGradient id="hazeB" x1="50" y1="90" x2="68.15" y2="14.35" gradientUnits="userSpaceOnUse">
+        <stop offset="0%" stop-color="white" stop-opacity="0"/>
+        <stop offset="100%" stop-color="white" stop-opacity="0.88"/>
+      </linearGradient>
+    </defs>
+    <path d="M 50,90 A 40,40 0 1,1 68.15,14.35" stroke="url(#hazeB)" stroke-width="5.5" stroke-linecap="butt" fill="none"/>
+    <path d="M 57.5,39.3 A 13,13 0 0,1 57.5,60.7" stroke="white" stroke-width="2" stroke-linecap="round"/>
+    <path d="M 64.9,28.7 A 26,26 0 0,1 64.9,71.3" stroke="white" stroke-width="3.5" stroke-linecap="round" opacity="0.65"/>
+    <path d="M 72.4,18.1 A 39,39 0 0,1 72.4,81.9" stroke="white" stroke-width="5.5" stroke-linecap="round" opacity="0.4"/>
+    <line x1="50" y1="50" x2="32.7" y2="40" stroke="white" stroke-width="4" stroke-linecap="round"/>
+    <line x1="50" y1="50" x2="50" y2="18" stroke="white" stroke-width="2.2" stroke-linecap="round"/>
+    <circle cx="50" cy="50" r="4" stroke="white" stroke-width="2" fill="#09090b"/>
+    <circle cx="50" cy="50" r="1.5" fill="white"/>
+  </svg>
+  <div class="label">Growing ripples</div>
+  </div>
+
+</body>
+</html>

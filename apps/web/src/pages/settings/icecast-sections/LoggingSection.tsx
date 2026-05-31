@@ -1,5 +1,5 @@
 import { UseFormRegister } from 'react-hook-form';
-import { IcecastConfig } from '@radio/shared';
+import { IcecastConfig } from '@soono/shared';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
 interface Props {
@@ -14,7 +14,7 @@ export function LoggingSection({ register }: Props) {
           <label className="block text-sm font-medium text-zinc-300 mb-2">Log Level</label>
           <select
             {...register('logging.loglevel')}
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
           >
             <option value="debug">Debug</option>
             <option value="info">Info</option>
@@ -29,7 +29,7 @@ export function LoggingSection({ register }: Props) {
           <input
             {...register('logging.logsize', { valueAsNumber: true })}
             type="number"
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             placeholder="Leave empty for no limit"
           />
         </div>
@@ -37,7 +37,7 @@ export function LoggingSection({ register }: Props) {
           <label className="block text-sm font-medium text-zinc-300 mb-2">Access Log Path</label>
           <input
             {...register('logging.access_log')}
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500 opacity-75 cursor-not-allowed"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500 opacity-75 cursor-not-allowed"
             disabled
           />
           <p className="text-zinc-500 text-xs mt-1">Display only</p>
@@ -46,7 +46,7 @@ export function LoggingSection({ register }: Props) {
           <label className="block text-sm font-medium text-zinc-300 mb-2">Error Log Path</label>
           <input
             {...register('logging.error_log')}
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-indigo-500 opacity-75 cursor-not-allowed"
+            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500 opacity-75 cursor-not-allowed"
             disabled
           />
           <p className="text-zinc-500 text-xs mt-1">Display only</p>
