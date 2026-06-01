@@ -14,7 +14,7 @@ export function BasicSettingsSection({ register, errors }: Props) {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-            Hostname
+            Hostname <span className="text-red-400 ml-0.5">*</span>
             <HelpTooltip text="The domain or IP address where listeners connect. Used for YP directory and stream information." />
           </label>
           <input
@@ -39,7 +39,7 @@ export function BasicSettingsSection({ register, errors }: Props) {
         </div>
         <div>
           <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-            Admin Email
+            Admin Email <span className="text-red-400 ml-0.5">*</span>
             <HelpTooltip text="Contact email for server notifications and administrative purposes." />
           </label>
           <input

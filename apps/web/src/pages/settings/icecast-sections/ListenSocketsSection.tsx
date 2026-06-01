@@ -39,7 +39,7 @@ export function ListenSocketsSection({ control, register }: Props) {
               <div className="flex-1 grid grid-cols-2 gap-3">
                 <div>
                   <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-                    Port
+                    Port <span className="text-red-400 ml-0.5">*</span>
                     <HelpTooltip text="TCP port to listen on. Defaults: 8000 HTTP, 8443 HTTPS." />
                   </label>
                   <input

@@ -17,7 +17,7 @@ export function GlobalSecuritySection({ control, register, certsData }: Props) {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-            Source Password
+            Source Password <span className="text-red-400 ml-0.5">*</span>
             <HelpTooltip text="Password broadcasters (e.g., BUTT client) use to stream audio to Icecast. This is the authentication for source connections." />
           </label>
           <Controller
@@ -34,7 +34,7 @@ export function GlobalSecuritySection({ control, register, certsData }: Props) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-              Admin Username
+              Admin Username <span className="text-red-400 ml-0.5">*</span>
               <HelpTooltip text="Username for accessing the Icecast web admin panel." />
             </label>
             <input
@@ -44,7 +44,7 @@ export function GlobalSecuritySection({ control, register, certsData }: Props) {
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-              Admin Password
+              Admin Password <span className="text-red-400 ml-0.5">*</span>
               <HelpTooltip text="Password for accessing the Icecast web admin panel." />
             </label>
             <Controller

@@ -18,7 +18,7 @@ export function RelaySection({ control, register }: Props) {
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-            Relay Password
+            Relay Password <span className="text-red-400 ml-0.5">*</span>
             <HelpTooltip text="Password this server uses to authenticate when pulling a stream from a remote Icecast relay master." />
           </label>
           <Controller

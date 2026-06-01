@@ -17,8 +17,8 @@ export function MountPointsSection({ register }: Props) {
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-1 flex items-center">
-              Mount Name
-              <HelpTooltip text="URL path for the stream, e.g. /stream, /radio, /live" />
+              Mount Name <span className="text-red-400 ml-0.5">*</span>
+              <HelpTooltip text="URL path for the stream, e.g. /stream, /radio, /live. This is used by both listeners (to tune in) and the Mix Engine (to push audio) — changing it requires a Mix Engine restart to take effect." />
             </label>
             <input
               {...register('mount.name')}
