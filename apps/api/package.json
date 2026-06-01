@@ -1,5 +1,5 @@
 {
-  "name": "@radio/api",
+  "name": "@soono/api",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -15,9 +15,11 @@
     "@fastify/multipart": "^8.3.1",
     "@fastify/websocket": "^7.0.1",
     "@libsql/client": "^0.17.3",
-    "@radio/shared": "workspace:*",
+    "@soono/shared": "workspace:*",
     "drizzle-orm": "^0.45.2",
     "fastify": "^4.24.3",
+    "handlebars": "^4.7.9",
+    "pino": "^9.14.0",
     "xml2js": "^0.6.2",
     "zod": "^3.22.4"
   },
