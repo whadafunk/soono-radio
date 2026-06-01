@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { LiquidsoapConfigSchema } from '@radio/shared';
+import { LiquidsoapConfigSchema } from '@soono/shared';
 import {
   readLiquidsoapConfig,
   writeLiquidsoapConfig,
@@ -8,6 +8,7 @@ import {
   generateRadioLiq,
 } from '../services/liquidsoapConfig.js';
 import { fetchLiquidsoapStatus } from '../services/liquidsoapStatus.js';
+import { restartContainer } from '../services/dockerControl.js';
 
 export async function liquidsoapRoutes(fastify: FastifyInstance) {
   fastify.get('/liquidsoap/config', async (_request, reply) => {
@@ -55,10 +56,7 @@ export async function liquidsoapRoutes(fastify: FastifyInstance) {
 
   fastify.post('/liquidsoap/restart', async (_request, reply) => {
     try {
-      const { execFile } = await import('child_process');
-      const { promisify } = await import('util');
-      const execFilePromise = promisify(execFile);
-      await execFilePromise('docker', ['restart', 'radio-liquidsoap']);
+      await restartContainer('soono-liquidsoap');
       return reply.status(200).send({ success: true, message: 'Liquidsoap restarting...' });
     } catch (error) {
       return reply

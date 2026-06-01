@@ -1,0 +1,133 @@
+name: soono
+
+# ── Services ──────────────────────────────────────────────────────────────────
+#
+# Startup order enforced by depends_on:
+#   icecast       — no dependencies, starts immediately
+#   socket-proxy  — no dependencies, starts immediately
+#   api           — no dependencies, starts immediately; healthcheck passes once
+#                   HTTP is up and the LiquidSoap script has been generated
+#   web           — no dependencies (nginx serves static files independently)
+#   liquidsoap    — waits for api: service_healthy so the generated
+#                   mix-engine.liq exists before LS tries to load it
+#
+# Container restarts (Restart Icecast / Restart LiquidSoap buttons) go through
+# the socket-proxy service which exposes only POST /containers/*/restart on the
+# internal network. The Docker socket is never mounted into app containers.
+
+services:
+
+  # ── Docker socket proxy ──────────────────────────────────────────────────────
+  # Exposes a narrow slice of the Docker Engine API on the internal network.
+  # Only POST /containers/*/restart is permitted — no socket mount in app containers.
+  socket-proxy:
+    image: tecnativa/docker-socket-proxy
+    container_name: soono-socket-proxy
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      CONTAINERS: 1   # allow /containers/* endpoints
+      POST: 1         # allow POST (needed for restart)
+      # All other resource types (images, networks, volumes, etc.) default to 0.
+    networks:
+      - soono-net
+
+  # ── Icecast ─────────────────────────────────────────────────────────────────
+  icecast:
+    build:
+      context: icecast
+    container_name: soono-icecast
+    restart: unless-stopped
+    ports:
+      - "8000:8000"   # SSL (configured in icecast.xml)
+      - "8001:8001"   # Plain HTTP — LiquidSoap pushes audio here
+    volumes:
+      - ./icecast/icecast.xml:/etc/icecast2/icecast.xml:ro
+      - ./icecast/logs:/usr/local/icecast/logs
+      - ./data/certs:/etc/icecast2/certs:ro
+    networks:
+      - soono-net
+
+  # ── API + Supervisor ─────────────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    container_name: soono-api
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # LS networking — override the localhost defaults so the API can reach the
+      # liquidsoap container and embed the correct callback URL in the generated script.
+      LS_HARBOR_URL: http://liquidsoap:8005
+      LS_API_URL: http://api:3000
+      LS_MEDIA_DIR: /media
+
+      # CORS — add your production hostname here if needed (comma-separated).
+      CORS_ORIGINS: "http://localhost,http://localhost:80,http://localhost:5173,http://localhost:3000"
+
+      # Docker socket proxy — used by the Restart Icecast / Restart LiquidSoap endpoints.
+      DOCKER_PROXY_URL: http://socket-proxy:2375
+    volumes:
+      # Persistent data: SQLite DB, incoming ingest queue, config JSON files
+      - ./data:/data
+      # Audio library — shared read-write with ingest; read-only in liquidsoap
+      - ./media:/media
+      # Structured log files (api.log, supervisor.log)
+      - ./logs:/app/logs
+      # LiquidSoap config (supervisor.json) and generated script (mix-engine.liq).
+      # The API writes here; the liquidsoap service reads it (see below).
+      - ./liquidsoap:/liquidsoap
+      # Icecast config — API reads source-password and rewrites icecast.xml on settings save.
+      - ./icecast:/icecast
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3000/"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 30s
+    networks:
+      - soono-net
+
+  # ── Web (React SPA served by nginx) ─────────────────────────────────────────
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    container_name: soono-web
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    networks:
+      - soono-net
+
+  # ── LiquidSoap ───────────────────────────────────────────────────────────────
+  liquidsoap:
+    build:
+      context: liquidsoap
+    container_name: soono-liquidsoap
+    restart: unless-stopped
+    ports:
+      - "8005:8005"              # Harbor HTTP (track push, skip, queue, live-status)
+      - "127.0.0.1:1234:1234"   # Telnet control (loopback only)
+    volumes:
+      # Generated script — same host directory the API writes to, mounted read-only.
+      # The api healthcheck guarantees mix-engine.liq exists before LS starts.
+      - ./liquidsoap:/etc/liquidsoap:ro
+      # Audio library — read-only; paths embedded in annotated URIs by the supervisor
+      - ./media:/media:ro
+      - ./data/certs:/etc/icecast2/certs:ro
+    depends_on:
+      api:
+        condition: service_healthy   # ensures mix-engine.liq is generated
+      icecast:
+        condition: service_started
+    networks:
+      - soono-net
+
+# ── Networks ──────────────────────────────────────────────────────────────────
+networks:
+  soono-net:
+    driver: bridge

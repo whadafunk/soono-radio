@@ -1,7 +1,8 @@
 import { FastifyInstance } from 'fastify';
-import { IcecastConfigSchema } from '@radio/shared';
+import { IcecastConfigSchema } from '@soono/shared';
 import { readIcecastConfig, writeIcecastConfig } from '../services/icecastConfig.js';
 import { fetchAllMountStats, fetchIcecastStats, killIcecastSource } from '../services/icecastStats.js';
+import { restartContainer } from '../services/dockerControl.js';
 
 export async function icecastRoutes(fastify: FastifyInstance) {
   fastify.get<{ Reply: any }>('/icecast/config', async (request, reply) => {
@@ -80,13 +81,9 @@ export async function icecastRoutes(fastify: FastifyInstance) {
     },
   );
 
-  fastify.post<{ Reply: any }>('/icecast/restart', async (request, reply) => {
+  fastify.post<{ Reply: any }>('/icecast/restart', async (_request, reply) => {
     try {
-      const { execFile } = await import('child_process');
-      const { promisify } = await import('util');
-      const execFilePromise = promisify(execFile);
-
-      await execFilePromise('docker', ['restart', 'radio-icecast']);
+      await restartContainer('soono-icecast');
       return reply.status(200).send({ success: true, message: 'Icecast restarting...' });
     } catch (error) {
       return reply
