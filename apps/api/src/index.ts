@@ -33,7 +33,10 @@ import { supervisorState as supervisorStateTable } from './db/schema.js';
 import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
 import { ensureDirs } from './services/ingest/paths.js';
 import { loadIntegrationsConfig } from './services/integrations/config.js';
+import { generateRadioLiq, readLiquidsoapConfig, readRadioLiq } from './services/liquidsoapConfig.js';
+import { ensureIcecastConfig } from './services/icecastConfig.js';
 import { bus } from './services/supervisor2/bus.js';
+import { createSupervisorLogger } from './services/supervisor2/supervisorLogger.js';
 import { MusicProcess } from './services/supervisor2/processes/music.js';
 import { CampaignProcess } from './services/supervisor2/processes/campaign.js';
 import { BrandingProcess } from './services/supervisor2/processes/branding.js';
@@ -63,9 +66,11 @@ const fastify = Fastify({
 });
 
 fastify.register(helmet);
-fastify.register(cors, {
-  origin: ['http://localhost:3000', 'http://localhost:5173'],
-});
+const corsOrigins = (process.env.CORS_ORIGINS ?? 'http://localhost:3000,http://localhost:5173')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+fastify.register(cors, { origin: corsOrigins });
 fastify.register(multipart, {
   limits: {
     // Audio uploads need much more headroom than certs. A typical 5-minute
@@ -100,7 +105,7 @@ fastify.register(supervisorStatusRoutes);
 fastify.register(supervisorControlRoutes);
 
 fastify.get('/', async () => {
-  return { message: 'Radio API Server' };
+  return { message: 'Soono API' };
 });
 
 // Load .env from the repo root (written by start-liquidsoap.sh with
@@ -127,7 +132,19 @@ const start = async () => {
   try {
     await runMigrations();
     fastify.log.info('Database migrations applied');
+    await ensureIcecastConfig();
     await loadIntegrationsConfig();
+
+    // Ensure the LiquidSoap script exists before the LS container starts.
+    // In Docker Compose, liquidsoap depends on this service's healthcheck, so
+    // the script is guaranteed to exist before LS reads it.
+    try {
+      await readRadioLiq();
+    } catch {
+      const config = await readLiquidsoapConfig();
+      await generateRadioLiq(config);
+      fastify.log.info('Generated LiquidSoap script (first run)');
+    }
     await ensureDirs();
     const recovered = await recoverInterruptedJobs();
     if (recovered > 0) {
@@ -147,15 +164,19 @@ const start = async () => {
       .values({ id: 1, current_drift_seconds: 0, paused: false })
       .onConflictDoNothing();
 
+    // Create a dedicated supervisor logger — writes to logs/supervisor.log so
+    // supervisor events are separated from HTTP noise in logs/api.log.
+    const supervisorLog = createSupervisorLogger(LOG_DIR);
+
     // Instantiate and start all seven Supervisor V2 processes (Level 1 — all
     // share this Node.js process, communicating exclusively via the bus).
-    const musicProcess = new MusicProcess(bus, db);
-    const campaignProcess = new CampaignProcess(bus, db);
-    const brandingProcess = new BrandingProcess(bus, db);
+    const musicProcess = new MusicProcess(bus, db, supervisorLog);
+    const campaignProcess = new CampaignProcess(bus, db, supervisorLog);
+    const brandingProcess = new BrandingProcess(bus, db, supervisorLog);
     const rundownProcess = new RundownProcess(bus, db);
-    const plannerProcess = new PlannerProcess(bus, db, fastify.log);
-    const queueFeederProcess = new QueueFeederProcess(bus, db, fastify.log);
-    const supervisorProcess = new SupervisorProcess(bus, db, fastify.log);
+    const plannerProcess = new PlannerProcess(bus, db, supervisorLog);
+    const queueFeederProcess = new QueueFeederProcess(bus, db, supervisorLog);
+    const supervisorProcess = new SupervisorProcess(bus, db, supervisorLog);
 
     const supervisorProcesses = [
       musicProcess,

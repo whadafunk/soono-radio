@@ -1,9 +1,18 @@
 import { parseStringPromise, Builder } from 'xml2js';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, copyFile, access } from 'fs/promises';
 import { join } from 'path';
-import { IcecastConfig, IcecastConfigSchema } from '@radio/shared';
+import { IcecastConfig, IcecastConfigSchema } from '@soono/shared';
 
 const CONFIG_PATH = process.env.ICECAST_CONFIG || join(process.cwd(), '..', '..', 'icecast', 'icecast.xml');
+const DEFAULT_PATH = process.env.ICECAST_CONFIG_DEFAULT || join(process.cwd(), '..', '..', 'icecast', 'icecast.xml.default');
+
+export async function ensureIcecastConfig(): Promise<void> {
+  try {
+    await access(CONFIG_PATH);
+  } catch {
+    await copyFile(DEFAULT_PATH, CONFIG_PATH);
+  }
+}
 
 const LOGLEVEL_TO_NUMBER: Record<string, number> = {
   'error': 1,
@@ -64,28 +73,22 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
   const adminPassword = auth?.['admin-password']?.[0] || 'hackme';
   const relayPassword = auth?.['relay-password']?.[0] || 'hackme';
 
-  // Parse all mount points
-  const mountsRaw = Array.isArray(icecast.mount) ? icecast.mount : [icecast.mount?.[0]];
-  const mounts = (mountsRaw || [])
-    .filter(Boolean)
-    .map((mount: any) => {
-      const bitrateRaw = mount.bitrate?.[0];
-      const publicRaw = mount.public?.[0];
-      return {
-        name: mount['mount-name']?.[0] || '/stream',
-        max_listeners: parseInt(mount['max-listeners']?.[0] || '-1', 10),
-        password: mount.password?.[0],
-        fallback_mount: mount['fallback-mount']?.[0],
-        shoutcast_mount: mount['shoutcast-mount']?.[0],
-        stream_name: mount['stream-name']?.[0],
-        stream_description: mount['stream-description']?.[0],
-        stream_url: mount['stream-url']?.[0],
-        genre: mount.genre?.[0],
-        bitrate: bitrateRaw ? parseInt(bitrateRaw, 10) : undefined,
-        type: mount.type?.[0],
-        public: publicRaw !== undefined ? publicRaw === '1' || publicRaw === 'true' : undefined,
-      };
-    });
+  // Parse the single mount point (Soono only supports one)
+  const mountRaw = Array.isArray(icecast.mount) ? icecast.mount[0] : icecast.mount?.[0];
+  const bitrateRaw = mountRaw?.bitrate?.[0];
+  const publicRaw = mountRaw?.public?.[0];
+  const mount = {
+    name: mountRaw?.['mount-name']?.[0] || '/stream',
+    max_listeners: parseInt(mountRaw?.['max-listeners']?.[0] || '-1', 10),
+    intro: mountRaw?.['intro']?.[0],
+    stream_name: mountRaw?.['stream-name']?.[0],
+    stream_description: mountRaw?.['stream-description']?.[0],
+    stream_url: mountRaw?.['stream-url']?.[0],
+    genre: mountRaw?.genre?.[0],
+    bitrate: bitrateRaw ? parseInt(bitrateRaw, 10) : undefined,
+    type: mountRaw?.type?.[0],
+    public: publicRaw !== undefined ? publicRaw === '1' || publicRaw === 'true' : undefined,
+  };
 
   // Parse logging block
   const logging = icecast.logging?.[0];
@@ -137,7 +140,7 @@ export async function readIcecastConfig(): Promise<IcecastConfig> {
       max_queue_size: parseInt(limits?.['queue-size']?.[0] || '524288', 10),
       burst_size: parseInt(limits?.['burst-size']?.[0] || '65536', 10),
     },
-    mounts: mounts.length > 0 ? mounts : [{ name: '/stream', max_listeners: -1 }],
+    mount,
     logging: {
       loglevel: logLevel,
       logsize: logging?.logsize?.[0] ? parseInt(logging.logsize[0], 10) : undefined,
@@ -177,20 +180,20 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
         ...(sock.ssl && { ssl: ['1'] }),
         ...(sock.shoutcast_compat && { 'shoutcast-compat': ['1'] }),
       })),
-      mount: config.mounts.map((mount) => ({
-        'mount-name': [mount.name],
-        'max-listeners': [mount.max_listeners.toString()],
-        ...(mount.password && { password: [mount.password] }),
-        ...(mount.fallback_mount && { 'fallback-mount': [mount.fallback_mount] }),
-        ...(mount.shoutcast_mount && { 'shoutcast-mount': [mount.shoutcast_mount] }),
-        ...(mount.stream_name && { 'stream-name': [mount.stream_name] }),
-        ...(mount.stream_description && { 'stream-description': [mount.stream_description] }),
-        ...(mount.stream_url && { 'stream-url': [mount.stream_url] }),
-        ...(mount.genre && { genre: [mount.genre] }),
-        ...(mount.bitrate !== undefined && { bitrate: [mount.bitrate.toString()] }),
-        ...(mount.type && { type: [mount.type] }),
-        ...(mount.public !== undefined && { public: [mount.public ? '1' : '0'] }),
-      })),
+      mount: [
+        {
+          'mount-name': [config.mount.name],
+          'max-listeners': [config.mount.max_listeners.toString()],
+          ...(config.mount.intro && { intro: [config.mount.intro] }),
+          ...(config.mount.stream_name && { 'stream-name': [config.mount.stream_name] }),
+          ...(config.mount.stream_description && { 'stream-description': [config.mount.stream_description] }),
+          ...(config.mount.stream_url && { 'stream-url': [config.mount.stream_url] }),
+          ...(config.mount.genre && { genre: [config.mount.genre] }),
+          ...(config.mount.bitrate !== undefined && { bitrate: [config.mount.bitrate.toString()] }),
+          ...(config.mount.type && { type: [config.mount.type] }),
+          ...(config.mount.public !== undefined && { public: [config.mount.public ? '1' : '0'] }),
+        },
+      ],
       paths: [
         {
           // Paths the Ubuntu/Debian icecast2 package expects. Hardcoded because

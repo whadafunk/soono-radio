@@ -12,9 +12,7 @@ export type ListenSocket = z.infer<typeof ListenSocketSchema>;
 export const MountPointSchema = z.object({
   name: z.string().regex(/^\/\S*$/, 'Mount name must start with /'),
   max_listeners: z.number().int().min(-1).default(-1),
-  password: z.string().optional(),
-  fallback_mount: z.string().regex(/^\/\S*$/).optional(),
-  shoutcast_mount: z.string().regex(/^\/\S*$/).optional(),
+  intro: z.string().optional(),
   stream_name: z.string().optional(),
   stream_description: z.string().optional(),
   stream_url: z.string().optional(),
@@ -30,7 +28,7 @@ export const IcecastConfigSchema = z.object({
   server: z.object({
     hostname: z.string().regex(/^[a-zA-Z0-9.\-]+$/, 'Must be a valid hostname or IP address'),
     location: z.string().default(''),
-    admin: z.string().email(),
+    admin: z.string().min(1),
   }),
   network: z.object({
     listen_sockets: z.array(ListenSocketSchema).min(1),
@@ -55,7 +53,7 @@ export const IcecastConfigSchema = z.object({
     max_queue_size: z.number().int().default(524288),
     burst_size: z.number().int().default(65536),
   }),
-  mounts: z.array(MountPointSchema).min(1),
+  mount: MountPointSchema,
   logging: z.object({
     loglevel: z.enum(['debug', 'info', 'warn', 'error']),
     logsize: z.number().int().optional(),

@@ -225,14 +225,6 @@ export function Dashboard() {
             <p className="text-xs text-zinc-500 mt-2">broadcasters</p>
           </div>
 
-          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
-            <p className="text-zinc-400 text-sm font-medium">Mount Points</p>
-            <p className="text-3xl font-bold text-white mt-2">
-              {configLoading ? '—' : config?.mounts.length ?? 1}
-            </p>
-            <p className="text-xs text-zinc-500 mt-2">configured</p>
-          </div>
-
           <a
             href={`http://${config?.server.hostname || 'localhost'}:${config?.network.listen_sockets?.[0]?.port || 8000}/admin/`}
             target="_blank"
@@ -248,42 +240,37 @@ export function Dashboard() {
         </div>
       </section>
 
-      {/* Mount Points Info */}
-      {config && config.mounts.length > 0 && (
+      {/* Mount Point Info */}
+      {config && (
         <section>
-          <h2 className="text-lg font-semibold text-white mb-4">Mount Points</h2>
-          <div className="grid grid-cols-1 gap-3">
-            {config.mounts.map((mount) => (
-              <div key={mount.name} className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
-                <div className="flex items-center justify-between gap-4">
-                  <div className="min-w-0">
-                    <p className="font-medium text-white">{mount.name}</p>
-                    <p className="text-xs text-zinc-500 mt-1">
-                      Max {mount.max_listeners === -1 ? 'unlimited' : mount.max_listeners} listeners
-                      {mount.fallback_mount && ` • Fallback: ${mount.fallback_mount}`}
-                    </p>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => handleKick(mount.name)}
-                    disabled={kickingMount === mount.name}
-                    title="Force-disconnect any source on this mount (workaround for the Icecast 2.4 SSL stale-source bug). Click twice to confirm."
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 ${
-                      armedMount === mount.name
-                        ? 'bg-red-600/20 border-red-600 text-red-300 hover:bg-red-600/30'
-                        : 'bg-zinc-800 hover:bg-red-900/30 border-zinc-700 hover:border-red-800 text-zinc-300 hover:text-red-300'
-                    }`}
-                  >
-                    {kickingMount === mount.name ? (
-                      <Loader className="w-3.5 h-3.5 animate-spin" />
-                    ) : (
-                      <Zap className="w-3.5 h-3.5" />
-                    )}
-                    {armedMount === mount.name ? 'Click again to kick' : 'Kick source'}
-                  </button>
-                </div>
+          <h2 className="text-lg font-semibold text-white mb-4">Mount Point</h2>
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
+            <div className="flex items-center justify-between gap-4">
+              <div className="min-w-0">
+                <p className="font-medium text-white">{config.mount.name}</p>
+                <p className="text-xs text-zinc-500 mt-1">
+                  Max {config.mount.max_listeners === -1 ? 'unlimited' : config.mount.max_listeners} listeners
+                </p>
               </div>
-            ))}
+              <button
+                type="button"
+                onClick={() => handleKick(config.mount.name)}
+                disabled={kickingMount === config.mount.name}
+                title="Force-disconnect any source on this mount (workaround for the Icecast 2.4 SSL stale-source bug). Click twice to confirm."
+                className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium border rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex-shrink-0 ${
+                  armedMount === config.mount.name
+                    ? 'bg-red-600/20 border-red-600 text-red-300 hover:bg-red-600/30'
+                    : 'bg-zinc-800 hover:bg-red-900/30 border-zinc-700 hover:border-red-800 text-zinc-300 hover:text-red-300'
+                }`}
+              >
+                {kickingMount === config.mount.name ? (
+                  <Loader className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Zap className="w-3.5 h-3.5" />
+                )}
+                {armedMount === config.mount.name ? 'Click again to kick' : 'Kick source'}
+              </button>
+            </div>
           </div>
         </section>
       )}
@@ -754,7 +741,6 @@ function RecentPlaysSection({ plays }: { plays: RecentPlay[] }) {
 }
 
 function MonitorPlayer({ config }: { config: IcecastConfig }) {
-  const [mountIdx, setMountIdx] = useState(0);
   const [playing, setPlaying] = useState(false);
   const [buffering, setBuffering] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -764,19 +750,7 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
   const socket = config.network.listen_sockets[0];
   const port = socket?.port ?? 8000;
   const proto = socket?.ssl ? 'https' : 'http';
-  const mount = config.mounts[mountIdx] ?? config.mounts[0];
-  const streamUrl = `${proto}://localhost:${port}${mount.name}`;
-
-  // Stop playback when mount changes
-  useEffect(() => {
-    const audio = audioRef.current;
-    if (!audio) return;
-    audio.pause();
-    audio.src = '';
-    setPlaying(false);
-    setBuffering(false);
-    setError(null);
-  }, [mountIdx]);
+  const streamUrl = `${proto}://localhost:${port}${config.mount.name}`;
 
   // Sync volume without restarting stream
   useEffect(() => {
@@ -839,19 +813,7 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
             <span className="text-xs font-medium text-zinc-300">Monitor</span>
             {playing && <span className="w-1.5 h-1.5 rounded-full bg-brand-400 animate-pulse" />}
           </div>
-          {config.mounts.length > 1 ? (
-            <select
-              value={mountIdx}
-              onChange={(e) => setMountIdx(Number(e.target.value))}
-              className="mt-0.5 text-xs text-zinc-500 bg-transparent border-none outline-none cursor-pointer"
-            >
-              {config.mounts.map((m, i) => (
-                <option key={m.name} value={i}>{m.name}</option>
-              ))}
-            </select>
-          ) : (
-            <p className="text-xs font-mono text-zinc-500 truncate">{mount.name}</p>
-          )}
+          <p className="text-xs font-mono text-zinc-500 truncate">{config.mount.name}</p>
         </div>
 
         {error && (

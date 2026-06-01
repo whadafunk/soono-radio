@@ -9,6 +9,7 @@ pnpm-lock.yaml
 .playwright-mcp/
 memory/
 *.png
+icecast/icecast.xml
 icecast/logs/
 data/certs/*.pem
 liquidsoap/supervisor.json

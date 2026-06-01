@@ -25,7 +25,7 @@ export function LimitsSection({ register }: Props) {
         <div>
           <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
             Max Clients
-            <HelpTooltip text="Maximum number of listeners across all mounts. Depends on your bandwidth." />
+            <HelpTooltip text="Maximum simultaneous listeners. Depends on your bandwidth — at 128 kbps, 100 listeners use ~13 Mbps upstream." />
           </label>
           <input
             {...register('limits.max_clients', { valueAsNumber: true })}

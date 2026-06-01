@@ -138,7 +138,7 @@ export function IcecastSettings() {
 
         <GlobalSecuritySection control={control} register={register} certsData={certsData} />
         <ListenSocketsSection control={control} register={register} />
-        <MountPointsSection control={control} register={register} />
+        <MountPointsSection register={register} />
 
         {showAdvanced && <RelaySection control={control} register={register} />}
         {showAdvanced && <LoggingSection register={register} />}
