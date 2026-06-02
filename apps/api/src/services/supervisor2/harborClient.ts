@@ -5,7 +5,7 @@
 
 import { readLiquidsoapConfig } from '../liquidsoapConfig.js';
 
-const BASE_URL = process.env.LS_HARBOR_URL ?? 'http://liquidsoap:8005';
+const BASE_URL = process.env.LS_HARBOR_URL ?? 'http://localhost:8005';
 
 async function authHeaders(): Promise<Record<string, string>> {
   const config = await readLiquidsoapConfig();

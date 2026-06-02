@@ -9,15 +9,22 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ENV_FILE="$REPO_ROOT/.env"
 
-# The media directory is mounted at /media inside the container.
-# Write LS_MEDIA_DIR=/media into the repo .env so the API generates
-# correct annotated URIs for LiquidSoap without needing a manual export.
-if grep -q "^LS_MEDIA_DIR=" "$ENV_FILE" 2>/dev/null; then
-  sed -i '' "s|^LS_MEDIA_DIR=.*|LS_MEDIA_DIR=/media|" "$ENV_FILE"
-else
-  echo "LS_MEDIA_DIR=/media" >> "$ENV_FILE"
-fi
-echo "Set LS_MEDIA_DIR=/media in .env"
+set_env() {
+  local key="$1" val="$2"
+  if grep -q "^${key}=" "$ENV_FILE" 2>/dev/null; then
+    sed -i '' "s|^${key}=.*|${key}=${val}|" "$ENV_FILE"
+  else
+    echo "${key}=${val}" >> "$ENV_FILE"
+  fi
+  echo "Set ${key}=${val} in .env"
+}
+
+# In dev mode LiquidSoap runs in Docker but the API runs on the host.
+# These override the compose defaults so the dev API generates the right values:
+#   LS_MEDIA_DIR — mount point inside the LS container
+#   LS_API_URL   — URL LiquidSoap uses to call back into the host API
+set_env LS_MEDIA_DIR /media
+set_env LS_API_URL http://host.docker.internal:3000
 
 echo "Building Liquidsoap image..."
 docker buildx build -t soono-liquidsoap:latest --load liquidsoap/
