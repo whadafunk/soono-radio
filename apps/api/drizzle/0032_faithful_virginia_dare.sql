@@ -41,10 +41,6 @@ ALTER TABLE `__new_clock_segments` RENAME TO `clock_segments`;--> statement-brea
 PRAGMA foreign_keys=ON;--> statement-breakpoint
 CREATE INDEX `clock_segments_clock_idx` ON `clock_segments` (`clock_id`);--> statement-breakpoint
 CREATE INDEX `clock_segments_sort_idx` ON `clock_segments` (`clock_id`,`sort_order`);--> statement-breakpoint
-ALTER TABLE `play_history` ADD `campaign_id` integer REFERENCES campaigns(id);--> statement-breakpoint
-ALTER TABLE `play_history` ADD `promo_id` integer REFERENCES promos(id);--> statement-breakpoint
-ALTER TABLE `play_history` ADD `clock_segment_id` integer REFERENCES clock_segments(id);--> statement-breakpoint
-ALTER TABLE `play_history` ADD `stop_set_position` integer;--> statement-breakpoint
 CREATE INDEX `play_history_campaign_idx` ON `play_history` (`campaign_id`);--> statement-breakpoint
 ALTER TABLE `shows` ADD `extension_policy` text;--> statement-breakpoint
 ALTER TABLE `clocks` DROP COLUMN `overrun_policy`;
