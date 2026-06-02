@@ -114,7 +114,7 @@ services:
       - ./liquidsoap:/etc/liquidsoap:ro
       # Audio library — read-only; paths embedded in annotated URIs by the supervisor
       - ./media:/media:ro
-      - ./data/certs:/etc/liquidsoap/certs:ro
+      - ./data/certs:/etc/certs:ro
       - ./logs/liquidsoap:/var/log/liquidsoap
     depends_on:
       api:
