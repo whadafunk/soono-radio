@@ -33,7 +33,7 @@
     <chroot>0</chroot>
     <changeowner>
       <user>icecast2</user>
-      <group>icecast2</group>
+      <group>icecast</group>
     </changeowner>
   </security>
   <paths>

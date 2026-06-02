@@ -177,7 +177,7 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
       security: [
         {
           chroot: ['0'],
-          changeowner: [{ user: ['icecast2'], group: ['icecast2'] }],
+          changeowner: [{ user: ['icecast2'], group: ['icecast'] }],
         },
       ],
       'listen-socket': config.network.listen_sockets.map((sock) => ({
