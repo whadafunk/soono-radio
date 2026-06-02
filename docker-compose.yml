@@ -66,8 +66,6 @@ services:
       LS_API_URL: http://api:3000
       DOCKER_PROXY_URL: http://socket-proxy:2375
       # Operator config — values come from .env
-      ICECAST_ADMIN_USER: ${ICECAST_ADMIN_USER}
-      ICECAST_ADMIN_PASS: ${ICECAST_ADMIN_PASS}
       LS_MEDIA_DIR: ${LS_MEDIA_DIR}
       CORS_ORIGINS: ${CORS_ORIGINS}
     volumes:

@@ -1,6 +1,12 @@
+import { readIcecastConfig } from './icecastConfig.js';
+
 const ICECAST_BASE = process.env.ICECAST_URL || 'http://localhost:8000';
-const ICECAST_ADMIN_USER = process.env.ICECAST_ADMIN_USER || 'admin';
-const ICECAST_ADMIN_PASS = process.env.ICECAST_ADMIN_PASS || 'adminadmin';
+
+async function icecastAuthHeader(): Promise<string> {
+  const config = await readIcecastConfig();
+  const { admin_user, admin_password } = config.authentication;
+  return 'Basic ' + Buffer.from(`${admin_user}:${admin_password}`).toString('base64');
+}
 
 interface IcecastStatsResponse {
   listener: number;
@@ -10,12 +16,12 @@ interface IcecastStatsResponse {
 }
 
 export async function fetchIcecastStats(mount: string = '/stream'): Promise<IcecastStatsResponse> {
-  const auth = Buffer.from(`${ICECAST_ADMIN_USER}:${ICECAST_ADMIN_PASS}`).toString('base64');
+  const auth = await icecastAuthHeader();
 
   try {
     const response = await fetch(`${ICECAST_BASE}/admin/stats?mount=${encodeURIComponent(mount)}`, {
       headers: {
-        Authorization: `Basic ${auth}`,
+        Authorization: auth,
       },
       signal: AbortSignal.timeout(5000),
     });
@@ -50,13 +56,12 @@ export async function fetchIcecastStats(mount: string = '/stream'): Promise<Icec
 }
 
 export async function fetchAllMountStats() {
-  // Fetch global stats
-  const auth = Buffer.from(`${ICECAST_ADMIN_USER}:${ICECAST_ADMIN_PASS}`).toString('base64');
+  const auth = await icecastAuthHeader();
 
   try {
     const response = await fetch(`${ICECAST_BASE}/admin/stats`, {
       headers: {
-        Authorization: `Basic ${auth}`,
+        Authorization: auth,
       },
       signal: AbortSignal.timeout(5000),
     });
@@ -92,7 +97,6 @@ export async function fetchAllMountStats() {
 export async function killIcecastSource(mount: string): Promise<void> {
   const { request: httpsRequest } = await import('https');
   const { request: httpRequest } = await import('http');
-  const { readIcecastConfig } = await import('./icecastConfig.js');
 
   // Discover the right URL from the saved config: prefer a plain-HTTP listen-socket
   // (admin calls don't need TLS for local IPC). Fall back to HTTPS with self-signed
@@ -117,7 +121,7 @@ export async function killIcecastSource(mount: string): Promise<void> {
     }
   }
 
-  const auth = Buffer.from(`${ICECAST_ADMIN_USER}:${ICECAST_ADMIN_PASS}`).toString('base64');
+  const auth = await icecastAuthHeader();
 
   return new Promise((resolve, reject) => {
     const requestFn = protocol === 'https:' ? httpsRequest : httpRequest;
