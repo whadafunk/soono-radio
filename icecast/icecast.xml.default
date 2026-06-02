@@ -28,6 +28,13 @@
     <max-listeners>-1</max-listeners>
     <public>0</public>
   </mount>
+  <security>
+    <chroot>0</chroot>
+    <changeowner>
+      <user>icecast2</user>
+      <group>icecast2</group>
+    </changeowner>
+  </security>
   <paths>
     <basedir>/usr/share/icecast2</basedir>
     <logdir>/usr/local/icecast/logs</logdir>

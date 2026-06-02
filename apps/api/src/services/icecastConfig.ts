@@ -174,6 +174,12 @@ export async function writeIcecastConfig(config: IcecastConfig): Promise<void> {
           'admin-password': [config.authentication.admin_password],
         },
       ],
+      security: [
+        {
+          chroot: ['0'],
+          changeowner: [{ user: ['icecast2'], group: ['icecast2'] }],
+        },
+      ],
       'listen-socket': config.network.listen_sockets.map((sock) => ({
         port: [sock.port.toString()],
         'bind-address': [sock.bind_address],
