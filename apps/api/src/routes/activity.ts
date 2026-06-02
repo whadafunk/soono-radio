@@ -2,7 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { eq, desc, count, sql, and } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { backgroundJobs, media } from '../db/schema.js';
-import type { LookupIdResults } from '@radio/shared';
+import type { LookupIdResults } from '@soono/shared';
 
 export async function activityRoutes(fastify: FastifyInstance) {
   // Badge counts — running jobs and pending review count

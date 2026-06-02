@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { stationSettings } from '../db/schema.js';
-import { StationSettingsSchema } from '@radio/shared';
+import { StationSettingsSchema } from '@soono/shared';
 import { invalidateInventory } from '../services/spotBudget.js';
 
 async function ensureRow() {

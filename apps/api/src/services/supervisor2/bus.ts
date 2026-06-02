@@ -192,7 +192,10 @@ export type BusMessage =
       type: 'LIVE_STATUS_CHANGED';
       active: boolean;
     }
-  | { type: 'PUSH_NEXT_REQUESTED'; reason: string };
+  | { type: 'PUSH_NEXT_REQUESTED'; reason: string }
+  // QueueFeeder → Supervisor: a plan item was successfully pushed to harbor.
+  // Used by the Supervisor to reset its silence-alert timer.
+  | { type: 'PUSH_SENT'; plan_item_id: number; play_history_id: number };
 
 const emitter = new EventEmitter();
 // Prevent Node from printing spurious MaxListenersExceededWarning during

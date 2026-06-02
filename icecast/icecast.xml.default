@@ -31,8 +31,8 @@
   <paths>
     <basedir>/usr/share/icecast2</basedir>
     <logdir>/usr/local/icecast/logs</logdir>
-    <webroot>/etc/icecast2/web</webroot>
-    <adminroot>/etc/icecast2/admin</adminroot>
+    <webroot>/usr/share/icecast2/web</webroot>
+    <adminroot>/usr/share/icecast2/admin</adminroot>
   </paths>
   <logging>
     <accesslog>access.log</accesslog>

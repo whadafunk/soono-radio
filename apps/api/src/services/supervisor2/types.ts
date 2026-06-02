@@ -8,7 +8,7 @@
 // in multiple slots (e.g. the same jingle as both an interstitial candidate
 // and a coasting-fill candidate).
 
-import type { PriorityLevel } from '@radio/shared';
+import type { PriorityLevel } from '@soono/shared';
 
 // ─── Music ────────────────────────────────────────────────────────────────────
 

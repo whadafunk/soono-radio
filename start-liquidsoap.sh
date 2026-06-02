@@ -34,6 +34,7 @@ docker run \
   -v "$REPO_ROOT/liquidsoap/mix-engine.liq:/etc/liquidsoap/mix-engine.liq:ro" \
   -v "$REPO_ROOT/media:/media:ro" \
   -v "$REPO_ROOT/data/certs:/etc/liquidsoap/certs:ro" \
+  -v "$REPO_ROOT/logs/liquidsoap:/var/log/liquidsoap" \
   soono-liquidsoap:latest
 
 # To stop: Ctrl+C or `docker stop soono-liquidsoap`

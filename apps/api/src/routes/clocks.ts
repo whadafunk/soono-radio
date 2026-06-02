@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { eq, asc, sql, inArray } from 'drizzle-orm';
 import { z } from 'zod';
-import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@radio/shared';
+import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@soono/shared';
 import { db } from '../db/index.js';
 import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows, playHistory } from '../db/schema.js';
 import { invalidateInventory } from '../services/spotBudget.js';

@@ -5,7 +5,7 @@ import {
   ShowPatchSchema,
   ShowPlaylistCreateSchema,
   ShowPlaylistPatchSchema,
-} from '@radio/shared';
+} from '@soono/shared';
 import { db } from '../db/index.js';
 import { shows, showPlaylists, playlists, templateEntries, calendarEntries, templateClockEntries, campaigns, customers } from '../db/schema.js';
 

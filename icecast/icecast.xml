@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <icecast>
   <hostname>localhost</hostname>
-  <location></location>
+  <location/>
   <admin>admin@localhost</admin>
   <limits>
     <sources>10</sources>
@@ -13,7 +13,7 @@
     <source-password>changeme</source-password>
     <relay-password>changeme</relay-password>
     <admin-user>admin</admin-user>
-    <admin-password>changeme</admin-password>
+    <admin-password>adminadmin</admin-password>
   </authentication>
   <listen-socket>
     <port>8000</port>
@@ -26,13 +26,15 @@
   <mount>
     <mount-name>/stream</mount-name>
     <max-listeners>-1</max-listeners>
+    <bitrate>256</bitrate>
     <public>0</public>
   </mount>
   <paths>
     <basedir>/usr/share/icecast2</basedir>
     <logdir>/usr/local/icecast/logs</logdir>
-    <webroot>/etc/icecast2/web</webroot>
-    <adminroot>/etc/icecast2/admin</adminroot>
+    <webroot>/usr/share/icecast2/web</webroot>
+    <adminroot>/usr/share/icecast2/admin</adminroot>
+    <ssl-certificate>/etc/icecast2/certs/gigi-2.pem</ssl-certificate>
   </paths>
   <logging>
     <accesslog>access.log</accesslog>

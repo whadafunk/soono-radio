@@ -8,7 +8,7 @@
 
 import { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { BudgetModeSchema } from '@radio/shared';
+import { BudgetModeSchema } from '@soono/shared';
 import {
   getOverview,
   getCampaignAvailable,

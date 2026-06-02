@@ -7,7 +7,7 @@ import {
   CalendarEntryPatchSchema,
   TemplateClockEntryUpsertSchema,
   ApplyTemplateSchema,
-} from '@radio/shared';
+} from '@soono/shared';
 import { db } from '../db/index.js';
 import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments, clocks } from '../db/schema.js';
 import { invalidateInventory } from '../services/spotBudget.js';

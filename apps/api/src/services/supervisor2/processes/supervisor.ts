@@ -38,7 +38,7 @@
 
 import { randomUUID } from 'crypto';
 import { and, asc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
-import type { FastifyBaseLogger } from 'fastify';
+import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
 import {
@@ -51,7 +51,7 @@ import {
   type PlanItem,
   type PlanItemContentType,
 } from '../../../db/schema.js';
-import type { DriftEventType } from '@radio/shared';
+import type { DriftEventType } from '@soono/shared';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
 import { resolveCurrentSegment, type ResolvedSegment } from '../clockResolver.js';
@@ -67,6 +67,7 @@ const DRIFT_CORRECTION_THRESHOLD_S = 10;       // execution drift threshold (D51
 const COASTING_CORRECTION_THRESHOLD_S = 30;    // coasting threshold (D51)
 const ADJUSTED_TARGET_MIN_RATIO = 0.6;
 const ADJUSTED_TARGET_MAX_RATIO = 1.4;
+const SILENCE_ALERT_THRESHOLD_S = 30;          // seconds of no pushes before WARN
 
 // DriftEventType → plan_items.content_type mapping
 const DRIFT_TYPE_TO_CONTENT_TYPES: Record<DriftEventType, PlanItemContentType[]> = {
@@ -122,6 +123,18 @@ export class SupervisorProcess {
   private pendingReplanForPlanId: number | null = null;
   private isPaused = false;
 
+  // ── Segment observability ────────────────────────────────────────────────────
+  // Drift at the start of the current segment — used in SEGMENT_SUMMARY.
+  private segmentEntryDriftSeconds = 0;
+  // Tracks which part of tick() is executing for richer TICK_FAILED logs (B4).
+  private tickOperation = 'init';
+
+  // ── Silence alert (Phase F) ──────────────────────────────────────────────────
+  // Updated each time a push is confirmed sent to harbor (PUSH_SENT bus event).
+  // Initialized to now so we don't alert immediately on cold start.
+  private lastPushSentMs = Date.now();
+  private silenceAlertFired = false;
+
   // ── Segment cache ───────────────────────────────────────────────────────────
   private cachedSegment: ResolvedSegment | null = null;
   private cachedSegmentValidUntilMs = 0;
@@ -134,7 +147,7 @@ export class SupervisorProcess {
   constructor(
     private readonly _bus: typeof bus,
     private readonly db: typeof defaultDb = defaultDb,
-    private readonly logger: FastifyBaseLogger | null = null,
+    private readonly logger: SLogger | null = null,
   ) {}
 
   start(): void {
@@ -179,17 +192,24 @@ export class SupervisorProcess {
         if (this.pendingReplanForPlanId === msg.plan_id) this.pendingReplanForPlanId = null;
       }),
     );
+    // Track last push for silence alerting (Phase F).
+    this.unsubscribers.push(
+      this._bus.on<BusMessage & { type: 'PUSH_SENT' }>('PUSH_SENT', () => {
+        this.lastPushSentMs = Date.now();
+        this.silenceAlertFired = false;
+      }),
+    );
 
     void this.hydrateFromDb();
 
     this.tickTimer = setInterval(() => {
       void this.tick().catch((err) => {
-        this.logger?.error({ err, process: 'supervisor', event: 'TICK_FAILED' }, 'supervisor: clock tick failed');
+        this.logger?.error({ err, process: 'supervisor', event: 'TICK_FAILED', operation: this.tickOperation }, 'supervisor: clock tick failed');
       });
     }, this.TICK_INTERVAL_MS);
 
     void this.tick().catch((err) => {
-      this.logger?.error({ err, process: 'supervisor', event: 'TICK_FAILED' }, 'supervisor: initial tick failed');
+      this.logger?.error({ err, process: 'supervisor', event: 'TICK_FAILED', operation: this.tickOperation }, 'supervisor: initial tick failed');
     });
   }
 
@@ -217,6 +237,19 @@ export class SupervisorProcess {
       this.isPaused = row.paused ?? false;
 
       if (this.activePlanId != null) {
+        // Reset any 'playing' items to 'pending' — across a restart we have no
+        // idea what LiquidSoap was actually playing. Leaving them as 'playing'
+        // causes computePlanPlayhead to read their stale play_history.started_at
+        // (hours old), producing a massive negative drift that triggers a
+        // runaway CORRECTION_FILL loop on every tick.
+        await this.db
+          .update(planItemsTable)
+          .set({ status: 'pending' })
+          .where(and(
+            eq(planItemsTable.plan_id, this.activePlanId),
+            eq(planItemsTable.status, 'playing'),
+          ));
+
         const items = await this.db
           .select({ status: planItemsTable.status, planned_duration_seconds: planItemsTable.planned_duration_seconds })
           .from(planItemsTable)
@@ -245,6 +278,7 @@ export class SupervisorProcess {
   // ─── Clock loop ─────────────────────────────────────────────────────────────
 
   private async tick(): Promise<void> {
+    this.tickOperation = 'load_state';
     const [stateRow] = await this.db
       .select({ paused: supervisorStateTable.paused })
       .from(supervisorStateTable)
@@ -254,21 +288,40 @@ export class SupervisorProcess {
 
     const nowMs = Date.now();
 
+    this.tickOperation = 'heartbeat';
     if (nowMs - this.lastHeartbeatWriteMs >= this.HEARTBEAT_WRITE_INTERVAL_MS) {
       await this.updateHeartbeat(nowMs);
       this.lastHeartbeatWriteMs = nowMs;
     }
 
+    this.tickOperation = 'segment_resolve';
     const resolved = await this.getCachedSegment(nowMs);
     if (!resolved) return;
 
     // ── Segment boundary detection ─────────────────────────────────────────
+    this.tickOperation = 'boundary_detection';
     const isNewSegment =
       resolved.segment.id !== this.currentSegmentId ||
       resolved.clockInstanceStartedAt !== this.currentClockInstanceMs;
 
     if (isNewSegment) {
       const previousId = this.currentSegmentId;
+      const previousPlanId = this.activePlanId;
+
+      // B5: Log summary of the segment that just ended.
+      if (previousId != null && previousPlanId != null) {
+        const summary = await this.computeSegmentSummary(previousPlanId);
+        this.logger?.info({
+          process: 'supervisor', event: 'SEGMENT_SUMMARY',
+          segment_id: previousId, plan_id: previousPlanId,
+          items_played: summary.items_played,
+          items_skipped: summary.items_skipped,
+          actual_duration_seconds: summary.actual_duration_seconds,
+          drift_at_entry_seconds: this.segmentEntryDriftSeconds,
+          drift_at_exit_seconds: this.currentDriftSeconds,
+        }, 'supervisor: segment ended');
+      }
+
       this.currentSegmentId = resolved.segment.id;
       this.currentSegmentEndMs = resolved.segmentEndMs;
       this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
@@ -277,11 +330,22 @@ export class SupervisorProcess {
         .set({ current_segment_id: resolved.segment.id })
         .where(eq(supervisorStateTable.id, 1));
 
+      // B1: Enrich SEGMENT_START with type/name/duration/clock/show context.
       this.logger?.info({
         process: 'supervisor', event: 'SEGMENT_START',
-        segment_id: resolved.segment.id, previous_segment_id: previousId,
+        segment_id: resolved.segment.id,
+        segment_type: resolved.segment.type,
+        segment_name: resolved.segment.name,
+        duration_seconds: resolved.segment.duration_seconds,
+        clock_id: resolved.clock_id,
+        show_id: resolved.show_id,
+        show_name: resolved.show_name,
+        previous_segment_id: previousId,
         clock_instance_started_at: resolved.clockInstanceStartedAt,
       }, 'supervisor: segment boundary crossed');
+
+      // Record drift at segment entry for SEGMENT_SUMMARY on exit.
+      this.segmentEntryDriftSeconds = this.currentDriftSeconds;
 
       // Cold start: no active plan and no next plan building.
       if (this.activePlanId == null && this.nextPlanId == null && !this.coldStartFinalizeSent) {
@@ -294,11 +358,13 @@ export class SupervisorProcess {
     }
 
     // ── T-30s finalization gate (D31) ──────────────────────────────────────
+    this.tickOperation = 'finalization_check';
     await this.maybeRequestFinalization(nowMs);
 
     if (this.activePlanId == null) return;
 
     // ── Plan playhead + drift ──────────────────────────────────────────────
+    this.tickOperation = 'playhead_calc';
     const { consumedSeconds, expectedEndMs } = await this.computePlanPlayhead(nowMs);
 
     const planRelativeElapsedSeconds =
@@ -309,7 +375,7 @@ export class SupervisorProcess {
       await this.db.update(supervisorStateTable)
         .set({ current_drift_seconds: rawDrift })
         .where(eq(supervisorStateTable.id, 1));
-      this.logger?.info({
+      this.logger?.debug({
         process: 'supervisor', event: 'DRIFT_UPDATE',
         drift_seconds: rawDrift,
         planned_overshoot_seconds: this.plannedOvershootSeconds,
@@ -319,19 +385,92 @@ export class SupervisorProcess {
       }, 'supervisor: drift updated from playheads');
     }
 
-    // ── Push timing ─────────────────────────────────────────────────────────
-    const shouldPush =
-      (expectedEndMs != null && expectedEndMs - nowMs <= this.PUSH_LEAD_MS) ||
-      (expectedEndMs == null && await this.hasPendingItems(this.activePlanId));
+    // ── Silence alert (Phase F) ────────────────────────────────────────────
+    const stallSeconds = (nowMs - this.lastPushSentMs) / 1000;
+    if (stallSeconds > SILENCE_ALERT_THRESHOLD_S && !this.silenceAlertFired) {
+      this.silenceAlertFired = true;
+      this.logger?.warn({
+        process: 'supervisor', event: 'SILENCE_ALERT',
+        stall_duration_seconds: Math.floor(stallSeconds),
+        active_plan_id: this.activePlanId,
+      }, 'supervisor: no push sent for >30s — station may be silent');
+    }
 
-    if (shouldPush) {
+    // ── Push timing ─────────────────────────────────────────────────────────
+    // When nothing is playing (expectedEndMs==null) check for two sub-cases:
+    //   a) pending items exist → push immediately
+    //   b) no pending items   → plan is exhausted; advance to next plan if ready
+    this.tickOperation = 'push_decision';
+    if (expectedEndMs == null) {
+      const hasPending = await this.hasPendingItems(this.activePlanId);
+      if (hasPending) {
+        this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
+      } else {
+        // Plan exhausted with nothing playing. Normally the next plan activates
+        // when the last item's LS_TRACK_STARTED fires, but if the station went
+        // silent (restart, LS down, etc.) that webhook never comes. Force the
+        // advance here so playback resumes within the next tick interval.
+        await this.handleExhaustedPlan(nowMs);
+      }
+    } else if (expectedEndMs - nowMs <= this.PUSH_LEAD_MS) {
       this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
     }
 
     // ── Drift correction (execution drift only — D51) ───────────────────────
+    this.tickOperation = 'drift_correction';
     if (consumedSeconds > 0) {
       await this.maybeApplyDriftCorrection(nowMs);
     }
+  }
+
+  // Counts played/skipped items in a plan for SEGMENT_SUMMARY.
+  private async computeSegmentSummary(planId: number): Promise<{
+    items_played: number;
+    items_skipped: number;
+    actual_duration_seconds: number;
+  }> {
+    const items = await this.db
+      .select({ status: planItemsTable.status, planned_duration_seconds: planItemsTable.planned_duration_seconds })
+      .from(planItemsTable)
+      .where(eq(planItemsTable.plan_id, planId));
+    const skippedStatuses = new Set(['supervisor_skipped', 'operator_skipped', 'dropped']);
+    let played = 0, skipped = 0, playedSeconds = 0;
+    for (const item of items) {
+      if (item.status === 'played') {
+        played++;
+        playedSeconds += item.planned_duration_seconds ?? 0;
+      } else if (skippedStatuses.has(item.status)) {
+        skipped++;
+      }
+    }
+    return { items_played: played, items_skipped: skipped, actual_duration_seconds: playedSeconds };
+  }
+
+  // Called when the active plan has no pending and no playing items. Activates
+  // the next plan immediately so the queue feeder can push content without
+  // waiting for an LS_TRACK_STARTED webhook that will never arrive.
+  private async handleExhaustedPlan(nowMs: number): Promise<void> {
+    if (this.nextPlanId == null) {
+      this.logger?.warn({
+        process: 'supervisor', event: 'PLAN_STALL', reason: 'no_next_plan',
+        active_plan_id: this.activePlanId,
+      }, 'supervisor: active plan exhausted with nothing playing; no next plan ready');
+      return;
+    }
+    const [nextPlan] = await this.db
+      .select({ status: plansTable.status })
+      .from(plansTable)
+      .where(eq(plansTable.id, this.nextPlanId));
+    if (!nextPlan) return;
+    if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') return;
+
+    this.logger?.info({
+      process: 'supervisor', event: 'PLAN_ADVANCE_FORCED',
+      active_plan_id: this.activePlanId, next_plan_id: this.nextPlanId,
+      next_plan_status: nextPlan.status,
+    }, 'supervisor: forcing plan advance — active plan exhausted, nothing playing');
+    await this.activateNextPlan(nowMs);
+    this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'plan_exhausted_advance' });
   }
 
   // ─── Segment cache ───────────────────────────────────────────────────────────

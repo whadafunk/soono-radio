@@ -33,7 +33,7 @@ import type {
   CampaignPacingDetail,
   SpotBudgetDemand,
   SpotBudgetInventory,
-} from '@radio/shared';
+} from '@soono/shared';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 

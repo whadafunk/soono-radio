@@ -2,7 +2,7 @@
  * CLI driver for the ingest pipeline. Lets us exercise Phase 2 without an
  * HTTP layer. Usage:
  *
- *   pnpm --filter @radio/api exec tsx src/services/ingest/cli.ts <file> --category music
+ *   pnpm --filter @soono/api exec tsx src/services/ingest/cli.ts <file> --category music
  *
  * Copies the input file to data/incoming/<jobId>, creates an ingest_jobs
  * row, runs the worker synchronously, and prints the outcome.

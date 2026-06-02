@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { eq, sql } from 'drizzle-orm';
-import { PromoCreateSchema, PromoPatchSchema } from '@radio/shared';
+import { PromoCreateSchema, PromoPatchSchema } from '@soono/shared';
 import { db } from '../db/index.js';
 import { promos, promoMedia, media, shows } from '../db/schema.js';
 

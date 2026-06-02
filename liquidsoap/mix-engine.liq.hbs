@@ -4,6 +4,11 @@ settings.server.telnet.set(true)
 settings.server.telnet.bind_addr.set("0.0.0.0")
 settings.server.telnet.port.set(1234)
 
+settings.log.file.set({{logging.file_enabled}})
+settings.log.file.path.set("/var/log/liquidsoap/liquidsoap.log")
+settings.log.stdout.set(true)
+settings.log.level.set({{logging.level}})
+
 # Queue fed by the Supervisor over HTTP harbor (POST /push).
 # Empty queue plays silence; that is intentional and means "no Supervisor input yet".
 queue = request.queue(id="auto")

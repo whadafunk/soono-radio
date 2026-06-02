@@ -51,6 +51,10 @@ export const LiquidsoapConfigSchema = z.object({
     fallback: z.enum(['none', 'playlist']).default('none'),
     fallback_playlist_id: z.number().int().positive().nullable().default(null),
   }).default({}),
+  logging: z.object({
+    level: z.number().int().min(1).max(5).default(3),
+    file_enabled: z.boolean().default(true),
+  }).default({}),
 });
 
 export type LiquidsoapConfig = z.infer<typeof LiquidsoapConfigSchema>;

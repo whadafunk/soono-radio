@@ -1,4 +1,4 @@
-# Radio Automation — Documentation Index
+# Soono — Documentation Index
 
 ## What is this?
 

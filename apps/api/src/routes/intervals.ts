@@ -5,7 +5,7 @@ import {
   BroadcastIntervalPatchSchema,
   BroadcastIntervalSlotCreateSchema,
   BroadcastIntervalSlotPatchSchema,
-} from '@radio/shared';
+} from '@soono/shared';
 import { db } from '../db/index.js';
 import { broadcastIntervals, broadcastIntervalSlots } from '../db/schema.js';
 

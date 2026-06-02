@@ -1,4 +1,4 @@
-import { LiquidsoapStatus } from '@radio/shared';
+import { LiquidsoapStatus } from '@soono/shared';
 import { HarborClient } from './supervisor2/harborClient.js';
 
 export async function fetchLiquidsoapStatus(): Promise<LiquidsoapStatus> {

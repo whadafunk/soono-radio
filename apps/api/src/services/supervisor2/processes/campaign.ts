@@ -17,6 +17,7 @@
 
 import { and, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm';
 import { db as defaultDb } from '../../../db/index.js';
+import type { SLogger } from '../supervisorLogger.js';
 import {
   broadcastIntervals as broadcastIntervalsTable,
   broadcastIntervalSlots as broadcastIntervalSlotsTable,
@@ -51,6 +52,7 @@ export class CampaignProcess {
   constructor(
     private readonly _bus: typeof bus,
     private readonly db: typeof defaultDb = defaultDb,
+    private readonly logger: SLogger | null = null,
   ) {}
 
   start(): void {
@@ -245,6 +247,10 @@ export class CampaignProcess {
       oversubscribed: occupationRatio > OVERSUBSCRIBED_THRESHOLD,
       candidate_count: candidates.length,
     };
+
+    if (candidates.length === 0 && rawCampaigns.length > 0) {
+      this.logger?.warn({ process: 'campaign', event: 'EMPTY_POOL', segment_id: segmentId, raw_campaign_count: rawCampaigns.length }, 'campaign: no eligible campaigns for this stop-set segment');
+    }
 
     return { candidates, promos: promosPool, space_estimate: spaceEstimate };
   }

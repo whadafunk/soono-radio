@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { asc, eq, isNull } from 'drizzle-orm';
+import { and, asc, count, desc, eq, isNotNull, isNull, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   supervisorState,
@@ -9,6 +9,9 @@ import {
   stopSetEstimates,
   liveEvents,
   playHistory,
+  clocks,
+  clockSegments,
+  shows,
 } from '../db/schema.js';
 import { resolveCurrentSegment } from '../services/supervisor2/clockResolver.js';
 
@@ -51,7 +54,7 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
           })
           .from(planItems)
           .leftJoin(media, eq(planItems.media_id, media.id))
-          .where(eq(planItems.plan_id, activePlanId))
+          .where(and(eq(planItems.plan_id, activePlanId), ne(planItems.status, 'dropped')))
           .orderBy(planItems.position);
 
         resolvedPlanItems = rows.map((r) => ({
@@ -185,6 +188,120 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
         }
       }
 
+      // ── C1: current_segment ────────────────────────────────────────────────
+      let currentSegment = null;
+      if (resolvedSegment) {
+        const elapsedSeconds = (nowMs - resolvedSegment.segmentStartMs) / 1000;
+        const remainingSeconds = Math.max(0, (resolvedSegment.segmentEndMs - nowMs) / 1000);
+        currentSegment = {
+          id: resolvedSegment.segment.id,
+          type: resolvedSegment.segment.type,
+          name: resolvedSegment.segment.name,
+          duration_seconds: resolvedSegment.segment.duration_seconds,
+          clock_id: resolvedSegment.clock_id,
+          show_id: resolvedSegment.show_id,
+          show_name: resolvedSegment.show_name,
+          elapsed_seconds: Math.round(elapsedSeconds * 10) / 10,
+          remaining_seconds: Math.round(remainingSeconds * 10) / 10,
+        };
+      }
+
+      // ── C1: next_plan ──────────────────────────────────────────────────────
+      const nextPlanId = stateRow?.next_plan_id ?? null;
+      let nextPlan = null;
+      if (nextPlanId != null) {
+        const [nextPlanRow] = await db
+          .select({ id: plans.id, status: plans.status, segment_id: plans.segment_id })
+          .from(plans)
+          .where(eq(plans.id, nextPlanId));
+        if (nextPlanRow) {
+          const [nextSeg] = await db
+            .select({ type: clockSegments.type, name: clockSegments.name, duration_seconds: clockSegments.duration_seconds })
+            .from(clockSegments)
+            .where(eq(clockSegments.id, nextPlanRow.segment_id));
+          const [{ cnt }] = await db
+            .select({ cnt: count() })
+            .from(planItems)
+            .where(eq(planItems.plan_id, nextPlanId));
+          nextPlan = {
+            id: nextPlanRow.id,
+            status: nextPlanRow.status,
+            segment_id: nextPlanRow.segment_id,
+            segment_type: nextSeg?.type ?? 'unknown',
+            segment_name: nextSeg?.name ?? '',
+            item_count: cnt,
+            target_seconds: nextSeg?.duration_seconds ?? 0,
+          };
+        }
+      }
+
+      // ── C1: recent_plays ───────────────────────────────────────────────────
+      const recentPlayRows = await db
+        .select({
+          title: media.title,
+          original_filename: media.original_filename,
+          artist: media.artist,
+          duration_seconds: media.duration_seconds,
+          started_at: playHistory.started_at,
+          plan_item_id: playHistory.plan_item_id,
+          content_type: planItems.content_type,
+        })
+        .from(playHistory)
+        .leftJoin(media, eq(playHistory.media_id, media.id))
+        .leftJoin(planItems, eq(playHistory.plan_item_id, planItems.id))
+        .where(isNotNull(playHistory.started_at))
+        .orderBy(desc(playHistory.started_at))
+        .limit(10);
+
+      const recentPlays = recentPlayRows.map((r) => ({
+        title: r.title ?? r.original_filename ?? null,
+        artist: r.artist ?? null,
+        content_type: r.content_type ?? null,
+        started_at_ms: r.started_at ? new Date(r.started_at).getTime() : 0,
+        duration_seconds: r.duration_seconds ?? null,
+        plan_item_id: r.plan_item_id ?? null,
+      }));
+
+      // ── C2: segment_config ─────────────────────────────────────────────────
+      let segmentConfig = null;
+      if (resolvedSegment) {
+        const seg = resolvedSegment.segment;
+        const [clockRow] = await db
+          .select({ jingle_playlist_id: clocks.jingle_playlist_id, station_id_playlist_id: clocks.station_id_playlist_id })
+          .from(clocks)
+          .where(eq(clocks.id, resolvedSegment.clock_id));
+
+        let showJinglePlaylistId: number | null = null;
+        if (resolvedSegment.show_id != null) {
+          const [showRow] = await db
+            .select({ jingle_playlist_id: shows.jingle_playlist_id })
+            .from(shows)
+            .where(eq(shows.id, resolvedSegment.show_id));
+          showJinglePlaylistId = showRow?.jingle_playlist_id ?? null;
+        }
+
+        // Extract rotation_ids from segment sources JSON.
+        const sources: Array<{ type?: string; rotation_id?: number | null }> = (() => {
+          const raw = seg.sources;
+          if (Array.isArray(raw)) return raw as Array<{ type?: string; rotation_id?: number | null }>;
+          if (typeof raw === 'string') { try { return JSON.parse(raw); } catch { return []; } }
+          return [];
+        })();
+        const rotationIds = sources
+          .filter((s) => s.type === 'playlist' && typeof s.rotation_id === 'number')
+          .map((s) => s.rotation_id as number)
+          .filter((id, i, arr) => arr.indexOf(id) === i);
+
+        segmentConfig = {
+          rotation_ids: rotationIds,
+          jingle_playlist_id: clockRow?.jingle_playlist_id ?? null,
+          station_id_playlist_id: clockRow?.station_id_playlist_id ?? null,
+          start_clip_playlist_id: seg.start_clip_playlist_id ?? null,
+          end_clip_playlist_id: seg.end_clip_playlist_id ?? null,
+          show_jingle_playlist_id: showJinglePlaylistId,
+        };
+      }
+
       return reply.send({
         active_plan_id: activePlanId,
         current_drift_seconds: stateRow?.current_drift_seconds ?? 0,
@@ -197,6 +314,10 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
         segment_duration_seconds: segmentDurationSeconds,
         plan_consumed_seconds: planConsumedSeconds,
         expected_current_item_end_ms: expectedCurrentItemEndMs,
+        current_segment: currentSegment,
+        next_plan: nextPlan,
+        recent_plays: recentPlays,
+        segment_config: segmentConfig,
       });
     } catch (err) {
       fastify.log.error(err, 'supervisor v2 status failed');

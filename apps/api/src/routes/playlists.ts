@@ -14,7 +14,7 @@ import {
   type DynamicRules,
   type PlaylistType,
   type PlaylistSubcategory,
-} from '@radio/shared';
+} from '@soono/shared';
 import { db } from '../db/index.js';
 import { playlists, playlistMedia, media, mediaTags, MEDIA_CATEGORIES, shows, rotations, clocks, musicCampaigns } from '../db/schema.js';
 

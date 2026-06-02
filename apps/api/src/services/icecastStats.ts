@@ -17,6 +17,7 @@ export async function fetchIcecastStats(mount: string = '/stream'): Promise<Icec
       headers: {
         Authorization: `Basic ${auth}`,
       },
+      signal: AbortSignal.timeout(5000),
     });
 
     if (!response.ok) {
@@ -57,6 +58,7 @@ export async function fetchAllMountStats() {
       headers: {
         Authorization: `Basic ${auth}`,
       },
+      signal: AbortSignal.timeout(5000),
     });
 
     if (!response.ok) {
@@ -158,7 +160,7 @@ async function getDockerContainerUptime(): Promise<number> {
     const execFilePromise = promisify(execFile);
 
     const { stdout } = await execFilePromise(
-      'docker', ['inspect', '-f', '{{.State.StartedAt}}', 'radio-icecast']
+      'docker', ['inspect', '-f', '{{.State.StartedAt}}', 'soono-icecast']
     );
 
     const startTime = new Date(stdout.trim()).getTime();

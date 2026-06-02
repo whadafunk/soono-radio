@@ -7,12 +7,12 @@
 set -e
 
 echo "Building Icecast image..."
-docker buildx build -t radio-icecast:latest --load icecast/
+docker buildx build -t soono-icecast:latest --load icecast/
 
 echo "Starting Icecast container..."
 docker run \
   -it \
-  --name radio-icecast \
+  --name soono-icecast \
   --rm \
   --user "$(id -u):$(id -g)" \
   -p 8000:8000 \
@@ -20,6 +20,6 @@ docker run \
   -v "$(pwd)/icecast/icecast.xml:/etc/icecast2/icecast.xml" \
   -v "$(pwd)/icecast/logs:/usr/local/icecast/logs" \
   -v "$(pwd)/data/certs:/etc/icecast2/certs:ro" \
-  radio-icecast:latest
+  soono-icecast:latest
 
-# To stop: Ctrl+C or `docker stop radio-icecast`
+# To stop: Ctrl+C or `docker stop soono-icecast`

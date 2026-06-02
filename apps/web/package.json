@@ -1,5 +1,5 @@
 {
-  "name": "@radio/web",
+  "name": "@soono/web",
   "version": "0.0.1",
   "private": true,
   "type": "module",
@@ -14,7 +14,7 @@
     "@dnd-kit/sortable": "^10.0.0",
     "@dnd-kit/utilities": "^3.2.2",
     "@hookform/resolvers": "^3.3.4",
-    "@radio/shared": "workspace:*",
+    "@soono/shared": "workspace:*",
     "@radix-ui/react-dialog": "^1.1.1",
     "@radix-ui/react-label": "^2.0.2",
     "@radix-ui/react-popover": "^1.0.7",

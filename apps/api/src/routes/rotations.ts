@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { and, eq, ne, sql } from 'drizzle-orm';
-import { RotationCreateSchema, RotationPatchSchema } from '@radio/shared';
+import { RotationCreateSchema, RotationPatchSchema } from '@soono/shared';
 import { db } from '../db/index.js';
 import { rotations } from '../db/schema.js';
 

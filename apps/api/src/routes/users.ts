@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { eq, sql } from 'drizzle-orm';
-import { UserCreateSchema, UserPatchSchema } from '@radio/shared';
+import { UserCreateSchema, UserPatchSchema } from '@soono/shared';
 import { db } from '../db/index.js';
 import { users } from '../db/schema.js';
 

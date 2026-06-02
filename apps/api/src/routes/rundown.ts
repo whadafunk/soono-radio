@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { and, eq, gte, inArray, lte } from 'drizzle-orm';
-import { RundownAssignmentUpsertSchema, RundownDurationOverrideUpsertSchema, RundownShowContentUpsertSchema, RUNDOWN_SEGMENT_TYPES } from '@radio/shared';
+import { RundownAssignmentUpsertSchema, RundownDurationOverrideUpsertSchema, RundownShowContentUpsertSchema, RUNDOWN_SEGMENT_TYPES } from '@soono/shared';
 import { db } from '../db/index.js';
 import {
   calendarEntries, clocks, clockSegments, media, playlists,

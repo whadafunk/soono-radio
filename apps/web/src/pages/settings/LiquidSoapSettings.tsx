@@ -18,6 +18,7 @@ import { CrossfadeSection } from './liquidsoap-sections/CrossfadeSection';
 import { MasterBusSection } from './liquidsoap-sections/MasterBusSection';
 import { DuckingSection } from './liquidsoap-sections/DuckingSection';
 import { SilenceDetectionSection } from './liquidsoap-sections/SilenceDetectionSection';
+import { LoggingSection } from './liquidsoap-sections/LoggingSection';
 
 export function LiquidSoapSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -27,6 +28,7 @@ export function LiquidSoapSettings() {
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['liquidsoap-config'],
     queryFn: fetchLiquidsoapConfig,
+    staleTime: 60_000,
   });
 
   const {
@@ -114,6 +116,7 @@ export function LiquidSoapSettings() {
         <MasterBusSection register={register} />
         <DuckingSection register={register} control={control} />
         <SilenceDetectionSection register={register} control={control} />
+        <LoggingSection register={register} />
 
         <div className="flex gap-4">
           <button

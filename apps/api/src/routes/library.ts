@@ -12,7 +12,7 @@ import {
   BulkFavoriteSchema,
   LookupIdResults,
   AnalyseResults,
-} from '@radio/shared';
+} from '@soono/shared';
 import { inArray as inArrayOp } from 'drizzle-orm';
 import { deleteMedia, reMeasureMedia, reTranscodeMedia } from '../services/library.js';
 import { identifyMedia, isAutoApply } from '../services/acoustid.js';

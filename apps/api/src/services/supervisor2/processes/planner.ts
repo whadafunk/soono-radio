@@ -35,8 +35,8 @@
 // works offline — it never calls HarborClient.
 
 import { randomUUID } from 'crypto';
-import { and, eq, gte } from 'drizzle-orm';
-import type { FastifyBaseLogger } from 'fastify';
+import { and, eq, gte, inArray } from 'drizzle-orm';
+import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
 import {
@@ -131,7 +131,7 @@ export class PlannerProcess {
   constructor(
     private readonly _bus: typeof bus,
     private readonly db: typeof defaultDb = defaultDb,
-    private readonly logger: FastifyBaseLogger | null = null,
+    private readonly logger: SLogger | null = null,
   ) {}
 
   start(): void {
@@ -294,6 +294,16 @@ export class PlannerProcess {
     await this.notifyContentProcesses(result, planId, nowMs);
     await this.persistStopSetEstimateIfAny(planId, segment.id, result.space_estimate, nowMs);
 
+    // B2: count items by content_type for post-mortem analysis.
+    let music_count = 0, campaign_count = 0, branding_count = 0, rundown_count = 0;
+    let total_planned_seconds = 0;
+    for (const item of result.items) {
+      total_planned_seconds += item.planned_duration_seconds;
+      if (item.content_type === 'music') music_count++;
+      else if (item.content_type === 'campaign' || item.content_type === 'promo') campaign_count++;
+      else if (item.content_type === 'jingle' || item.content_type === 'station_id' || item.content_type === 'branding') branding_count++;
+      else if (item.content_type === 'rundown') rundown_count++;
+    }
     this.logger?.info(
       {
         event: 'PLAN_DRAFT_COMPLETE',
@@ -301,6 +311,11 @@ export class PlannerProcess {
         segment_id: segment.id,
         segment_type: segment.type,
         item_count: result.items.length,
+        music_count,
+        campaign_count,
+        branding_count,
+        rundown_count,
+        total_planned_seconds: Math.round(total_planned_seconds),
         is_show_start: isShowStart,
         is_show_end: isShowEnd,
       },
@@ -388,11 +403,10 @@ export class PlannerProcess {
       if (dropCampaign.length > 0) this.emitDrop('campaign', dropCampaign);
       if (dropRundown.length > 0) this.emitDrop('rundown', dropRundown);
 
-      for (const it of pendingItems) {
+      if (pendingItems.length > 0) {
         await this.db
-          .update(planItemsTable)
-          .set({ status: 'dropped' })
-          .where(eq(planItemsTable.id, it.id));
+          .delete(planItemsTable)
+          .where(inArray(planItemsTable.id, pendingItems.map((it) => it.id)));
       }
 
       // Re-derive show context from the calendar at the plan's clock instance.
@@ -472,8 +486,7 @@ export class PlannerProcess {
           const replacement = pickReplacement(item, freshMusic, freshCampaign, config);
           if (!replacement) continue;
           await this.db
-            .update(planItemsTable)
-            .set({ status: 'dropped' })
+            .delete(planItemsTable)
             .where(eq(planItemsTable.id, item.id));
           await this.db.insert(planItemsTable).values({
             plan_id: planId,
@@ -596,13 +609,12 @@ export class PlannerProcess {
     if (dropCampaign.length > 0) this.emitDrop('campaign', dropCampaign);
     if (dropRundown.length > 0) this.emitDrop('rundown', dropRundown);
 
-    // Mark them dropped before re-assembling so the replacement positions
-    // are reserved cleanly.
-    for (const it of dropping) {
+    // Delete superseded items before re-assembling so the replacement
+    // positions are reserved cleanly and rows don't accumulate in the DB.
+    if (dropping.length > 0) {
       await this.db
-        .update(planItemsTable)
-        .set({ status: 'dropped' })
-        .where(eq(planItemsTable.id, it.id));
+        .delete(planItemsTable)
+        .where(inArray(planItemsTable.id, dropping.map((it) => it.id)));
     }
 
     const config = await this.loadSupervisorConfig();

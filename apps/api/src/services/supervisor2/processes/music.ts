@@ -18,6 +18,7 @@
 
 import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
 import { db as defaultDb } from '../../../db/index.js';
+import type { SLogger } from '../supervisorLogger.js';
 import {
   clockSegments,
   media as mediaTable,
@@ -59,6 +60,7 @@ export class MusicProcess {
   constructor(
     private readonly _bus: typeof bus,
     private readonly db: typeof defaultDb = defaultDb,
+    private readonly logger: SLogger | null = null,
   ) {}
 
   start(): void {
@@ -198,6 +200,10 @@ export class MusicProcess {
       (sum, c) => sum + c.duration_seconds,
       0,
     );
+    if (aggregated.length === 0 && rotationConfigs.length > 0) {
+      const rotationIds = rotationConfigs.map((c) => c.rotation_id);
+      this.logger?.warn({ process: 'music', event: 'EMPTY_POOL', segment_id: segmentId, rotation_ids: rotationIds }, 'music: all rotations returned empty pools for segment');
+    }
     return { candidates: aggregated, total_duration_seconds: totalDurationSeconds };
   }
 

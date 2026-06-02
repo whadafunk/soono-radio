@@ -18,6 +18,7 @@ async function harborFetch(path: string, init: RequestInit): Promise<Response> {
   const res = await fetch(url, {
     ...init,
     headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) },
+    signal: AbortSignal.timeout(5000),
   });
   return res;
 }

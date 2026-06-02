@@ -1,6 +1,6 @@
 import { FastifyInstance } from 'fastify';
 import { and, eq, gte, inArray, sql } from 'drizzle-orm';
-import { MusicCampaignCreateSchema, MusicCampaignPatchSchema } from '@radio/shared';
+import { MusicCampaignCreateSchema, MusicCampaignPatchSchema } from '@soono/shared';
 import { db } from '../db/index.js';
 import {
   customers,

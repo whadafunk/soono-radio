@@ -10,7 +10,7 @@ import {
   restartIcecast,
   fetchCertificates,
 } from '../../api';
-import { Loader, Check, AlertCircle, Code, Settings2 } from 'lucide-react';
+import { Loader, Check, AlertCircle, Code, Settings2, ExternalLink } from 'lucide-react';
 import { RawXmlEditor } from '../../components/RawXmlEditor';
 import { BasicSettingsSection } from './icecast-sections/BasicSettingsSection';
 import { GlobalSecuritySection } from './icecast-sections/GlobalSecuritySection';
@@ -19,6 +19,12 @@ import { MountPointsSection } from './icecast-sections/MountPointsSection';
 import { LimitsSection } from './icecast-sections/LimitsSection';
 import { RelaySection } from './icecast-sections/RelaySection';
 import { LoggingSection } from './icecast-sections/LoggingSection';
+
+function getIcecastBaseUrl(config: IcecastConfig): string {
+  const nonSslSocket = config.network.listen_sockets.find((s) => !s.ssl);
+  const port = nonSslSocket?.port ?? config.network.listen_sockets[0]?.port ?? 8000;
+  return `http://${config.server.hostname}:${port}`;
+}
 
 export function IcecastSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -29,11 +35,13 @@ export function IcecastSettings() {
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['icecast-config'],
     queryFn: fetchIcecastConfig,
+    staleTime: 60_000,
   });
 
   const { data: certsData } = useQuery({
     queryKey: ['certificates'],
     queryFn: fetchCertificates,
+    staleTime: 60_000,
   });
 
   const {
@@ -91,6 +99,28 @@ export function IcecastSettings() {
           <p className="text-zinc-400 mt-2">Icecast — distributes the audio to listeners</p>
         </div>
         <div className="flex items-center gap-2 flex-shrink-0">
+          {config && (
+            <>
+              <a
+                href={`${getIcecastBaseUrl(config)}/status.xsl`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Status
+              </a>
+              <a
+                href={`${getIcecastBaseUrl(config)}/admin/stats.xsl`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 px-3 py-2 text-sm font-medium bg-zinc-900 border border-zinc-800 text-zinc-300 hover:bg-zinc-800 rounded-lg transition-colors"
+              >
+                <ExternalLink className="w-4 h-4" />
+                Admin
+              </a>
+            </>
+          )}
           <button
             type="button"
             onClick={() => setShowAdvanced((v) => !v)}

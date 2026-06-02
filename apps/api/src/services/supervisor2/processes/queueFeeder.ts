@@ -1,16 +1,19 @@
 // Queue Feeder — Phase 4.
 //
-// Listens for PUSH_NEXT_REQUESTED (clock-loop driven) and LS_TRACK_ENDING
-// (LiquidSoap backup webhook) to keep the harbor queue populated. The
-// pushInFlight guard prevents concurrent pushes when both triggers fire close
-// together.
+// Two triggers keep the harbor queue populated:
+//   - PUSH_NEXT_REQUESTED: emitted by the Supervisor on its 500ms tick (primary)
+//   - LS_TRACK_ENDING:     LiquidSoap on_end webhook fired a few seconds before
+//                          the current track ends (acceleration trigger)
 //
-// During live takeover the Supervisor emits LIVE_STATUS_CHANGED with
-// active=true; the Queue Feeder remembers this and stops pushing until the
-// matching active=false message arrives.
+// The pushInFlight guard prevents concurrent pushes when both fire close together.
+//
+// Zero decision logic (D42). The feeder reads the next pending item from the
+// active plan and pushes it. All fallback decisions (gap fill, early fire,
+// plan extension) belong to the Supervisor. When there is nothing to push
+// the feeder logs QUEUE_STALL and exits; the Supervisor's next tick resolves it.
 
-import { and, asc, count, eq, sql } from 'drizzle-orm';
-import type { FastifyBaseLogger } from 'fastify';
+import { and, asc, count, eq } from 'drizzle-orm';
+import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
 import {
@@ -34,15 +37,18 @@ export class QueueFeederProcess {
   // Prevents concurrent pushes when PUSH_NEXT_REQUESTED and LS_TRACK_ENDING
   // fire close together.
   private pushInFlight = false;
+  // Rate-limit QUEUE_STALL: null means not stalling; set to the ms when stall
+  // began. Only logs INFO on entry and exit; intermediate ticks log at DEBUG.
+  private stallingSince: number | null = null;
 
   constructor(
     private readonly _bus: typeof bus,
     private readonly db: typeof defaultDb = defaultDb,
-    private readonly logger: FastifyBaseLogger | null = null,
+    private readonly logger: SLogger | null = null,
   ) {}
 
   start(): void {
-    // Primary trigger: clock-loop driven push requests from the Supervisor.
+    // Primary trigger: 500ms supervisor tick.
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PUSH_NEXT_REQUESTED' }>('PUSH_NEXT_REQUESTED', (msg) => {
         void this.handlePushRequest(msg.reason).catch((err) => {
@@ -53,9 +59,8 @@ export class QueueFeederProcess {
         });
       }),
     );
-    // Backup trigger: LiquidSoap on_end webhook, fires a few seconds before
-    // current track ends. Kept as a safety net for cases where the clock loop
-    // doesn't emit in time.
+    // Acceleration trigger: LiquidSoap on_end webhook, fires a few seconds
+    // before the current track ends.
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'LS_TRACK_ENDING' }>('LS_TRACK_ENDING', (_msg) => {
         void this.handlePushRequest('ls_track_ending').catch((err) => {
@@ -113,14 +118,11 @@ export class QueueFeederProcess {
     const activePlanId = state?.active_plan_id ?? null;
 
     if (activePlanId == null) {
-      await this.safetyFill('no_active_plan');
+      this.emitStall('no_active_plan', null, source);
       return;
     }
 
-    // Queue-depth cap: allow at most 1 item actually playing + 1 pre-queued.
-    // Both states share 'playing' status until LS_TRACK_STARTED transitions
-    // the finished item to 'played'. Capping at 2 prevents cascade over-push
-    // when a safety-fill track plays while plan items are being staged.
+    // Queue-depth cap: at most 1 playing + 1 pre-queued.
     const [countRow] = await this.db
       .select({ c: count() })
       .from(planItemsTable)
@@ -136,26 +138,18 @@ export class QueueFeederProcess {
 
     const nextItem = await this.findNextPendingItem(activePlanId);
     if (!nextItem) {
-      // No pending items. If nothing is 'playing' either (queue truly empty),
-      // fall back to safety fill so the stream doesn't go silent.
-      const [playingItem] = await this.db
-        .select({ id: planItemsTable.id })
-        .from(planItemsTable)
-        .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')))
-        .limit(1);
-      if (!playingItem) {
-        this.logger?.info(
-          { process: 'queueFeeder', event: 'PLAN_EXHAUSTED', plan_id: activePlanId, source },
-          'queueFeeder: plan exhausted, falling back to safety fill',
-        );
-        await this.safetyFill('plan_exhausted', activePlanId);
-      } else {
-        this.logger?.debug(
-          { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'no_pending_items', source },
-          'queueFeeder: no pending items, last queued item still in LS',
-        );
-      }
+      this.emitStall('no_pending_items', activePlanId, source);
       return;
+    }
+
+    // Stall resolved — log exit if we were stalling.
+    if (this.stallingSince != null) {
+      const stalledSeconds = (Date.now() - this.stallingSince) / 1000;
+      this.logger?.info(
+        { process: 'queueFeeder', event: 'QUEUE_STALL', stall_phase: 'exit', stalled_seconds: Math.round(stalledSeconds), plan_id: activePlanId, source },
+        'queueFeeder: stall resolved — found pending item',
+      );
+      this.stallingSince = null;
     }
 
     const mediaRow = await this.loadMedia(nextItem.media_id);
@@ -167,17 +161,30 @@ export class QueueFeederProcess {
           plan_item_id: nextItem.id,
           media_id: nextItem.media_id,
         },
-        'queueFeeder: media row missing for plan_item; falling back to safety fill',
+        'queueFeeder: media row missing for plan_item, dropping item',
       );
       await this.markPlanItemDropped(nextItem.id);
-      await this.safetyFill('media_missing', activePlanId);
       return;
     }
 
     await this.pushPlanItem(nextItem, mediaRow);
   }
 
-  // ─── Active-plan path ───────────────────────────────────────────────────────
+  // Logs QUEUE_STALL at INFO on entry; at DEBUG on subsequent ticks.
+  private emitStall(reason: string, planId: number | null, source: string): void {
+    if (this.stallingSince == null) {
+      this.stallingSince = Date.now();
+      this.logger?.info(
+        { process: 'queueFeeder', event: 'QUEUE_STALL', stall_phase: 'entry', reason, plan_id: planId, source },
+        'queueFeeder: stall started',
+      );
+    } else {
+      this.logger?.debug(
+        { process: 'queueFeeder', event: 'QUEUE_STALL', stall_phase: 'ongoing', reason, plan_id: planId, source },
+        'queueFeeder: stall ongoing',
+      );
+    }
+  }
 
   private async pushPlanItem(item: PlanItem, mediaRow: Media): Promise<void> {
     const pushedAtMs = Date.now();
@@ -231,69 +238,15 @@ export class QueueFeederProcess {
         play_history_id: playHistoryId,
         media_id: mediaRow.id,
         content_type: item.content_type,
+        title: mediaRow.title ?? mediaRow.original_filename,
+        artist: mediaRow.artist ?? null,
         reason: item.reason,
       },
       'queueFeeder: push sent',
     );
-  }
 
-  // ─── Safety fill path ───────────────────────────────────────────────────────
-
-  // Picks a random music media row and pushes it. Used when there is no
-  // active plan or the plan is exhausted. No plan_item_id is attached.
-  private async safetyFill(reason: string, planId: number | null = null): Promise<void> {
-    const mediaRow = await this.pickRandomMusic();
-    if (!mediaRow) {
-      this.logger?.error(
-        { process: 'queueFeeder', event: 'EMERGENCY_FILL_FAILED', reason },
-        'queueFeeder: no music media available for safety fill',
-      );
-      return;
-    }
-
-    const pushedAtMs = Date.now();
-    const playHistoryId = await insertPushed(this.db, {
-      media_id: mediaRow.id,
-      source: 'auto',
-      plan_item_id: null,
-      campaign_id: null,
-      music_campaign_id: null,
-      pushed_at_ms: pushedAtMs,
-      pick_reason: `emergency fill (${reason})`,
-    });
-
-    const annotated = buildAnnotatedUri(mediaRow, {
-      play_history_id: playHistoryId,
-      emergency_fill: true,
-    });
-
-    try {
-      await HarborClient.push(annotated);
-    } catch (err) {
-      this.logger?.error(
-        {
-          err,
-          process: 'queueFeeder',
-          event: 'PUSH_ERROR',
-          play_history_id: playHistoryId,
-          reason: 'emergency_fill_push_failed',
-        },
-        'queueFeeder: harbor push failed during safety fill',
-      );
-      return;
-    }
-
-    this.logger?.info(
-      {
-        process: 'queueFeeder',
-        event: 'EMERGENCY_FILL',
-        play_history_id: playHistoryId,
-        media_id: mediaRow.id,
-        plan_id: planId,
-        reason,
-      },
-      'queueFeeder: emergency fill pushed',
-    );
+    // Notify the Supervisor so it can reset its silence-alert timer.
+    this._bus.emit({ type: 'PUSH_SENT', plan_item_id: item.id, play_history_id: playHistoryId });
   }
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
@@ -332,16 +285,6 @@ export class QueueFeederProcess {
       .set({ status: 'dropped' })
       .where(eq(planItemsTable.id, itemId));
   }
-
-  private async pickRandomMusic(): Promise<Media | null> {
-    const rows = await this.db
-      .select()
-      .from(mediaTable)
-      .where(eq(mediaTable.category, 'music'))
-      .orderBy(sql`RANDOM()`)
-      .limit(1);
-    return rows[0] ?? null;
-  }
 }
 
 // Build an annotate: URI for LiquidSoap. The annotations are surfaced back to
@@ -349,17 +292,12 @@ export class QueueFeederProcess {
 // to the play_history row that triggered it.
 function buildAnnotatedUri(
   mediaRow: Media,
-  extras: { play_history_id: number; plan_item_id?: number; emergency_fill?: boolean },
+  extras: { play_history_id: number; plan_item_id: number },
 ): string {
   const filePath = lsMediaPathForSha(mediaRow.sha256);
   const annotations: string[] = [];
   annotations.push(`play_history_id="${extras.play_history_id}"`);
-  if (extras.plan_item_id != null) {
-    annotations.push(`plan_item_id="${extras.plan_item_id}"`);
-  }
-  if (extras.emergency_fill) {
-    annotations.push('emergency_fill="true"');
-  }
+  annotations.push(`plan_item_id="${extras.plan_item_id}"`);
   const title = mediaRow.title ?? mediaRow.original_filename;
   annotations.push(`title=${JSON.stringify(title)}`);
   if (mediaRow.artist) {

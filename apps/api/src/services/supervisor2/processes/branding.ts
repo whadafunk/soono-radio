@@ -6,8 +6,8 @@
 //   - station_ids: LRP-ordered pool from clock.station_id_playlist_id
 //   - segment_start / segment_end: single LRP picks from
 //     clock_segments.start_clip_playlist_id / end_clip_playlist_id
-//   - show_start / show_end: single picks from show.intro_media_id /
-//     outro_media_id (single media, not playlists — per schema)
+//   - show_start / show_end: single LRP picks from show.show_start_playlist_id /
+//     show_end_playlist_id — only when show_id is set in REQUEST_CANDIDATES (D40)
 //
 // Decision 15: "No branding rotations in V2; round-robin and random only."
 // LRP is implemented here against play_history because it yields the same
@@ -21,8 +21,8 @@
 
 import { eq, inArray, sql } from 'drizzle-orm';
 import { db as defaultDb } from '../../../db/index.js';
+import type { SLogger } from '../supervisorLogger.js';
 import {
-  calendarEntries as calendarEntriesTable,
   clocks as clocksTable,
   clockSegments,
   media as mediaTable,
@@ -55,6 +55,7 @@ export class BrandingProcess {
   constructor(
     private readonly _bus: typeof bus,
     private readonly db: typeof defaultDb = defaultDb,
+    private readonly logger: SLogger | null = null,
   ) {}
 
   start(): void {
@@ -89,7 +90,7 @@ export class BrandingProcess {
   private async handleRequest(
     msg: BusMessage & { type: 'REQUEST_CANDIDATES' },
   ): Promise<void> {
-    const pool = await this.buildPool(msg.segment_id, msg.clock_instance_started_at);
+    const pool = await this.buildPool(msg.segment_id, msg.show_id ?? null);
     this._bus.emit({
       type: 'CANDIDATES',
       request_id: msg.request_id,
@@ -100,7 +101,7 @@ export class BrandingProcess {
 
   async buildPool(
     segmentId: number,
-    clockInstanceStartedAt: number,
+    showId: number | null,
   ): Promise<BrandingCandidatePool> {
     const [segment] = await this.db
       .select()
@@ -115,7 +116,9 @@ export class BrandingProcess {
       .from(clocksTable)
       .where(eq(clocksTable.id, segment.clock_id));
 
-    const show = await this.resolveShow(clockInstanceStartedAt);
+    // Use show_id passed explicitly from the planner (D40). When set, query
+    // the show directly — no calendar lookup needed.
+    const show = showId != null ? await this.fetchShow(showId) : null;
 
     // Jingle source preference: assigned show's jingle playlist if set, else
     // the clock-level jingle_playlist_id (used for unassigned clocks per the
@@ -125,11 +128,17 @@ export class BrandingProcess {
     const jingles = jinglePlaylistId
       ? await this.lrpPlaylist(jinglePlaylistId, 'jingle', NS_JINGLE)
       : [];
+    if (jinglePlaylistId && jingles.length === 0) {
+      this.logger?.warn({ process: 'branding', event: 'EMPTY_POOL', pool: 'jingles', playlist_id: jinglePlaylistId, segment_id: segmentId }, 'branding: jingle playlist is empty');
+    }
 
     const stationIdPlaylistId = clock?.station_id_playlist_id ?? null;
     const stationIds = stationIdPlaylistId
       ? await this.lrpPlaylist(stationIdPlaylistId, 'station_id', NS_STATION_ID)
       : [];
+    if (stationIdPlaylistId && stationIds.length === 0) {
+      this.logger?.warn({ process: 'branding', event: 'EMPTY_POOL', pool: 'station_ids', playlist_id: stationIdPlaylistId, segment_id: segmentId }, 'branding: station ID playlist is empty');
+    }
 
     const segmentStart = segment.start_clip_playlist_id
       ? await this.lrpSingle(
@@ -146,12 +155,16 @@ export class BrandingProcess {
         )
       : undefined;
 
-    const showStart = show?.intro_media_id
-      ? await this.singleMedia(show.intro_media_id, 'show_start', NS_SHOW_START)
-      : undefined;
-    const showEnd = show?.outro_media_id
-      ? await this.singleMedia(show.outro_media_id, 'show_end', NS_SHOW_END)
-      : undefined;
+    // Show envelopes only when show_id is set (D40). Planner decides whether
+    // to place them based on is_show_start / is_show_end.
+    const showStart =
+      show?.show_start_playlist_id != null
+        ? await this.lrpSingle(show.show_start_playlist_id, 'show_start', NS_SHOW_START)
+        : undefined;
+    const showEnd =
+      show?.show_end_playlist_id != null
+        ? await this.lrpSingle(show.show_end_playlist_id, 'show_end', NS_SHOW_END)
+        : undefined;
 
     return {
       jingles,
@@ -235,65 +248,20 @@ export class BrandingProcess {
     return pool[0];
   }
 
-  private async singleMedia(
-    mediaId: number,
-    subtype: BrandingContentSubtype,
-    namespace: number,
-  ): Promise<BrandingCandidate | undefined> {
-    const [m] = await this.db
-      .select({
-        id: mediaTable.id,
-        duration_seconds: mediaTable.duration_seconds,
-        cue_in_seconds: mediaTable.cue_in_seconds,
-        cue_out_seconds: mediaTable.cue_out_seconds,
-      })
-      .from(mediaTable)
-      .where(eq(mediaTable.id, mediaId));
-    if (!m) return undefined;
-    return {
-      id: namespace * NS_STRIDE + m.id,
-      media_id: m.id,
-      duration_seconds: effectiveDuration(m),
-      content_subtype: subtype,
-      // 0 = single-media source (show.intro_media_id / outro_media_id), not
-      // drawn from a playlist.
-      playlist_id: 0,
-    };
-  }
-
-  // Resolve the show that owns this clock instance by walking calendar entries
-  // for the day. Falls back to null when the clock isn't part of a show.
-  private async resolveShow(
-    clockInstanceStartedAt: number,
-  ): Promise<{
-    intro_media_id: number | null;
-    outro_media_id: number | null;
+  private async fetchShow(showId: number): Promise<{
     jingle_playlist_id: number | null;
+    show_start_playlist_id: number | null;
+    show_end_playlist_id: number | null;
   } | null> {
-    const date = ymdFromMs(clockInstanceStartedAt);
-    const hhmm = hhmmFromMs(clockInstanceStartedAt);
-    const rows = await this.db
+    const [show] = await this.db
       .select({
-        show_id: calendarEntriesTable.show_id,
-        time_start: calendarEntriesTable.time_start,
-        time_end: calendarEntriesTable.time_end,
+        jingle_playlist_id: showsTable.jingle_playlist_id,
+        show_start_playlist_id: showsTable.show_start_playlist_id,
+        show_end_playlist_id: showsTable.show_end_playlist_id,
       })
-      .from(calendarEntriesTable)
-      .where(eq(calendarEntriesTable.date, date));
-    for (const r of rows) {
-      if (r.time_start <= hhmm && hhmm < r.time_end && r.show_id != null) {
-        const [show] = await this.db
-          .select({
-            intro_media_id: showsTable.intro_media_id,
-            outro_media_id: showsTable.outro_media_id,
-            jingle_playlist_id: showsTable.jingle_playlist_id,
-          })
-          .from(showsTable)
-          .where(eq(showsTable.id, r.show_id));
-        return show ?? null;
-      }
-    }
-    return null;
+      .from(showsTable)
+      .where(eq(showsTable.id, showId));
+    return show ?? null;
   }
 }
 
@@ -313,17 +281,3 @@ function effectiveDuration(m: MediaDurationCols): number {
   return m.duration_seconds;
 }
 
-function ymdFromMs(nowMs: number): string {
-  const d = new Date(nowMs);
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-function hhmmFromMs(nowMs: number): string {
-  const d = new Date(nowMs);
-  const h = String(d.getHours()).padStart(2, '0');
-  const m = String(d.getMinutes()).padStart(2, '0');
-  return `${h}:${m}`;
-}

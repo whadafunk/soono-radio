@@ -1,6 +1,6 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
-import { IntegrationsConfig, IntegrationsConfigSchema } from '@radio/shared';
+import { IntegrationsConfig, IntegrationsConfigSchema } from '@soono/shared';
 
 const CONFIG_PATH =
   process.env.INTEGRATIONS_CONFIG ||

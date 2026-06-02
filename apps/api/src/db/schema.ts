@@ -489,13 +489,14 @@ export const shows = sqliteTable(
       () => playlists.id,
       { onDelete: 'set null' },
     ),
-    // One-time lifecycle audio — not part of the clock template
-    intro_media_id: integer('intro_media_id').references(
-      () => media.id,
+    // Show envelope playlists — LRP-picked intro/outro clips served by the branding process.
+    // intro_media_id / outro_media_id columns still exist in the DB but are inert (schema drift).
+    show_start_playlist_id: integer('show_start_playlist_id').references(
+      () => playlists.id,
       { onDelete: 'set null' },
     ),
-    outro_media_id: integer('outro_media_id').references(
-      () => media.id,
+    show_end_playlist_id: integer('show_end_playlist_id').references(
+      () => playlists.id,
       { onDelete: 'set null' },
     ),
     duration_minutes: integer('duration_minutes').notNull().default(60),

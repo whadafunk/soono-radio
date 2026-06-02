@@ -2,7 +2,7 @@ import { eq, sql, inArray } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { backgroundJobs, ingestJobs } from '../db/schema.js';
 import type { JobType, JobStatus } from '../db/schema.js';
-import type { LookupIdResults, AnalyseResults } from '@radio/shared';
+import type { LookupIdResults, AnalyseResults } from '@soono/shared';
 
 function newJobId(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 10);

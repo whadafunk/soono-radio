@@ -8,7 +8,7 @@ import {
   CampaignCreateSchema,
   CampaignPatchSchema,
   CampaignMediaCreateSchema,
-} from '@radio/shared';
+} from '@soono/shared';
 import { db } from '../db/index.js';
 import {
   customers,

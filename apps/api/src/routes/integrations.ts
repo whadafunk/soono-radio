@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { IntegrationsConfigSchema } from '@radio/shared';
+import { IntegrationsConfigSchema } from '@soono/shared';
 import { getIntegrationsConfig, writeIntegrationsConfig } from '../services/integrations/config.js';
 
 export async function integrationsRoutes(fastify: FastifyInstance) {
