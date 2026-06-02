@@ -15,38 +15,145 @@ The Python stack is the harder one to provision — it requires a specific Pytho
 
 ## Recommended: Docker Compose
 
-The cleanest production deployment. The API container includes Node, Python, essentia, and the mood models baked in at image build time. The operator runs one command and the station is live.
+The cleanest production deployment. All dependencies — Node, Python, essentia, mood models, Icecast, LiquidSoap — are baked into container images. One command starts the station.
 
 ### Container layout
 
 ```
 docker-compose.yml
-├── api          ← Node + Python + essentia + mood models
-├── web          ← Vite static build served by nginx (or served by api in prod)
-├── icecast      ← Icecast streaming server
-└── liquidsoap   ← LiquidSoap audio engine
+├── socket-proxy  ← Narrow Docker API slice (restart only) — no socket in app containers
+├── icecast       ← Icecast streaming server
+├── api           ← Node + Python + essentia + mood models; runs DB migrations on start
+├── web           ← React SPA served by nginx; proxies /api/ to api:3000 internally
+└── liquidsoap    ← LiquidSoap audio engine; waits for api healthcheck before starting
 ```
 
-### API Dockerfile (apps/api/Dockerfile)
+### Published ports
 
-The Dockerfile is in `apps/api/Dockerfile`. Key decisions:
+| Container | Port | Accessible from |
+|-----------|------|----------------|
+| `web` | `8080` | Browser (put a reverse proxy in front for TLS) |
+| `icecast` | `8000` | Stream listeners (HTTP / HTTPS if TLS configured) |
+| `icecast` | `8001` | LiquidSoap audio push (plain HTTP, internal) |
+| `liquidsoap` | `8005` | Live DJ harbor connections |
 
-- **Base image**: `node:20-bookworm-slim` — Debian Bookworm has Python 3.11 in apt
-- **Models baked in**: mood models are downloaded during `docker build`, not at runtime — the container is self-contained
-- **venv inside container**: `/app/analysis/venv/` — same path as dev, so `audioAnalysis.ts` resolves the Python binary identically in both environments
+The API (port 3000) is **not published** — the nginx inside the `web` container proxies
+all `/api/` calls to `api:3000` on the internal `soono-net` bridge. Browsers never
+need a direct route to port 3000.
+
+### Reverse proxy (recommended for production)
+
+Put a host-level reverse proxy (nginx, Caddy, Traefik, etc.) in front of the stack to
+handle TLS and serve on standard ports without burning 80/443 on the Docker host:
 
 ```
-docker compose up --build
+client → :443 (host proxy, TLS termination) → :8080 (web container)
 ```
 
-First build takes ~5 minutes (downloads essentia + mood models). Subsequent builds are cached unless `requirements.txt` or `download_models.sh` change.
+Minimal Caddy example:
+```
+soono.example.com {
+    reverse_proxy localhost:8080
+}
+```
 
-### Updating mood models
+Minimal nginx example:
+```nginx
+server {
+    listen 443 ssl;
+    server_name soono.example.com;
+    # ... ssl_certificate / ssl_certificate_key ...
+    location / {
+        proxy_pass http://localhost:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+    }
+}
+```
 
-Models are baked into the image. To update:
+### Environment configuration
+
+Copy `.env.example` to `.env` and edit before first start:
+
 ```bash
-docker compose build api
-docker compose up -d api
+cp .env.example .env
+```
+
+`.env` contains only two things operators need to touch:
+
+| Variable | Purpose |
+|----------|---------|
+| `CORS_ORIGINS` | Comma-separated list of origins the browser may call the API from. Add your production domain. |
+| `LS_MEDIA_DIR` | Mount point for the audio library inside containers. Default `/media` matches the volume config — only change if you remap the volume. |
+
+Everything else — Icecast admin credentials, LiquidSoap harbor password, AcoustID API key —
+is read at runtime from the config files managed through the settings UI
+(`icecast.xml`, `liquidsoap/supervisor.json`, `data/integrations-config.json`).
+Internal service URLs are hardcoded as literals in `docker-compose.yml` and
+never need to go in `.env`.
+
+### Data directories
+
+These host directories are created automatically on first run and persist across upgrades:
+
+| Host path | Container path | Contents |
+|-----------|---------------|---------|
+| `./data` | `/data` | SQLite database (`radio.db`), ingest queue, config JSON files |
+| `./media` | `/media` | Audio library (transcoded MP3s, indexed by SHA-256) |
+| `./logs` | `/app/logs` | Structured API and supervisor log files |
+| `./liquidsoap` | `/liquidsoap` (api), `/etc/liquidsoap` (ls) | Generated `mix-engine.liq` and `supervisor.json` |
+| `./icecast` | `/icecast` (api), `/etc/icecast2` (icecast) | `icecast.xml` config |
+| `./data/certs` | `/etc/icecast2/certs`, `/etc/liquidsoap/certs` | TLS certificates |
+
+### First start
+
+```bash
+# 1. Clone and enter the repo
+git clone https://github.com/whadafunk/soono-radio.git
+cd soono-radio
+
+# 2. Configure environment
+cp .env.example .env
+# Edit CORS_ORIGINS to include your domain
+
+# 3. Build and start all services
+docker compose up --build -d
+
+# 4. Follow logs
+docker compose logs -f
+```
+
+The `api` service runs all pending database migrations automatically on startup, before
+accepting requests. LiquidSoap waits for the api healthcheck to pass (which confirms
+`mix-engine.liq` has been generated) before starting.
+
+First build takes ~5 minutes — essentia and mood models are downloaded during `docker build`
+and cached in subsequent builds.
+
+### Upgrading
+
+```bash
+docker compose pull          # pull new images
+docker compose up -d         # recreate containers; api runs new migrations on startup
+```
+
+Database migrations are applied automatically at startup via Drizzle's migrator. They are
+additive-only — no manual SQL needed for routine upgrades.
+
+> **Rollback note:** Drizzle has no down-migrations. Rolling back to an older image after
+> a schema-changing upgrade requires restoring a database backup, not just swapping the image.
+> Back up `./data/radio.db` before major upgrades.
+
+### Restarting individual services
+
+The **Restart Icecast** and **Restart LiquidSoap** buttons in the UI go through the
+`socket-proxy` service, which exposes only `POST /containers/*/restart` on the internal
+network. The Docker socket is never mounted directly into application containers.
+
+You can also restart from the host:
+```bash
+docker compose restart icecast
+docker compose restart liquidsoap
 ```
 
 ---
@@ -77,13 +184,12 @@ An install script at `scripts/install-linux.sh` (not yet written) would:
 
 4. Install systemd service unit for the API.
 
-This path works but the operator is responsible for Python version management and model updates. Docker is strongly preferred.
+This path works but the operator is responsible for Python version management and model
+updates. Docker is strongly preferred.
 
 ---
 
 ## Dependency Reference
-
-Complete list of all runtime dependencies and why each is needed:
 
 | Dependency | Type | Purpose | Install |
 |-----------|------|---------|---------|
@@ -100,11 +206,14 @@ Complete list of all runtime dependencies and why each is needed:
 
 ### Python version requirement
 
-**Python 3.11 or 3.12 only.** essentia and essentia-tensorflow publish binary wheels for 3.11 and 3.12. Python 3.13+ is not yet supported — pip will attempt to compile from source and fail. This constraint applies to both dev and production.
+**Python 3.11 or 3.12 only.** essentia and essentia-tensorflow publish binary wheels for
+3.11 and 3.12. Python 3.13+ is not yet supported — pip will attempt to compile from source
+and fail. This constraint applies to both dev and production.
 
 ### essentia-tensorflow platform support
 
-essentia-tensorflow is hosted on Essentia's own pip index (`https://essentia.upf.edu/python-extras/`), not PyPI. It ships wheels for:
+essentia-tensorflow is hosted on Essentia's own pip index (`https://essentia.upf.edu/python-extras/`),
+not PyPI. It ships wheels for:
 - Linux x86_64 ✓ (production target)
 - macOS x86_64 ✓
 - macOS ARM64 ✓ (Apple Silicon — confirmed working)
@@ -120,4 +229,5 @@ The API starts and operates normally. Audio analysis is skipped gracefully:
 - `POST /library/:id/analyse` can be called later once the environment is set up, to backfill missing analysis
 - BPM/key/mood columns remain `null` until analysis runs
 
-The `audio_analysis_enabled` flag in Settings → Integrations can be set to `false` to suppress the failed-analysis noise entirely until the environment is ready.
+The `audio_analysis_enabled` flag in Settings → Integrations can be set to `false` to
+suppress the failed-analysis noise entirely until the environment is ready.
