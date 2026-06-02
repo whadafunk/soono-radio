@@ -102,23 +102,27 @@ These host directories are created automatically on first run and persist across
 ### First start
 
 ```bash
-# 1. Clone and enter the repo
 git clone https://github.com/whadafunk/soono-radio.git
 cd soono-radio
-
-# 2. Optionally edit .env (CORS_ORIGINS, LS_MEDIA_DIR — already has sane defaults)
-# Edit CORS_ORIGINS to add your production domain if not already listed
-
-# 3. Build and start all services
 docker compose up --build -d
+```
 
-# 4. Follow logs
+That's it. No setup steps — `.env` is committed with working defaults.
+
+If your production domain isn't already in `CORS_ORIGINS`, add it to `.env` before starting:
+
+```
+CORS_ORIGINS=http://localhost,...,https://radio.example.com
+```
+
+Follow logs:
+```bash
 docker compose logs -f
 ```
 
-The `api` service runs all pending database migrations automatically on startup, before
-accepting requests. LiquidSoap waits for the api healthcheck to pass (which confirms
-`mix-engine.liq` has been generated) before starting.
+On first start the `api` container runs all database migrations, generates the initial
+`mix-engine.liq`, and only then signals healthy — LiquidSoap waits for that signal before
+starting, so startup order is guaranteed.
 
 First build takes ~5 minutes — essentia and mood models are downloaded during `docker build`
 and cached in subsequent builds.
