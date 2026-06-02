@@ -3,6 +3,7 @@ import { IcecastConfigSchema } from '@soono/shared';
 import { readIcecastConfig, writeIcecastConfig } from '../services/icecastConfig.js';
 import { fetchAllMountStats, fetchIcecastStats, killIcecastSource } from '../services/icecastStats.js';
 import { restartContainer } from '../services/dockerControl.js';
+import { generateRadioLiq, readLiquidsoapConfig } from '../services/liquidsoapConfig.js';
 
 export async function icecastRoutes(fastify: FastifyInstance) {
   fastify.get<{ Reply: any }>('/icecast/config', async (request, reply) => {
@@ -17,6 +18,9 @@ export async function icecastRoutes(fastify: FastifyInstance) {
     }
 
     await writeIcecastConfig(parsed.data);
+    // Regenerate the LiquidSoap script so the source password stays in sync with icecast.xml
+    const lsConfig = await readLiquidsoapConfig();
+    await generateRadioLiq(lsConfig);
     return reply.status(200).send({ success: true });
   });
 

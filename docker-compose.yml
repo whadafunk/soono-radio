@@ -118,7 +118,7 @@ services:
       - ./liquidsoap:/etc/liquidsoap:ro
       # Audio library — read-only; paths embedded in annotated URIs by the supervisor
       - ./media:/media:ro
-      - ./data/certs:/etc/icecast2/certs:ro
+      - ./data/certs:/etc/liquidsoap/certs:ro
     depends_on:
       api:
         condition: service_healthy   # ensures mix-engine.liq is generated

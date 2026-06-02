@@ -20,21 +20,20 @@ fi
 echo "Set LS_MEDIA_DIR=/media in .env"
 
 echo "Building Liquidsoap image..."
-docker buildx build -t radio-liquidsoap:latest --load liquidsoap/
+docker buildx build -t soono-liquidsoap:latest --load liquidsoap/
 
 echo "Starting Liquidsoap container..."
 docker run \
   -it \
-  --name radio-liquidsoap \
-  --rm \
+  --name soono-liquidsoap \
+  --restart unless-stopped \
   --user "$(id -u):$(id -g)" \
   --add-host=host.docker.internal:host-gateway \
   -p 8005:8005 \
   -p 127.0.0.1:1234:1234 \
   -v "$REPO_ROOT/liquidsoap/mix-engine.liq:/etc/liquidsoap/mix-engine.liq:ro" \
-  -v "$REPO_ROOT/liquidsoap/audio:/audio" \
   -v "$REPO_ROOT/media:/media:ro" \
-  -v "$REPO_ROOT/data/certs:/etc/icecast2/certs:ro" \
-  radio-liquidsoap:latest
+  -v "$REPO_ROOT/data/certs:/etc/liquidsoap/certs:ro" \
+  soono-liquidsoap:latest
 
-# To stop: Ctrl+C or `docker stop radio-liquidsoap`
+# To stop: Ctrl+C or `docker stop soono-liquidsoap`

@@ -102,7 +102,7 @@ export function HarborSection({ control, register, errors }: Props) {
                       value={currentName}
                       onChange={(e) =>
                         field.onChange(
-                          e.target.value ? `/etc/icecast2/certs/${e.target.value}` : null,
+                          e.target.value ? `/etc/liquidsoap/certs/${e.target.value}` : null,
                         )
                       }
                       className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
