@@ -1,14 +1,15 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
 import { bus } from '../services/supervisor2/bus.js';
-
-const LS_HARBOR_SECRET = process.env.LS_HARBOR_SECRET ?? '';
+import { readLiquidsoapConfig } from '../services/liquidsoapConfig.js';
 
 // Validate the shared secret on all internal LS webhook calls.
-// LS sends Authorization: Bearer <secret>.
-function validateSecret(request: FastifyRequest, reply: FastifyReply): boolean {
+// LS sends Authorization: Bearer <secret>. Password comes from the mix-engine config.
+async function validateSecret(request: FastifyRequest, reply: FastifyReply): Promise<boolean> {
+  const config = await readLiquidsoapConfig();
+  const password = config.harbor.password;
   const auth = request.headers['authorization'] ?? '';
   const provided = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  if (LS_HARBOR_SECRET !== '' && provided !== LS_HARBOR_SECRET) {
+  if (password !== '' && provided !== password) {
     reply.status(401).send({ error: 'Unauthorized' });
     return false;
   }
@@ -21,7 +22,7 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: Record<string, unknown> }>(
     '/internal/ls/track-started',
     async (request, reply) => {
-      if (!validateSecret(request, reply)) return;
+      if (!await validateSecret(request, reply)) return;
 
       const body = request.body ?? {};
       const on_air_timestamp =
@@ -64,7 +65,7 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: Record<string, unknown> }>(
     '/internal/ls/track-ending',
     async (request, reply) => {
-      if (!validateSecret(request, reply)) return;
+      if (!await validateSecret(request, reply)) return;
 
       const body = request.body ?? {};
       const remaining_seconds =
@@ -107,7 +108,7 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: Record<string, unknown> }>(
     '/internal/ls/live-started',
     async (request, reply) => {
-      if (!validateSecret(request, reply)) return;
+      if (!await validateSecret(request, reply)) return;
 
       const body = request.body ?? {};
       const source_name =
@@ -127,7 +128,7 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: Record<string, unknown> }>(
     '/internal/ls/live-ended',
     async (request, reply) => {
-      if (!validateSecret(request, reply)) return;
+      if (!await validateSecret(request, reply)) return;
 
       const body = request.body ?? {};
       const source_name =

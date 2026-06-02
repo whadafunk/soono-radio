@@ -3,21 +3,24 @@
 // no reconnect logic. Multiple callers can use this concurrently without any
 // coordination because LS's harbor handles thread safety internally.
 
-const BASE_URL = process.env.LS_HARBOR_URL ?? 'http://localhost:8005';
-const SECRET = process.env.LS_HARBOR_SECRET ?? '';
+import { readLiquidsoapConfig } from '../liquidsoapConfig.js';
 
-function authHeaders(): Record<string, string> {
+const BASE_URL = process.env.LS_HARBOR_URL ?? 'http://liquidsoap:8005';
+
+async function authHeaders(): Promise<Record<string, string>> {
+  const config = await readLiquidsoapConfig();
   return {
     'Content-Type': 'application/json',
-    Authorization: `Bearer ${SECRET}`,
+    Authorization: `Bearer ${config.harbor.password}`,
   };
 }
 
 async function harborFetch(path: string, init: RequestInit): Promise<Response> {
   const url = `${BASE_URL}${path}`;
+  const headers = await authHeaders();
   const res = await fetch(url, {
     ...init,
-    headers: { ...authHeaders(), ...(init.headers as Record<string, string> | undefined) },
+    headers: { ...headers, ...(init.headers as Record<string, string> | undefined) },
     signal: AbortSignal.timeout(5000),
   });
   return res;

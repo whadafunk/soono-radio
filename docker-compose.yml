@@ -67,8 +67,6 @@ services:
       LS_MEDIA_DIR: ${LS_MEDIA_DIR}
       CORS_ORIGINS: ${CORS_ORIGINS}
       DOCKER_PROXY_URL: ${DOCKER_PROXY_URL}
-      LS_HARBOR_SECRET: ${LS_HARBOR_SECRET}
-      ACOUSTID_API_KEY: ${ACOUSTID_API_KEY}
     volumes:
       # Persistent data: SQLite DB, incoming ingest queue, config JSON files
       - ./data:/data
