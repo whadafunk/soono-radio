@@ -56,8 +56,6 @@ services:
       dockerfile: apps/api/Dockerfile
     container_name: soono-api
     restart: unless-stopped
-    ports:
-      - "3000:3000"
     environment:
       # Internal Docker Compose service URLs — literal, not from .env.
       # Code defaults are localhost-based for dev mode; these override for compose.
@@ -97,7 +95,7 @@ services:
     container_name: soono-web
     restart: unless-stopped
     ports:
-      - "80:80"
+      - "8080:80"
     networks:
       - soono-net
 
