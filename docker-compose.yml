@@ -21,7 +21,7 @@ services:
   # Exposes a narrow slice of the Docker Engine API on the internal network.
   # Only POST /containers/*/restart is permitted — no socket mount in app containers.
   socket-proxy:
-    image: tecnativa/docker-socket-proxy
+    image: tecnativa/docker-socket-proxy:0.1.1
     container_name: soono-socket-proxy
     restart: unless-stopped
     volumes:
@@ -30,7 +30,6 @@ services:
       CONTAINERS: 1   # allow /containers/* endpoints
       POST: 1         # allow POST (needed for restart)
       # All other resource types (images, networks, volumes, etc.) default to 0.
-      ALLOW_IPV6: 0   # some hosts have IPv6 disabled; haproxy fails to bind otherwise
     networks:
       - soono-net
 
