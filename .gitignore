@@ -9,8 +9,13 @@ build/
 memory/
 *.png
 icecast/icecast.xml
-icecast/logs/
+icecast/logs/*
+!icecast/logs/.gitkeep
 data/certs/*.pem
+logs/*
+!logs/liquidsoap/
+logs/liquidsoap/*
+!logs/liquidsoap/.gitkeep
 liquidsoap/supervisor.json
 liquidsoap/mix-engine.liq
 liquidsoap/audio/*
