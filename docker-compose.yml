@@ -59,17 +59,16 @@ services:
     ports:
       - "3000:3000"
     environment:
-      # LS networking — override the localhost defaults so the API can reach the
-      # liquidsoap container and embed the correct callback URL in the generated script.
-      LS_HARBOR_URL: http://liquidsoap:8005
-      LS_API_URL: http://api:3000
-      LS_MEDIA_DIR: /media
-
-      # CORS — add your production hostname here if needed (comma-separated).
-      CORS_ORIGINS: "http://localhost,http://localhost:80,http://localhost:5173,http://localhost:3000"
-
-      # Docker socket proxy — used by the Restart Icecast / Restart LiquidSoap endpoints.
-      DOCKER_PROXY_URL: http://socket-proxy:2375
+      ICECAST_URL: ${ICECAST_URL}
+      ICECAST_ADMIN_USER: ${ICECAST_ADMIN_USER}
+      ICECAST_ADMIN_PASS: ${ICECAST_ADMIN_PASS}
+      LS_HARBOR_URL: ${LS_HARBOR_URL}
+      LS_API_URL: ${LS_API_URL}
+      LS_MEDIA_DIR: ${LS_MEDIA_DIR}
+      CORS_ORIGINS: ${CORS_ORIGINS}
+      DOCKER_PROXY_URL: ${DOCKER_PROXY_URL}
+      LS_HARBOR_SECRET: ${LS_HARBOR_SECRET}
+      ACOUSTID_API_KEY: ${ACOUSTID_API_KEY}
     volumes:
       # Persistent data: SQLite DB, incoming ingest queue, config JSON files
       - ./data:/data
