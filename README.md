@@ -107,7 +107,7 @@ Quick start:
 ```bash
 git clone https://github.com/whadafunk/soono-radio.git
 cd soono-radio
-cp .env.example .env   # edit CORS_ORIGINS to include your domain
+# optionally edit .env to add your domain to CORS_ORIGINS
 docker compose up --build -d
 ```
 

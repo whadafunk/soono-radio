@@ -73,13 +73,7 @@ server {
 
 ### Environment configuration
 
-Copy `.env.example` to `.env` and edit before first start:
-
-```bash
-cp .env.example .env
-```
-
-`.env` contains only two things operators need to touch:
+`.env` is committed to the repo — no setup step needed. It contains only two non-sensitive values operators may want to adjust:
 
 | Variable | Purpose |
 |----------|---------|
@@ -112,9 +106,8 @@ These host directories are created automatically on first run and persist across
 git clone https://github.com/whadafunk/soono-radio.git
 cd soono-radio
 
-# 2. Configure environment
-cp .env.example .env
-# Edit CORS_ORIGINS to include your domain
+# 2. Optionally edit .env (CORS_ORIGINS, LS_MEDIA_DIR — already has sane defaults)
+# Edit CORS_ORIGINS to add your production domain if not already listed
 
 # 3. Build and start all services
 docker compose up --build -d
