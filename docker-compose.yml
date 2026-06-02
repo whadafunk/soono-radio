@@ -30,6 +30,7 @@ services:
       CONTAINERS: 1   # allow /containers/* endpoints
       POST: 1         # allow POST (needed for restart)
       # All other resource types (images, networks, volumes, etc.) default to 0.
+      ALLOW_IPV6: 0   # some hosts have IPv6 disabled; haproxy fails to bind otherwise
     networks:
       - soono-net
 
