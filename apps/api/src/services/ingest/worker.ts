@@ -1,4 +1,4 @@
-import { rename, unlink, stat } from 'fs/promises';
+import { unlink, stat } from 'fs/promises';
 import { eq } from 'drizzle-orm';
 import { db } from '../../db/index.js';
 import { ingestJobs, media } from '../../db/schema.js';
@@ -7,7 +7,7 @@ import { ffprobe } from './ffprobe.js';
 import { measureLoudness } from './loudnorm.js';
 import { decideTranscode, transcodeToMp3, TRANSCODE_DEFAULTS } from './transcode.js';
 import { sha256File } from './hash.js';
-import { ensureDirs, mediaPathForSha, stagingPathFor } from './paths.js';
+import { ensureDirs, mediaPathForSha, moveFile, stagingPathFor } from './paths.js';
 import { identifyForIngest } from '../acoustid.js';
 import { autoAnalyseOnIngest } from '../audioAnalysis.js';
 import { maybeFinalizeLookupJob } from '../backgroundJobs.js';
@@ -122,7 +122,7 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
 
     // 6. Move final into the content-addressed media pool.
     const destPath = mediaPathForSha(sha);
-    await rename(finalPath, destPath);
+    await moveFile(finalPath, destPath);
 
     // If we transcoded, the original staging file is still there; remove it.
     if (decision.needs_transcode && stagingPath !== finalPath) {

@@ -1,7 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import { eq, and, or, like, desc, asc, inArray, sql, count, SQL } from 'drizzle-orm';
 import { createWriteStream, createReadStream } from 'fs';
-import { rename, stat, unlink } from 'fs/promises';
+import { stat, unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
 import { basename, join } from 'path';
 import {
@@ -20,7 +20,7 @@ import { analyseMedia } from '../services/audioAnalysis.js';
 import { db } from '../db/index.js';
 import { ingestJobs, media, MEDIA_CATEGORIES } from '../db/schema.js';
 import type { MediaCategory } from '../db/schema.js';
-import { ensureDirs, STAGING_DIR, mediaPathForSha, stagingPathFor } from '../services/ingest/paths.js';
+import { ensureDirs, moveFile, STAGING_DIR, mediaPathForSha, stagingPathFor } from '../services/ingest/paths.js';
 import { ingestQueue } from '../services/ingest/queue.js';
 import { createJob, completeLookupIdJob, completeAnalyseJob, failJob, supersedePendingReviews } from '../services/backgroundJobs.js';
 
@@ -117,7 +117,7 @@ export async function libraryRoutes(fastify: FastifyInstance) {
       for (const p of pending) {
         const jobId = newJobId();
         const finalPath = stagingPathFor(jobId);
-        await rename(p.tempPath, finalPath);
+        await moveFile(p.tempPath, finalPath);
 
         await db.insert(ingestJobs).values({
           id: jobId,

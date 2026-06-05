@@ -1,5 +1,5 @@
 import { join } from 'path';
-import { mkdir } from 'fs/promises';
+import { mkdir, rename, copyFile, unlink } from 'fs/promises';
 
 const REPO_ROOT = process.env.RADIO_REPO_ROOT || join(process.cwd(), '..', '..');
 
@@ -25,4 +25,16 @@ export function lsMediaPathForSha(sha256: string): string {
 export async function ensureDirs(): Promise<void> {
   await mkdir(STAGING_DIR, { recursive: true });
   await mkdir(MEDIA_DIR, { recursive: true });
+}
+
+// rename() fails with EXDEV when src and dest are on different mount points.
+// Fall back to copy+unlink in that case so cross-device moves always work.
+export async function moveFile(src: string, dest: string): Promise<void> {
+  try {
+    await rename(src, dest);
+  } catch (err: unknown) {
+    if ((err as NodeJS.ErrnoException).code !== 'EXDEV') throw err;
+    await copyFile(src, dest);
+    await unlink(src);
+  }
 }

@@ -1,10 +1,10 @@
 import { eq, and, ne } from 'drizzle-orm';
-import { rename, stat, unlink } from 'fs/promises';
+import { stat, unlink } from 'fs/promises';
 import { join } from 'path';
 import { db } from '../db/index.js';
 import { media } from '../db/schema.js';
 import type { Media } from '../db/schema.js';
-import { mediaPathForSha, STAGING_DIR } from './ingest/paths.js';
+import { mediaPathForSha, moveFile, STAGING_DIR } from './ingest/paths.js';
 import { ffprobe } from './ingest/ffprobe.js';
 import { measureLoudness } from './ingest/loudnorm.js';
 import { reTranscodeMp3, ReTranscodeOptions } from './ingest/transcode.js';
@@ -96,7 +96,7 @@ export async function reTranscodeMedia(
     const newPath = mediaPathForSha(newSha);
 
     if (newSha !== row.sha256) {
-      await rename(tempPath, newPath);
+      await moveFile(tempPath, newPath);
       await safeUnlink(sourcePath);
     } else {
       // Bit-identical output: drop the temp, keep the original.
