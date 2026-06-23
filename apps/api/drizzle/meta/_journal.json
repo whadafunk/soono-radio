@@ -181,14 +181,14 @@
       "idx": 25,
       "version": "6",
       "when": 1779581000001,
-      "tag": "0028_broadcast_intervals",
+      "tag": "0025_interval_slots",
       "breakpoints": true
     },
     {
       "idx": 26,
       "version": "6",
       "when": 1779581000002,
-      "tag": "0025_interval_slots",
+      "tag": "0028_broadcast_intervals",
       "breakpoints": true
     },
     {

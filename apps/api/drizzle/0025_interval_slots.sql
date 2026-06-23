@@ -1,5 +1,4 @@
--- Recreate broadcast_intervals: swap per-day times for default times
-CREATE TABLE `broadcast_intervals_new` (
+CREATE TABLE `broadcast_intervals` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
 	`name` text NOT NULL,
 	`color` text DEFAULT '#818cf8' NOT NULL,
@@ -8,10 +7,6 @@ CREATE TABLE `broadcast_intervals_new` (
 	`created_at` integer DEFAULT (unixepoch()) NOT NULL,
 	`updated_at` integer DEFAULT (unixepoch()) NOT NULL
 );
-INSERT INTO `broadcast_intervals_new` (`id`, `name`, `color`, `created_at`, `updated_at`)
-  SELECT `id`, `name`, `color`, `created_at`, `updated_at` FROM `broadcast_intervals`;
-DROP TABLE `broadcast_intervals`;
-ALTER TABLE `broadcast_intervals_new` RENAME TO `broadcast_intervals`;
 --> statement-breakpoint
 CREATE TABLE `broadcast_interval_slots` (
 	`id` integer PRIMARY KEY AUTOINCREMENT NOT NULL,
