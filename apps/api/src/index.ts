@@ -135,15 +135,14 @@ const start = async () => {
     await ensureIcecastConfig();
     await loadIntegrationsConfig();
 
-    // Ensure the LiquidSoap script exists before the LS container starts.
-    // In Docker Compose, liquidsoap depends on this service's healthcheck, so
-    // the script is guaranteed to exist before LS reads it.
-    try {
-      await readRadioLiq();
-    } catch {
+    // Always regenerate the LiquidSoap script on startup so that template
+    // changes (e.g. new settings) take effect after a deploy without needing
+    // to delete the file manually. In Docker Compose, liquidsoap depends on
+    // this service's healthcheck, so the script is ready before LS reads it.
+    {
       const config = await readLiquidsoapConfig();
       await generateRadioLiq(config);
-      fastify.log.info('Generated LiquidSoap script (first run)');
+      fastify.log.info('Generated LiquidSoap script');
     }
     await ensureDirs();
     const recovered = await recoverInterruptedJobs();
