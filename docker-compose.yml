@@ -107,7 +107,6 @@ services:
     restart: unless-stopped
     user: root   # image default is liquidsoap uid 10000; root needed to write bind-mounted log dirs
     ports:
-      - "8005:8005"              # Harbor HTTP (track push, skip, queue, live-status)
       - "127.0.0.1:1234:1234"   # Telnet control (loopback only)
     volumes:
       # Generated script — same host directory the API writes to, mounted read-only.
