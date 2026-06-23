@@ -79,7 +79,7 @@ export function GlobalSecuritySection({ control, register, certsData }: Props) {
                   <option value="">— None (SSL sockets will fail) —</option>
                   {certsData?.certificates.map((cert) => (
                     <option key={cert.name} value={cert.name}>
-                      {cert.name}
+                      {cert.cn || cert.name.replace(/\.pem$/i, '')}
                     </option>
                   ))}
                 </select>

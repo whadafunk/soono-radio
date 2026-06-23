@@ -15,6 +15,16 @@ const CERTS_DIR =
 const PEM_CERT_RE = /-----BEGIN CERTIFICATE-----/;
 const PEM_KEY_RE = /-----BEGIN (RSA |EC |ENCRYPTED |)PRIVATE KEY-----/;
 
+async function extractCN(filePath: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFile('openssl', ['x509', '-noout', '-subject', '-in', filePath]);
+    const match = stdout.match(/CN\s*=\s*([^,\/\r\n]+)/);
+    return match ? match[1].trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 async function ensureCertsDir() {
   try {
     await mkdir(CERTS_DIR, { recursive: true });
@@ -42,8 +52,10 @@ export async function certificateRoutes(fastify: FastifyInstance) {
         .map(async (name) => {
           const path = join(CERTS_DIR, name);
           const stats = await stat(path);
+          const cn = await extractCN(path);
           return {
             name,
+            cn,
             size: stats.size,
             modified: stats.mtime.toISOString(),
           };
@@ -226,6 +238,45 @@ export async function certificateRoutes(fastify: FastifyInstance) {
     } finally {
       await rm(tmp, { recursive: true, force: true });
     }
+  });
+
+  fastify.post<{
+    Body: { certificate?: string; chain?: string; key?: string; filename?: string };
+  }>('/certificates/assemble', async (request, reply) => {
+    await ensureCertsDir();
+    const { certificate, chain, key, filename } = request.body || {};
+
+    if (!certificate || !PEM_CERT_RE.test(certificate)) {
+      return reply.status(400).send({ error: 'certificate must contain a PEM certificate block' });
+    }
+    if (!key || !PEM_KEY_RE.test(key)) {
+      return reply.status(400).send({ error: 'key must contain a PEM private key block' });
+    }
+    if (chain && !PEM_CERT_RE.test(chain)) {
+      return reply.status(400).send({ error: 'chain must contain PEM certificate block(s)' });
+    }
+
+    const parts = [certificate.trim()];
+    if (chain && chain.trim()) parts.push(chain.trim());
+    parts.push(key.trim());
+    const combined = parts.join('\n') + '\n';
+
+    let baseName = filename?.trim();
+    if (!baseName) {
+      const tmp = await mkdtemp(join(tmpdir(), 'radio-cert-'));
+      try {
+        const tmpCert = join(tmp, 'cert.pem');
+        await writeFile(tmpCert, certificate, 'utf-8');
+        baseName = (await extractCN(tmpCert)) || 'server';
+      } finally {
+        await rm(tmp, { recursive: true, force: true });
+      }
+    }
+
+    const cleaned = safeFilename(baseName);
+    const finalName = cleaned.endsWith('.pem') ? cleaned : `${cleaned}.pem`;
+    await writeFile(join(CERTS_DIR, finalName), combined, { encoding: 'utf-8', mode: 0o600 });
+    return reply.send({ success: true, name: finalName });
   });
 
   fastify.get<{ Params: { name: string } }>(

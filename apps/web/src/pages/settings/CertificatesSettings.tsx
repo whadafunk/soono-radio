@@ -1,10 +1,11 @@
 import { useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { Loader, Trash2, FileLock, AlertCircle, Check, ChevronDown, Wand2, Eye, X } from 'lucide-react';
+import { Loader, Trash2, FileLock, AlertCircle, Check, ChevronDown, Wand2, Eye, X, Upload, ClipboardPaste } from 'lucide-react';
 import {
   fetchCertificates,
   fetchCertificateDetails,
   uploadCertificate,
+  assembleCertificate,
   deleteCertificate,
   generateCertificate,
   CertificateInfo,
@@ -18,6 +19,10 @@ function formatSize(bytes: number): string {
 
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleString();
+}
+
+function certLabel(cert: CertificateInfo): string {
+  return cert.cn || cert.name.replace(/\.pem$/i, '');
 }
 
 export function CertificatesSettings() {
@@ -35,6 +40,14 @@ export function CertificatesSettings() {
     setTimeout(() => setToast(null), 4000);
   };
 
+  // Assemble modal state
+  const [showAssemble, setShowAssemble] = useState(false);
+  const [asmCert, setAsmCert] = useState('');
+  const [asmChain, setAsmChain] = useState('');
+  const [asmKey, setAsmKey] = useState('');
+  const [asmFilename, setAsmFilename] = useState('');
+
+  // Generate form state
   const [showGenerator, setShowGenerator] = useState(false);
   const [genCommonName, setGenCommonName] = useState('');
   const [genValidityDays, setGenValidityDays] = useState(365);
@@ -42,7 +55,19 @@ export function CertificatesSettings() {
   const [genFilename, setGenFilename] = useState('');
   const [genCity, setGenCity] = useState('');
   const [genCountry, setGenCountry] = useState('');
+
   const [viewingCert, setViewingCert] = useState<string | null>(null);
+
+  const assembleMutation = useMutation({
+    mutationFn: assembleCertificate,
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ['certificates'] });
+      showToast('success', `Installed ${result.name}`);
+      setShowAssemble(false);
+      setAsmCert(''); setAsmChain(''); setAsmKey(''); setAsmFilename('');
+    },
+    onError: (err) => showToast('error', (err as Error).message),
+  });
 
   const uploadMutation = useMutation({
     mutationFn: uploadCertificate,
@@ -71,31 +96,12 @@ export function CertificatesSettings() {
     onSuccess: (result) => {
       queryClient.invalidateQueries({ queryKey: ['certificates'] });
       showToast('success', `Generated ${result.name}`);
-      setGenCommonName('');
-      setGenAltNames('');
-      setGenFilename('');
-      setGenCity('');
-      setGenCountry('');
-      setGenValidityDays(365);
+      setGenCommonName(''); setGenAltNames(''); setGenFilename('');
+      setGenCity(''); setGenCountry(''); setGenValidityDays(365);
       setShowGenerator(false);
     },
     onError: (err) => showToast('error', (err as Error).message),
   });
-
-  const handleGenerate = () => {
-    const altNames = genAltNames
-      .split(',')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    generateMutation.mutate({
-      commonName: genCommonName.trim(),
-      validityDays: genValidityDays,
-      altNames: altNames.length > 0 ? altNames : undefined,
-      filename: genFilename.trim() || undefined,
-      city: genCity.trim() || undefined,
-      country: genCountry.trim() || undefined,
-    });
-  };
 
   const detailsQuery = useQuery({
     queryKey: ['certificate-details', viewingCert],
@@ -109,9 +115,30 @@ export function CertificatesSettings() {
   };
 
   const handleDelete = (cert: CertificateInfo) => {
-    if (confirm(`Delete certificate "${cert.name}"? This can't be undone.`)) {
+    if (confirm(`Delete certificate "${certLabel(cert)}"? This can't be undone.`)) {
       deleteMutation.mutate(cert.name);
     }
+  };
+
+  const handleAssemble = () => {
+    assembleMutation.mutate({
+      certificate: asmCert.trim(),
+      chain: asmChain.trim() || undefined,
+      key: asmKey.trim(),
+      filename: asmFilename.trim() || undefined,
+    });
+  };
+
+  const handleGenerate = () => {
+    const altNames = genAltNames.split(',').map((s) => s.trim()).filter(Boolean);
+    generateMutation.mutate({
+      commonName: genCommonName.trim(),
+      validityDays: genValidityDays,
+      altNames: altNames.length > 0 ? altNames : undefined,
+      filename: genFilename.trim() || undefined,
+      city: genCity.trim() || undefined,
+      country: genCountry.trim() || undefined,
+    });
   };
 
   return (
@@ -119,8 +146,8 @@ export function CertificatesSettings() {
       <div>
         <h1 className="text-3xl font-bold text-white">Certificates</h1>
         <p className="text-zinc-400 mt-2">
-          Upload TLS certificates for HTTPS streaming. Icecast requires a single PEM file
-          containing both the certificate and the private key.
+          Manage TLS certificates for HTTPS streaming. Icecast requires a single PEM file
+          containing the certificate chain and private key.
         </p>
       </div>
 
@@ -137,31 +164,51 @@ export function CertificatesSettings() {
         </div>
       )}
 
-      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
-        <h2 className="text-lg font-semibold text-white mb-2">Upload Certificate</h2>
-        <p className="text-sm text-zinc-400 mb-4">
-          Combined PEM file (certificate + private key). Stored in{' '}
-          <code className="text-zinc-300 bg-zinc-800 px-1.5 py-0.5 rounded text-xs">
-            {data?.dir || 'data/certs/'}
-          </code>{' '}
-          with restrictive permissions.
-        </p>
-        <input
-          ref={fileInputRef}
-          type="file"
-          accept=".pem,.crt,.key"
-          onChange={handleFile}
-          disabled={uploadMutation.isPending}
-          className="block w-full text-sm text-zinc-300 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-sm file:font-medium file:bg-brand-600 file:text-white hover:file:bg-brand-700 file:cursor-pointer disabled:opacity-50"
-        />
+      {/* Install certificate */}
+      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 space-y-4">
+        <h2 className="text-lg font-semibold text-white">Install Certificate</h2>
+
+        <div className="flex gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setShowAssemble(true)}
+            className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition-colors"
+          >
+            <ClipboardPaste className="w-4 h-4" />
+            Paste Certificate Components
+          </button>
+
+          <label className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors cursor-pointer">
+            <Upload className="w-4 h-4" />
+            Upload Combined PEM
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pem,.crt,.key"
+              onChange={handleFile}
+              disabled={uploadMutation.isPending}
+              className="hidden"
+            />
+          </label>
+        </div>
+
         {uploadMutation.isPending && (
-          <p className="text-sm text-zinc-400 mt-3 flex items-center gap-2">
+          <p className="text-sm text-zinc-400 flex items-center gap-2">
             <Loader className="w-4 h-4 animate-spin" />
             Uploading...
           </p>
         )}
+
+        <p className="text-xs text-zinc-500">
+          Stored in{' '}
+          <code className="text-zinc-400 bg-zinc-800 px-1.5 py-0.5 rounded">
+            {data?.dir || 'data/certs/'}
+          </code>{' '}
+          with restrictive permissions.
+        </p>
       </section>
 
+      {/* Generate self-signed */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
         <button
           type="button"
@@ -196,15 +243,13 @@ export function CertificatesSettings() {
                 className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               <p className="text-xs text-zinc-500 mt-1">
-                The primary hostname this certificate is for. Browsers match against this and the alternative names below.
+                The primary hostname this certificate is for.
               </p>
             </div>
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-1">
-                  Validity (days)
-                </label>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">Validity (days)</label>
                 <input
                   type="number"
                   value={genValidityDays}
@@ -215,9 +260,7 @@ export function CertificatesSettings() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-1">
-                  Filename (optional)
-                </label>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">Filename <span className="text-zinc-500 text-xs">(optional)</span></label>
                 <input
                   type="text"
                   value={genFilename}
@@ -230,9 +273,7 @@ export function CertificatesSettings() {
 
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-1">
-                  City (L) <span className="text-zinc-500 text-xs">(optional)</span>
-                </label>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">City (L) <span className="text-zinc-500 text-xs">(optional)</span></label>
                 <input
                   type="text"
                   value={genCity}
@@ -243,9 +284,7 @@ export function CertificatesSettings() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium text-zinc-300 mb-1">
-                  Country (C) <span className="text-zinc-500 text-xs">(optional)</span>
-                </label>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">Country (C) <span className="text-zinc-500 text-xs">(optional)</span></label>
                 <input
                   type="text"
                   value={genCountry}
@@ -259,9 +298,7 @@ export function CertificatesSettings() {
             </div>
 
             <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-1">
-                Subject Alternative Names (optional)
-              </label>
+              <label className="block text-sm font-medium text-zinc-300 mb-1">Subject Alternative Names <span className="text-zinc-500 text-xs">(optional)</span></label>
               <input
                 type="text"
                 value={genAltNames}
@@ -270,7 +307,7 @@ export function CertificatesSettings() {
                 className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
               />
               <p className="text-xs text-zinc-500 mt-1">
-                Comma-separated list of additional hostnames or IPs. IPv4 addresses are auto-detected and tagged as IP entries; everything else is treated as a DNS name.
+                Comma-separated. IPv4 addresses are auto-tagged as IP entries.
               </p>
             </div>
 
@@ -281,21 +318,16 @@ export function CertificatesSettings() {
               className="flex items-center gap-2 px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {generateMutation.isPending ? (
-                <>
-                  <Loader className="w-4 h-4 animate-spin" />
-                  Generating...
-                </>
+                <><Loader className="w-4 h-4 animate-spin" />Generating...</>
               ) : (
-                <>
-                  <Wand2 className="w-4 h-4" />
-                  Generate
-                </>
+                <><Wand2 className="w-4 h-4" />Generate</>
               )}
             </button>
           </div>
         )}
       </section>
 
+      {/* Installed certificates */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-4">Installed Certificates</h2>
 
@@ -311,7 +343,7 @@ export function CertificatesSettings() {
         )}
 
         {data && data.certificates.length === 0 && (
-          <p className="text-zinc-500 text-sm italic">No certificates uploaded yet.</p>
+          <p className="text-zinc-500 text-sm italic">No certificates installed yet.</p>
         )}
 
         {data && data.certificates.length > 0 && (
@@ -324,9 +356,11 @@ export function CertificatesSettings() {
                 <div className="flex items-center gap-3 min-w-0 flex-1">
                   <FileLock className="w-5 h-5 text-brand-400 flex-shrink-0" />
                   <div className="min-w-0 flex-1">
-                    <p className="text-white font-mono text-sm truncate">{cert.name}</p>
+                    <p className="text-white font-medium text-sm truncate">{certLabel(cert)}</p>
                     <p className="text-xs text-zinc-500">
-                      {formatSize(cert.size)} · uploaded {formatDate(cert.modified)}
+                      <span className="font-mono">{cert.name}</span>
+                      {' · '}{formatSize(cert.size)}
+                      {' · '}{formatDate(cert.modified)}
                     </p>
                   </div>
                 </div>
@@ -353,10 +387,11 @@ export function CertificatesSettings() {
         )}
       </section>
 
+      {/* How to use */}
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
         <h2 className="text-lg font-semibold text-white mb-2">Using a Certificate</h2>
         <ol className="text-sm text-zinc-400 space-y-2 list-decimal list-inside">
-          <li>Upload or generate a combined PEM file above.</li>
+          <li>Install a certificate above.</li>
           <li>
             Go to <span className="text-zinc-200 font-medium">Settings → Icecast → Listen Sockets</span>,
             check <span className="text-zinc-200 font-medium">SSL/TLS</span> on a socket (e.g., port 8443).
@@ -369,6 +404,137 @@ export function CertificatesSettings() {
         </ol>
       </section>
 
+      {/* Paste components modal */}
+      {showAssemble && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg w-full max-w-2xl flex flex-col max-h-[90vh]">
+            <div className="flex items-center justify-between p-6 border-b border-zinc-800 flex-shrink-0">
+              <h2 className="text-xl font-semibold text-white">Install Certificate</h2>
+              <button
+                onClick={() => setShowAssemble(false)}
+                className="p-1 text-zinc-400 hover:text-white transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <div className="overflow-y-auto p-6 space-y-5 flex-1 min-h-0">
+              {/* Let's Encrypt cheatsheet */}
+              <div className="bg-zinc-800/60 border border-zinc-700 rounded-lg p-4 text-sm space-y-1">
+                <p className="font-medium text-zinc-200 mb-2">Let's Encrypt files</p>
+                <p className="text-zinc-400">
+                  <span className="font-mono text-zinc-300">fullchain.pem</span>
+                  {' → '}<span className="text-zinc-300">Certificate</span> field (includes intermediates — leave Chain empty)
+                </p>
+                <p className="text-zinc-400">
+                  <span className="font-mono text-zinc-300">cert.pem</span>
+                  {' → '}<span className="text-zinc-300">Certificate</span>, then{' '}
+                  <span className="font-mono text-zinc-300">chain.pem</span>
+                  {' → '}<span className="text-zinc-300">Chain</span>
+                </p>
+                <p className="text-zinc-400">
+                  <span className="font-mono text-zinc-300">privkey.pem</span>
+                  {' → '}<span className="text-zinc-300">Private Key</span>
+                </p>
+              </div>
+
+              {/* Certificate */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">
+                  Certificate <span className="text-red-400">*</span>
+                </label>
+                <p className="text-xs text-zinc-500 mb-2">
+                  Paste <code className="text-zinc-400">fullchain.pem</code> or <code className="text-zinc-400">cert.pem</code>
+                </p>
+                <textarea
+                  value={asmCert}
+                  onChange={(e) => setAsmCert(e.target.value)}
+                  rows={5}
+                  spellCheck={false}
+                  placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 font-mono text-xs focus:outline-none focus:border-brand-500 resize-y"
+                />
+              </div>
+
+              {/* Chain */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">
+                  Intermediate CA / Chain{' '}
+                  <span className="text-zinc-500 text-xs font-normal">(optional)</span>
+                </label>
+                <p className="text-xs text-zinc-500 mb-2">
+                  Paste <code className="text-zinc-400">chain.pem</code> — only needed if you pasted{' '}
+                  <code className="text-zinc-400">cert.pem</code> (not <code className="text-zinc-400">fullchain.pem</code>) above
+                </p>
+                <textarea
+                  value={asmChain}
+                  onChange={(e) => setAsmChain(e.target.value)}
+                  rows={4}
+                  spellCheck={false}
+                  placeholder="-----BEGIN CERTIFICATE-----&#10;...&#10;-----END CERTIFICATE-----"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 font-mono text-xs focus:outline-none focus:border-brand-500 resize-y"
+                />
+              </div>
+
+              {/* Private key */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">
+                  Private Key <span className="text-red-400">*</span>
+                </label>
+                <p className="text-xs text-zinc-500 mb-2">
+                  Paste <code className="text-zinc-400">privkey.pem</code>
+                </p>
+                <textarea
+                  value={asmKey}
+                  onChange={(e) => setAsmKey(e.target.value)}
+                  rows={5}
+                  spellCheck={false}
+                  placeholder="-----BEGIN PRIVATE KEY-----&#10;...&#10;-----END PRIVATE KEY-----"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-zinc-200 font-mono text-xs focus:outline-none focus:border-brand-500 resize-y"
+                />
+              </div>
+
+              {/* Filename */}
+              <div>
+                <label className="block text-sm font-medium text-zinc-300 mb-1">
+                  Filename <span className="text-zinc-500 text-xs font-normal">(optional)</span>
+                </label>
+                <input
+                  type="text"
+                  value={asmFilename}
+                  onChange={(e) => setAsmFilename(e.target.value)}
+                  placeholder="(derived from certificate CN)"
+                  className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
+                />
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-zinc-800 flex justify-end gap-3 flex-shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowAssemble(false)}
+                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={handleAssemble}
+                disabled={!asmCert.trim() || !asmKey.trim() || assembleMutation.isPending}
+                className="flex items-center gap-2 px-4 py-2 bg-brand-600 hover:bg-brand-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {assembleMutation.isPending ? (
+                  <><Loader className="w-4 h-4 animate-spin" />Installing...</>
+                ) : (
+                  <><FileLock className="w-4 h-4" />Install Certificate</>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* View certificate details modal */}
       {viewingCert && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg w-[95vw] h-[95vh] max-w-5xl flex flex-col">

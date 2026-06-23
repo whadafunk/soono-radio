@@ -134,6 +134,7 @@ export async function restartIcecast(): Promise<{ success: boolean; uptime: numb
 
 export interface CertificateInfo {
   name: string;
+  cn: string | null;
   size: number;
   modified: string;
 }
@@ -190,6 +191,24 @@ export async function generateCertificate(params: {
   if (!res.ok) {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Generation failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function assembleCertificate(params: {
+  certificate: string;
+  chain?: string;
+  key: string;
+  filename?: string;
+}): Promise<{ success: boolean; name: string }> {
+  const res = await fetch(`${API_BASE}/certificates/assemble`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    throw new Error(data.error || `Failed to install certificate: ${res.statusText}`);
   }
   return res.json();
 }
