@@ -9,6 +9,7 @@ import {
   fetchLiquidsoapRawScript,
   saveLiquidsoapRawScript,
   restartLiquidsoap,
+  fetchIcecastConfig,
 } from '../../api';
 import { Loader, Check, AlertCircle, Code } from 'lucide-react';
 import { RawScriptEditor } from '../../components/RawScriptEditor';
@@ -30,6 +31,14 @@ export function LiquidSoapSettings() {
     queryFn: fetchLiquidsoapConfig,
     staleTime: 60_000,
   });
+
+  const { data: icecastConfig } = useQuery({
+    queryKey: ['icecast-config'],
+    queryFn: fetchIcecastConfig,
+    staleTime: 60_000,
+  });
+
+  const icecastSockets = icecastConfig?.network.listen_sockets ?? [];
 
   const {
     register,
@@ -110,7 +119,7 @@ export function LiquidSoapSettings() {
       )}
 
       <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-8">
-        <OutputSection register={register} errors={errors} control={control} />
+        <OutputSection register={register} errors={errors} control={control} icecastSockets={icecastSockets} />
         <HarborSection control={control} register={register} errors={errors} />
         <CrossfadeSection register={register} errors={errors} />
         <MasterBusSection register={register} />

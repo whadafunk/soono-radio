@@ -1,5 +1,6 @@
 import { UseFormRegister, FieldErrors, useWatch, Control } from 'react-hook-form';
 import { LiquidsoapConfig, CODECS, CODEC_BITRATES, Codec } from '@soono/shared';
+import { ListenSocket } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
@@ -7,11 +8,14 @@ interface Props {
   register: UseFormRegister<LiquidsoapConfig>;
   errors: FieldErrors<LiquidsoapConfig>;
   control: Control<LiquidsoapConfig>;
+  icecastSockets: ListenSocket[];
 }
 
-export function OutputSection({ register, errors, control }: Props) {
+export function OutputSection({ register, errors, control, icecastSockets }: Props) {
   const codec = (useWatch({ control, name: 'output.codec' }) ?? 'mp3') as Codec;
   const validBitrates = CODEC_BITRATES[codec] ?? CODEC_BITRATES.mp3;
+
+  const plainSockets = icecastSockets.filter((s) => !s.ssl);
 
   return (
     <CollapsibleSection title="Output">
@@ -54,44 +58,58 @@ export function OutputSection({ register, errors, control }: Props) {
         <div className="grid grid-cols-2 gap-4">
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-              Streaming Engine Host
-              <HelpTooltip text="Where the Mix Engine connects to the Streaming Engine. Use host.docker.internal when both run as containers." />
+              Streaming Engine Port
+              <HelpTooltip text="The plain-HTTP Icecast socket the Mix Engine pushes audio to. SSL sockets are excluded — LiquidSoap connects as a source over plain HTTP." />
             </label>
-            <input
-              {...register('output.icecast_host')}
-              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
-              placeholder="host.docker.internal"
-            />
-            {errors.output?.icecast_host && (
-              <p className="text-red-400 text-xs mt-1">{errors.output.icecast_host.message}</p>
+            {plainSockets.length > 0 ? (
+              <select
+                {...register('output.icecast_port', { valueAsNumber: true })}
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
+              >
+                {plainSockets.map((s) => (
+                  <option key={s.port} value={s.port}>
+                    Port {s.port}
+                    {s.bind_address && s.bind_address !== '0.0.0.0'
+                      ? ` (${s.bind_address})`
+                      : ''}
+                  </option>
+                ))}
+              </select>
+            ) : (
+              <input
+                type="number"
+                {...register('output.icecast_port', { valueAsNumber: true })}
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
+              />
+            )}
+            {errors.output?.icecast_port && (
+              <p className="text-red-400 text-xs mt-1">{errors.output.icecast_port.message}</p>
+            )}
+            {plainSockets.length === 0 && (
+              <p className="text-xs text-zinc-500 mt-1">
+                Define a plain-HTTP socket in Streaming Engine settings to get a dropdown here.
+              </p>
             )}
           </div>
           <div>
             <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-              Streaming Engine Port
-              <HelpTooltip text="The Streaming Engine port the Mix Engine publishes to. Plain HTTP — typically 8001 in this project (8000 listeners-facing reserved for SSL)." />
+              Mount Path
+              <HelpTooltip text="The mount path the Mix Engine publishes to on the Streaming Engine. Listeners hit this path." />
             </label>
             <input
-              type="number"
-              {...register('output.icecast_port', { valueAsNumber: true })}
+              {...register('output.icecast_mount')}
               className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
+              placeholder="/stream"
             />
           </div>
         </div>
 
-        <div>
-          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-            Mount Path
-            <HelpTooltip text="The mount path the Mix Engine publishes to on the Streaming Engine. Listeners hit this path." />
-          </label>
-          <input
-            {...register('output.icecast_mount')}
-            className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
-            placeholder="/stream"
-          />
-        </div>
-
         <div className="pt-4 border-t border-zinc-800 space-y-1 text-sm">
+          <p className="text-zinc-400">
+            <span className="text-zinc-300 font-medium">Host:</span>{' '}
+            <span className="font-mono text-zinc-500">icecast</span>
+            <span className="text-zinc-600 text-xs ml-2">(container name on the internal network — not configurable)</span>
+          </p>
           <p className="text-zinc-400">
             <span className="text-zinc-300 font-medium">User:</span>{' '}
             <span className="font-mono text-zinc-500">source</span>

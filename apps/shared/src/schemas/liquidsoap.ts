@@ -17,7 +17,6 @@ export type CrossfadeType = (typeof CROSSFADE_TYPES)[number];
 
 export const LiquidsoapConfigSchema = z.object({
   output: z.object({
-    icecast_host: z.string().min(1).default('host.docker.internal'),
     icecast_port: z.number().int().min(1).max(65535).default(8001),
     icecast_mount: z.string().min(1).default('/stream'),
     codec: z.enum(CODECS).default('mp3'),

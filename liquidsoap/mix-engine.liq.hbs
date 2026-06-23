@@ -159,7 +159,7 @@ radio = compress(threshold=-1.0, ratio=20.0, attack=5.0, release=50.0, radio)
 # Output to Icecast (source password resolved from icecast.xml at generation time)
 output.icecast(
   {{codec_string}},
-  host="{{output.icecast_host}}",
+  host="icecast",
   port={{output.icecast_port}},
   user="source",
   password="{{icecast_source_password}}",
