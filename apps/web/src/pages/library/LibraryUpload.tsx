@@ -36,6 +36,7 @@ const CATEGORY_GROUPS: { label: string; categories: MediaCategory[] }[] = [
 ];
 
 interface ActiveUpload {
+  uid: string;
   filename: string;
   size: number;
   loaded: number;
@@ -144,60 +145,52 @@ export function LibraryUpload() {
 
   const startUpload = useCallback(async (files: File[], category: MediaCategory) => {
     const initial: ActiveUpload[] = files.map((f) => ({
+      uid: crypto.randomUUID(),
       filename: f.name,
       size: f.size,
       loaded: 0,
       status: 'uploading',
     }));
+    const initialUids = new Set(initial.map((u) => u.uid));
     setActive((prev) => [...initial, ...prev]);
 
     try {
       const result = await uploadLibraryFiles(files, category, (loaded, total) => {
-        setActive((prev) => {
-          const next = [...prev];
-          for (let i = 0; i < initial.length; i++) {
-            if (next[i] && next[i].status === 'uploading') {
-              next[i] = {
-                ...next[i],
-                loaded: Math.min(next[i].size, Math.round((loaded / total) * next[i].size)),
-              };
-            }
-          }
-          return next;
-        });
-      });
-
-      setActive((prev) => {
-        const next = [...prev];
-        for (let i = 0; i < initial.length; i++) {
-          if (next[i] && next[i].status === 'uploading') {
-            next[i] = {
-              ...next[i],
-              loaded: next[i].size,
-              status: 'queued',
-              jobId: result.jobs[i]?.job_id,
+        setActive((prev) =>
+          prev.map((u) => {
+            if (!initialUids.has(u.uid) || u.status !== 'uploading') return u;
+            return {
+              ...u,
+              loaded: Math.min(u.size, Math.round((loaded / total) * u.size)),
             };
-          }
-        }
-        return next;
+          }),
+        );
       });
 
-      // Track the job IDs belonging to this upload batch
-      setBatchJobIds((prev) => {
-        const next = new Set(prev);
-        result.jobs.forEach((j: { job_id: string }) => next.add(j.job_id));
-        return next;
-      });
+      // Map server job IDs back to upload items by position within this batch.
+      const uidList = initial.map((u) => u.uid);
+      setActive((prev) =>
+        prev.map((u) => {
+          const idx = uidList.indexOf(u.uid);
+          if (idx === -1 || u.status !== 'uploading') return u;
+          return {
+            ...u,
+            loaded: u.size,
+            status: 'queued',
+            jobId: result.jobs[idx]?.job_id,
+          };
+        }),
+      );
+
+      // Replace (not append) batch tracker so the progress bar shows only this batch.
+      setBatchJobIds(new Set(result.jobs.map((j: { job_id: string }) => j.job_id)));
     } catch (err) {
-      setActive((prev) => {
-        const next = [...prev];
-        for (let i = 0; i < initial.length; i++) {
-          if (next[i] && next[i].status === 'uploading') {
-            next[i] = { ...next[i], status: 'failed', error: (err as Error).message };
-          }
-        }
-        return next;
-      });
+      setActive((prev) =>
+        prev.map((u) => {
+          if (!initialUids.has(u.uid) || u.status !== 'uploading') return u;
+          return { ...u, status: 'failed', error: (err as Error).message };
+        }),
+      );
     }
   }, []);
 
@@ -391,7 +384,6 @@ export function LibraryUpload() {
         <CategoryPickerModal
           fileCount={pendingFiles.length}
           onSelect={(category) => {
-            setBatchJobIds(new Set());
             startUpload(pendingFiles, category);
             setPendingFiles(null);
             setIngestTab('pending');
