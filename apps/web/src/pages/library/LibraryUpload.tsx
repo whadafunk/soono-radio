@@ -253,7 +253,7 @@ export function LibraryUpload() {
         <UploadCloud className="w-12 h-12 mx-auto text-zinc-500 mb-3" />
         <p className="text-zinc-300 font-medium">Drop audio files here, or click to browse</p>
         <p className="text-zinc-500 text-sm mt-1">
-          MP3, FLAC, WAV, M4A, OGG — anything ffmpeg reads. Files larger than 256k MP3 are re-encoded; smaller MP3s pass through.
+          MP3, FLAC, WAV, M4A, OGG — anything ffmpeg reads. Files larger than 256k MP3 are re-encoded; smaller MP3s pass through. Batch limit: 4 GB.
         </p>
         <input
           ref={fileInputRef}
