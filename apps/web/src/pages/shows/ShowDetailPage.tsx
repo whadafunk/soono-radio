@@ -469,7 +469,7 @@ export function ShowDetailPage() {
             ) : (
               <>
                 <section className="space-y-4">
-                  <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Show Envelopes</h2>
+                  <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Envelopes</h2>
                   <div>
                     <label className="flex items-center gap-1 text-xs text-zinc-400 mb-1.5">
                       Show intro playlist <HelpTooltip text="Jingle playlist for the show's opening clip, played before the first segment. The branding process LRP-picks from this playlist." />

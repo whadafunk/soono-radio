@@ -6,7 +6,7 @@ import { sql } from 'drizzle-orm';
 export const MEDIA_CATEGORIES = [
   'music',
   'jingle',
-  'showenv',
+  'envelope',
   'spot',
   'promo',
   'bed',
@@ -489,7 +489,7 @@ export const shows = sqliteTable(
       () => playlists.id,
       { onDelete: 'set null' },
     ),
-    // Show envelope playlists — LRP-picked intro/outro clips served by the branding process.
+    // Envelope playlists — LRP-picked intro/outro clips served by the branding process.
     // intro_media_id / outro_media_id columns still exist in the DB but are inert (schema drift).
     show_start_playlist_id: integer('show_start_playlist_id').references(
       () => playlists.id,

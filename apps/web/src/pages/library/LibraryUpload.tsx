@@ -10,7 +10,7 @@ import { fetchIngestJobs, clearIngestJobs, uploadLibraryFiles } from '../../api'
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
   music:     'Music',
   jingle:    'Jingle',
-  showenv:    'Show Envelope',
+  envelope:   'Envelope',
   spot:      'Spot',
   promo:     'Promo',
   bed:       'Bed',
@@ -20,7 +20,7 @@ const CATEGORY_LABELS: Record<MediaCategory, string> = {
 const CATEGORY_ICONS: Record<MediaCategory, React.ElementType> = {
   music:     Music,
   jingle:    Bell,
-  showenv:    Sparkles,
+  envelope:   Sparkles,
   spot:      Tag,
   promo:     Megaphone,
   bed:       Waves,
@@ -30,7 +30,7 @@ const CATEGORY_ICONS: Record<MediaCategory, React.ElementType> = {
 // Visual grouping for the picker
 const CATEGORY_GROUPS: { label: string; categories: MediaCategory[] }[] = [
   { label: 'Music',      categories: ['music'] },
-  { label: 'Imaging',    categories: ['jingle', 'showenv'] },
+  { label: 'Imaging',    categories: ['jingle', 'envelope'] },
   { label: 'Advertising',categories: ['spot', 'promo'] },
   { label: 'Other',      categories: ['bed', 'recording'] },
 ];

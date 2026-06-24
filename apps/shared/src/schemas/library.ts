@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const MEDIA_CATEGORIES = [
   'music',
   'jingle',   // between-track stings
-  'showenv',  // show envelope: intro/outro clips that bookend each show
+  'envelope', // intro/outro clips that bookend shows and clock segments
   'spot',
   'promo',
   'bed',

@@ -12,7 +12,7 @@ import { FacetDrawer, FacetFilters, EMPTY_FACET_FILTERS, countActiveFacets } fro
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
   music:     'Music',
   jingle:    'Jingle',
-  showenv:    'Show Envelope',
+  envelope:   'Envelope',
   spot:      'Spot',
   promo:     'Promo',
   bed:       'Bed',
@@ -22,7 +22,7 @@ const CATEGORY_LABELS: Record<MediaCategory, string> = {
 const TAB_CATEGORIES = {
   all:        null as null,
   music:      ['music'] as MediaCategory[],
-  imaging:    ['jingle', 'showenv', 'spot', 'promo', 'bed'] as MediaCategory[],
+  imaging:    ['jingle', 'envelope', 'spot', 'promo', 'bed'] as MediaCategory[],
   production: ['recording'] as MediaCategory[],
 };
 type LibraryTab = keyof typeof TAB_CATEGORIES;
@@ -426,7 +426,7 @@ export function LibraryBrowse() {
 }
 
 const PLAYLIST_CATEGORY_LABELS: Record<string, string> = {
-  music: 'Music', jingle: 'Jingle', showenv: 'Show Envelope',
+  music: 'Music', jingle: 'Jingle', envelope: 'Envelope',
   spot: 'Spot', promo: 'Promo', bed: 'Bed', recording: 'Recording',
 };
 
@@ -659,7 +659,7 @@ function BulkActionBar({
     return cats;
   }, [ids, items]);
   const commonCategory = selectedCategories.size === 1 ? Array.from(selectedCategories)[0] : null;
-  const canAddToPlaylist = commonCategory !== null && commonCategory !== 'showenv';
+  const canAddToPlaylist = commonCategory !== null && commonCategory !== 'envelope';
   const addToPlaylistTitle = !commonCategory ? 'Selection contains mixed categories' : undefined;
 
   const wrap = async (label: string, fn: () => Promise<unknown>, summary: (r: any) => string) => {
@@ -932,7 +932,7 @@ function BulkActionBar({
 const CATEGORY_FILTER_GROUPS: { key: string; label: string; categories: MediaCategory[] }[] = [
   { key: 'music',     label: 'Music',     categories: ['music'] },
   { key: 'jingle',    label: 'Jingle',    categories: ['jingle'] },
-  { key: 'showenv',    label: 'Show Envelope',   categories: ['showenv'] },
+  { key: 'envelope',   label: 'Envelope',          categories: ['envelope'] },
   { key: 'spot',      label: 'Spot',      categories: ['spot'] },
   { key: 'promo',     label: 'Promo',     categories: ['promo'] },
   { key: 'bed',       label: 'Bed',       categories: ['bed'] },
