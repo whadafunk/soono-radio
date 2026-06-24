@@ -20,6 +20,19 @@ import { LimitsSection } from './icecast-sections/LimitsSection';
 import { RelaySection } from './icecast-sections/RelaySection';
 import { LoggingSection } from './icecast-sections/LoggingSection';
 
+function collectErrorPaths(obj: Record<string, unknown>, prefix = ''): string[] {
+  const paths: string[] = [];
+  for (const [key, val] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (val && typeof val === 'object' && 'message' in val) {
+      paths.push(path);
+    } else if (val && typeof val === 'object') {
+      paths.push(...collectErrorPaths(val as Record<string, unknown>, path));
+    }
+  }
+  return paths;
+}
+
 function getIcecastBaseUrl(config: IcecastConfig): string {
   const nonSslSocket = config.network.listen_sockets.find((s) => !s.ssl);
   const port = nonSslSocket?.port ?? config.network.listen_sockets[0]?.port ?? 8000;
@@ -161,7 +174,16 @@ export function IcecastSettings() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-8">
+      <form
+        onSubmit={handleSubmit(
+          (data) => mutation.mutate(data),
+          (formErrors) => {
+            const paths = collectErrorPaths(formErrors).join(', ');
+            setToast({ type: 'error', message: `Validation failed — check these fields: ${paths}` });
+          },
+        )}
+        className="space-y-8"
+      >
         <BasicSettingsSection register={register} errors={errors} />
 
         {showAdvanced && <LimitsSection register={register} />}

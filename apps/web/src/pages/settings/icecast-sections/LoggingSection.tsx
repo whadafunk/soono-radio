@@ -32,7 +32,13 @@ export function LoggingSection({ register }: Props) {
             <HelpTooltip text="Maximum size of each log file in bytes before Icecast rotates it. Leave empty for no limit. Example: 10485760 = 10 MB." />
           </label>
           <input
-            {...register('logging.logsize', { valueAsNumber: true })}
+            {...register('logging.logsize', {
+              setValueAs: (v) => {
+                if (v === '' || v == null) return undefined;
+                const n = Number(v);
+                return isNaN(n) ? undefined : n;
+              },
+            })}
             type="number"
             className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
             placeholder="Leave empty for no limit"
