@@ -39,15 +39,14 @@ services:
       context: icecast
     container_name: soono-icecast
     restart: unless-stopped
-    ports:
-      - "8000:8000"   # SSL (configured in icecast.xml)
-      - "8001:8001"   # Plain HTTP — LiquidSoap pushes audio here
     volumes:
       - ./icecast/icecast.xml:/etc/icecast2/icecast.xml:ro
       - ./icecast/logs:/usr/local/icecast/logs
       - ./data/certs:/etc/icecast2/certs:ro
     networks:
-      - soono-net
+      soono-net:
+      dmz:
+        ipv4_address: 192.168.40.69
 
   # ── API + Supervisor ─────────────────────────────────────────────────────────
   api:
@@ -94,10 +93,10 @@ services:
       dockerfile: apps/web/Dockerfile
     container_name: soono-web
     restart: unless-stopped
-    ports:
-      - "8080:80"
     networks:
-      - soono-net
+      soono-net:
+      dmz:
+        ipv4_address: 192.168.40.68
 
   # ── LiquidSoap ───────────────────────────────────────────────────────────────
   liquidsoap:
@@ -122,9 +121,15 @@ services:
       icecast:
         condition: service_started
     networks:
-      - soono-net
+      soono-net:
+      dmz:
+        ipv4_address: 192.168.40.70
 
 # ── Networks ──────────────────────────────────────────────────────────────────
 networks:
   soono-net:
     driver: bridge
+    internal: true   # containers cannot initiate outbound internet connections
+  dmz:
+    external: true   # pre-created macvlan network; customize IPs above per deployment
+    name: macnet-40
