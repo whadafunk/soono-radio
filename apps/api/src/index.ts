@@ -52,6 +52,7 @@ try { mkdirSync(LOG_DIR, { recursive: true }); } catch { /* already exists */ }
 const LOG_FILE = join(LOG_DIR, 'api.log');
 
 const fastify = Fastify({
+  bodyLimit: 500 * 1024 * 1024, // 500 MB — matches multipart fileSize limit and nginx client_max_body_size
   logger: {
     level: 'debug',
     transport: {
