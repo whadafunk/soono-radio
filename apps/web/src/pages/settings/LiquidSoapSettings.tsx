@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { useQuery, useMutation } from '@tanstack/react-query';
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useForm } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { LiquidsoapConfig, LiquidsoapConfigSchema } from '@soono/shared';
@@ -21,10 +21,24 @@ import { DuckingSection } from './liquidsoap-sections/DuckingSection';
 import { SilenceDetectionSection } from './liquidsoap-sections/SilenceDetectionSection';
 import { LoggingSection } from './liquidsoap-sections/LoggingSection';
 
+function collectErrorPaths(obj: Record<string, unknown>, prefix = ''): string[] {
+  const paths: string[] = [];
+  for (const [key, val] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (val && typeof val === 'object' && 'message' in val) {
+      paths.push(path);
+    } else if (val && typeof val === 'object') {
+      paths.push(...collectErrorPaths(val as Record<string, unknown>, path));
+    }
+  }
+  return paths;
+}
+
 export function LiquidSoapSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [showRawScript, setShowRawScript] = useState(false);
   const [isRestarting, setIsRestarting] = useState(false);
+  const queryClient = useQueryClient();
 
   const { data: config, isLoading, error } = useQuery({
     queryKey: ['liquidsoap-config'],
@@ -60,6 +74,9 @@ export function LiquidSoapSettings() {
       setIsRestarting(false);
       setToast({ type: 'success', message: '✓ Liquidsoap restarted successfully' });
       setTimeout(() => setToast(null), 5000);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['liquidsoap-config'] });
     },
     onError: (err) => {
       setIsRestarting(false);
@@ -118,7 +135,16 @@ export function LiquidSoapSettings() {
         </div>
       )}
 
-      <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-8">
+      <form
+        onSubmit={handleSubmit(
+          (data) => mutation.mutate(data),
+          (formErrors) => {
+            const paths = collectErrorPaths(formErrors).join(', ');
+            setToast({ type: 'error', message: `Validation failed — check these fields: ${paths}` });
+          },
+        )}
+        className="space-y-8"
+      >
         <OutputSection register={register} errors={errors} control={control} icecastSockets={icecastSockets} />
         <HarborSection control={control} register={register} errors={errors} />
         <CrossfadeSection register={register} errors={errors} />
