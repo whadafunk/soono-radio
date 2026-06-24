@@ -52,7 +52,7 @@ try { mkdirSync(LOG_DIR, { recursive: true }); } catch { /* already exists */ }
 const LOG_FILE = join(LOG_DIR, 'api.log');
 
 const fastify = Fastify({
-  bodyLimit: 500 * 1024 * 1024, // 500 MB — matches multipart fileSize limit and nginx client_max_body_size
+  bodyLimit: 4 * 1024 * 1024 * 1024, // 4 GB — large FLAC batches can easily exceed 500 MB
   logger: {
     level: 'debug',
     transport: {
@@ -76,7 +76,7 @@ fastify.register(multipart, {
   limits: {
     // Audio uploads need much more headroom than certs. A typical 5-minute
     // FLAC sits around 30–50 MB; allow 500 MB so users can drop full albums.
-    fileSize: 500 * 1024 * 1024,
+    fileSize: 4 * 1024 * 1024 * 1024,
     files: 100,
   },
 });
