@@ -72,7 +72,7 @@ function renderScript(templateSource: string, config: LiquidsoapConfig, icecastS
   // inside input.harbor() so a block helper would produce awkward whitespace.
   const harbor_tls_transport =
     config.harbor.tls.enabled && config.harbor.tls.certificate_path
-      ? `,\n  transport=https.transport(certificate="${escapeStr(config.harbor.tls.certificate_path)}", key="${escapeStr(config.harbor.tls.certificate_path)}")`
+      ? `,\n  transport=ssl.transport(certificate="${escapeStr(config.harbor.tls.certificate_path)}", key="${escapeStr(config.harbor.tls.certificate_path)}")`
       : '';
 
   const context = {
