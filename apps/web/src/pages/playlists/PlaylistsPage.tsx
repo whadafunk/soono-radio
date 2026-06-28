@@ -547,7 +547,7 @@ export function PlaylistsPage() {
               {(['all', 'music', 'jingle', 'bed'] as const).map((t) => (
                 <button
                   key={t}
-                  onClick={() => setFilter(t)}
+                  onClick={() => { setFilter(t); setSelectedId(null); }}
                   className={`flex-1 flex items-center justify-center px-1 py-2.5 text-xs font-medium transition-colors ${
                     filter === t ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
                   }`}
@@ -560,7 +560,7 @@ export function PlaylistsPage() {
               {(['spot', 'promo', 'recording'] as const).map((t) => (
                 <button
                   key={t}
-                  onClick={() => setFilter(t)}
+                  onClick={() => { setFilter(t); setSelectedId(null); }}
                   className={`flex-1 flex items-center justify-center px-1 py-2.5 text-xs font-medium transition-colors ${
                     filter === t ? 'bg-zinc-800 text-white' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800/50'
                   }`}
