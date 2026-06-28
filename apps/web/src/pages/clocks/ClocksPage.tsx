@@ -856,7 +856,7 @@ function SortableTimelineItem({
     const containerWidth = containerRef.current.getBoundingClientRect().width;
     const deltaX = e.clientX - resizeStartX.current;
     const rawDelta = (deltaX / containerWidth) * cap;
-    setResizeDelta(Math.round(rawDelta / 15) * 15);
+    setResizeDelta(Math.round(rawDelta / 60) * 60);
   };
 
   const handleResizePointerUp = () => {
