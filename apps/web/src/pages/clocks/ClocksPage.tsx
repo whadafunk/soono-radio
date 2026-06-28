@@ -750,6 +750,7 @@ export function ClocksPage() {
               locked={structureLocked}
               onExpandToggle={(id) => setExpandedId((prev) => prev === id ? null : id)}
               onReorder={reorderSegs}
+              onResize={(id, newSeconds) => updateSeg(id, { duration_seconds: newSeconds })}
             />
 
             {/* Segment list */}
@@ -824,7 +825,7 @@ export function ClocksPage() {
 // ─── Timeline ─────────────────────────────────────────────────────────────────
 
 function SortableTimelineItem({
-  seg, cap, isActive, isDraggingAny, locked, onExpandToggle,
+  seg, cap, isActive, isDraggingAny, locked, onExpandToggle, containerRef, onResize,
 }: {
   seg: SegmentDraft;
   cap: number;
@@ -832,10 +833,42 @@ function SortableTimelineItem({
   isDraggingAny: boolean;
   locked: boolean;
   onExpandToggle: (id: number) => void;
+  containerRef: React.RefObject<HTMLDivElement>;
+  onResize: (id: number, newSeconds: number) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: seg.id, disabled: locked });
   const meta = SEGMENT_META[seg.type];
-  const widthPct = (seg.duration_seconds / cap) * 100;
+
+  const [resizeDelta, setResizeDelta] = useState(0);
+  const isResizing = useRef(false);
+  const resizeStartX = useRef(0);
+
+  const handleResizePointerDown = (e: React.PointerEvent) => {
+    e.stopPropagation();
+    e.currentTarget.setPointerCapture(e.pointerId);
+    isResizing.current = true;
+    resizeStartX.current = e.clientX;
+    setResizeDelta(0);
+  };
+
+  const handleResizePointerMove = (e: React.PointerEvent) => {
+    if (!isResizing.current || !containerRef.current) return;
+    const containerWidth = containerRef.current.getBoundingClientRect().width;
+    const deltaX = e.clientX - resizeStartX.current;
+    const rawDelta = (deltaX / containerWidth) * cap;
+    setResizeDelta(Math.round(rawDelta / 15) * 15);
+  };
+
+  const handleResizePointerUp = () => {
+    if (!isResizing.current) return;
+    isResizing.current = false;
+    const newDuration = Math.max(60, seg.duration_seconds + resizeDelta);
+    setResizeDelta(0);
+    onResize(seg.id, newDuration);
+  };
+
+  const effectiveDuration = Math.max(60, seg.duration_seconds + resizeDelta);
+  const widthPct = (effectiveDuration / cap) * 100;
 
   return (
     <div
@@ -855,19 +888,33 @@ function SortableTimelineItem({
         outline: isActive ? '2px solid rgba(255,255,255,0.7)' : undefined,
         outlineOffset: isActive ? '-2px' : undefined,
       }}
-      title={`${seg.name} · ${fmtDuration(seg.duration_seconds)}`}
+      title={`${seg.name} · ${fmtDuration(effectiveDuration)}`}
     >
-      {seg.duration_seconds >= 240 && (
+      {effectiveDuration >= 240 && (
         <span className="text-xs font-medium truncate px-1 pointer-events-none select-none" style={{ color: meta.color }}>
           {seg.name}
         </span>
+      )}
+      {!locked && (
+        <div
+          className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize group/resize flex items-center justify-center"
+          onPointerDown={handleResizePointerDown}
+          onPointerMove={handleResizePointerMove}
+          onPointerUp={handleResizePointerUp}
+          onClick={(e) => e.stopPropagation()}
+        >
+          <div
+            className="w-0.5 h-4 rounded-full transition-colors group-hover/resize:bg-white/60"
+            style={{ backgroundColor: resizeDelta !== 0 ? 'rgba(255,255,255,0.7)' : 'transparent' }}
+          />
+        </div>
       )}
     </div>
   );
 }
 
 function ClockTimeline({
-  segments, total, overflow, expandedId, locked, onExpandToggle, onReorder,
+  segments, total, overflow, expandedId, locked, onExpandToggle, onReorder, onResize,
 }: {
   segments: SegmentDraft[];
   total: number;
@@ -876,10 +923,12 @@ function ClockTimeline({
   locked: boolean;
   onExpandToggle: (id: number) => void;
   onReorder: (oldIndex: number, newIndex: number) => void;
+  onResize: (id: number, newSeconds: number) => void;
 }) {
   const cap = Math.max(total, 3600);
   const sensors = useSensors(useSensor(PointerSensor, { activationConstraint: { distance: 4 } }));
   const [timelineDragging, setTimelineDragging] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -915,7 +964,7 @@ function ClockTimeline({
         onDragCancel={() => setTimeout(() => setTimelineDragging(false), 0)}
       >
         <SortableContext items={segments.map(s => s.id)} strategy={horizontalListSortingStrategy}>
-          <div className="relative h-12 flex rounded overflow-hidden bg-zinc-800">
+          <div ref={containerRef} className="relative h-12 flex rounded overflow-hidden bg-zinc-800">
             {segments.map((seg) => (
               <SortableTimelineItem
                 key={seg.id}
@@ -925,6 +974,8 @@ function ClockTimeline({
                 isDraggingAny={timelineDragging}
                 locked={locked}
                 onExpandToggle={onExpandToggle}
+                containerRef={containerRef}
+                onResize={onResize}
               />
             ))}
             {total < 3600 && (
