@@ -5,10 +5,10 @@ name: soono
 # Startup order enforced by depends_on:
 #   icecast       — no dependencies, starts immediately
 #   socket-proxy  — no dependencies, starts immediately
-#   api           — no dependencies, starts immediately; healthcheck passes once
+#   soono-api     — no dependencies, starts immediately; healthcheck passes once
 #                   HTTP is up and the LiquidSoap script has been generated
 #   web           — no dependencies (nginx serves static files independently)
-#   liquidsoap    — waits for api: service_healthy so the generated
+#   liquidsoap    — waits for soono-api: service_healthy so the generated
 #                   mix-engine.liq exists before LS tries to load it
 #
 # Container restarts (Restart Icecast / Restart LiquidSoap buttons) go through
@@ -49,7 +49,7 @@ services:
         ipv4_address: 192.168.40.69
 
   # ── API + Supervisor ─────────────────────────────────────────────────────────
-  api:
+  soono-api:
     build:
       context: .
       dockerfile: apps/api/Dockerfile
@@ -60,7 +60,7 @@ services:
       # Code defaults are localhost-based for dev mode; these override for compose.
       ICECAST_URL: http://icecast:8000
       LS_HARBOR_URL: http://liquidsoap:8005
-      LS_API_URL: http://api:3000
+      LS_API_URL: http://soono-api:3000
       DOCKER_PROXY_URL: http://socket-proxy:2375
       # Operator config — values come from .env
       LS_MEDIA_DIR: ${LS_MEDIA_DIR}
@@ -109,14 +109,14 @@ services:
       - "127.0.0.1:1234:1234"   # Telnet control (loopback only)
     volumes:
       # Generated script — same host directory the API writes to, mounted read-only.
-      # The api healthcheck guarantees mix-engine.liq exists before LS starts.
+      # The soono-api healthcheck guarantees mix-engine.liq exists before LS starts.
       - ./liquidsoap:/etc/liquidsoap:ro
       # Audio library — read-only; paths embedded in annotated URIs by the supervisor
       - ./media:/media:ro
       - ./data/certs:/etc/certs:ro
       - ./logs/liquidsoap:/var/log/liquidsoap
     depends_on:
-      api:
+      soono-api:
         condition: service_healthy   # ensures mix-engine.liq is generated
       icecast:
         condition: service_started
