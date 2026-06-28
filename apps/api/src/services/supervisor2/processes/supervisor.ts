@@ -91,6 +91,9 @@ export class SupervisorProcess {
   // ── Two-plan model (D29) ────────────────────────────────────────────────────
   private activePlanId: number | null = null;
   private nextPlanId: number | null = null;
+  // Segment the next plan was drafted for — used to guard against premature
+  // advancement to a future segment when the active plan exhausts early.
+  private nextPlanSegmentId: number | null = null;
   // Drift at the moment the first-pass draft for the next plan was requested.
   // Compared against current_drift at T-30s to compute drift_delta (D31).
   private nextPlanDraftDriftSeconds = 0;
@@ -233,6 +236,14 @@ export class SupervisorProcess {
       this.activePlanId = row.active_plan_id ?? null;
       this.nextPlanId = row.next_plan_id ?? null;
       this.nextPlanDraftDriftSeconds = row.next_plan_draft_drift_seconds ?? 0;
+
+      if (this.nextPlanId != null) {
+        const [nextPlanRow] = await this.db
+          .select({ segment_id: plansTable.segment_id })
+          .from(plansTable)
+          .where(eq(plansTable.id, this.nextPlanId));
+        this.nextPlanSegmentId = nextPlanRow?.segment_id ?? null;
+      }
       this.plannedOvershootSeconds = row.planned_overshoot_seconds ?? 0;
       this.isPaused = row.paused ?? false;
 
@@ -458,11 +469,23 @@ export class SupervisorProcess {
       return;
     }
     const [nextPlan] = await this.db
-      .select({ status: plansTable.status })
+      .select({ status: plansTable.status, segment_id: plansTable.segment_id })
       .from(plansTable)
       .where(eq(plansTable.id, this.nextPlanId));
     if (!nextPlan) return;
     if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') return;
+
+    // Don't advance to a plan for a future segment before its wall-clock time.
+    // If the active plan exhausted early (e.g. empty stop-set) and the next
+    // plan is for the NEXT segment, hold until the current segment's time ends
+    // so we don't skip a segment that still has wall-clock time remaining.
+    if (
+      nextPlan.segment_id !== this.currentSegmentId &&
+      this.currentSegmentEndMs != null &&
+      nowMs < this.currentSegmentEndMs
+    ) {
+      return;
+    }
 
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_ADVANCE_FORCED',
@@ -656,6 +679,7 @@ export class SupervisorProcess {
     // Update in-memory state.
     this.activePlanId = planId;
     this.nextPlanId = null;
+    this.nextPlanSegmentId = null;
     this.planActivatedAtMs = nowMs;
     this.currentDriftSeconds = 0;
     this.finalizationRequestedForPlanId = null;
@@ -798,6 +822,7 @@ export class SupervisorProcess {
 
     // Store as next plan candidate.
     this.nextPlanId = msg.plan_id;
+    this.nextPlanSegmentId = msg.segment_id;
     this.nextPlanDraftDriftSeconds = this.currentDriftSeconds;
 
     await this.db.update(supervisorStateTable)
