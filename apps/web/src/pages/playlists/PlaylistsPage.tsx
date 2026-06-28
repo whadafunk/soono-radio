@@ -1158,14 +1158,13 @@ function LibrarySearch({
   const { data, isFetching } = useQuery<{ items: MediaRow[] }>({
     queryKey: ['library-search', debouncedQ, category],
     queryFn: () =>
-      apiFetch(`/library?q=${encodeURIComponent(debouncedQ)}&category=${encodeURIComponent(category)}&limit=30`),
-    enabled: debouncedQ.trim().length > 0,
+      apiFetch(`/library?q=${encodeURIComponent(debouncedQ)}&category=${encodeURIComponent(category)}&limit=50`),
   });
 
   const results: MediaRow[] = data?.items ?? [];
 
   useEffect(() => {
-    if (open) return;
+    if (!open) return;
     const handler = (e: MouseEvent) => {
       if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
         setOpen(false);
@@ -1200,7 +1199,7 @@ function LibrarySearch({
         <input
           value={q}
           onChange={(e) => { setQ(e.target.value); setOpen(true); }}
-          onFocus={() => { if (q.trim()) setOpen(true); }}
+          onFocus={() => setOpen(true)}
           placeholder={`Search ${category} tracks to add…`}
           className="w-full pl-9 pr-3 py-2 bg-zinc-800 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-500"
         />
@@ -1209,7 +1208,7 @@ function LibrarySearch({
         )}
       </div>
 
-      {open && debouncedQ.trim().length > 0 && (
+      {open && (
         <div className="absolute top-full left-0 right-0 mt-1 z-30 bg-zinc-900 border border-zinc-700 rounded-lg shadow-xl flex flex-col">
           <div className="max-h-64 overflow-y-auto">
             {results.length === 0 && !isFetching ? (

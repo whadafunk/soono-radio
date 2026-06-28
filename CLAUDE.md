@@ -84,6 +84,37 @@ The application has two main components:
 
 Start with implementing LiquidSoap settings control panel, then expand to player, playlist, and jingle management.
 
+## Content Types & Playlists
+
+### Library content categories (all 7)
+
+| Category | Description |
+|----------|-------------|
+| `music` | Music tracks |
+| `spot` | Advertisement spots |
+| `promo` | Station promotions |
+| `jingle` | Jingles — two subcategories: `stationid` and `show` |
+| `bed` | Background music/beds |
+| `recording` | General recordings |
+| `envelope` | Show/segment bookends — four subcategories: `show_open`, `show_close`, `segment_open`, `segment_close` |
+
+Source of truth: `packages/shared/src/schemas/library.ts` → `MEDIA_CATEGORIES`.
+
+### Playlist types (6)
+
+Playlists exist for every content category **except** `envelope` (envelopes are not playlist-managed today):
+
+`music` · `jingle` · `spot` · `promo` · `bed` · `recording`
+
+Each playlist type only holds content of the matching category (`playlistMediaCategory()` in `packages/shared/src/schemas/playlists.ts`).
+
+**Playlist subcategories** (only relevant fields per type):
+- `music`: `standard` · `hot_play` · `heavy_rotation`
+- `jingle`: `stationid` · `show`
+- All others: none
+
+**Playlist kinds** (music only): `static` (manually ordered) · `dynamic` (rule-matched)
+
 ## Implementation Notes
 
 - Begin with container-based development (Docker Compose)
