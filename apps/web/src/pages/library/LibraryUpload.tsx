@@ -143,6 +143,18 @@ export function LibraryUpload() {
     setActive((prev) => prev.filter((a) => !a.jobId || !knownIds.has(a.jobId)));
   }, [jobs, active.length]);
 
+  // When the current upload batch finishes processing, auto-switch to the result tab so
+  // the user sees their files instead of being left on an empty "Pending" tab.
+  useEffect(() => {
+    if (batchJobIds.size === 0) return;
+    const batch = jobs.filter((j) => batchJobIds.has(j.id));
+    if (batch.length === 0) return;
+    const finished = batch.every((j) => j.status === 'completed' || j.status === 'failed');
+    if (!finished) return;
+    const allFailed = batch.every((j) => j.status === 'failed');
+    setIngestTab(allFailed ? 'failed' : 'completed');
+  }, [jobs, batchJobIds]);
+
   const startUpload = useCallback(async (files: File[], category: MediaCategory) => {
     const initial: ActiveUpload[] = files.map((f) => ({
       uid: crypto.randomUUID(),

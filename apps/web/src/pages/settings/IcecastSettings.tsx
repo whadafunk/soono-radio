@@ -98,8 +98,9 @@ export function IcecastSettings() {
 
   if (error) {
     return (
-      <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-300">
-        <p>Failed to load Icecast settings</p>
+      <div className="bg-red-900/20 border border-red-800 rounded-lg p-4 text-red-300 space-y-1">
+        <p className="font-medium">Failed to load Icecast settings</p>
+        <p className="text-sm text-red-400">{(error as Error).message}</p>
       </div>
     );
   }

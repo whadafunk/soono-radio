@@ -50,7 +50,10 @@ export interface IcecastStats {
 
 export async function fetchIcecastConfig(): Promise<IcecastConfig> {
   const res = await fetch(`${API_BASE}/icecast/config`);
-  if (!res.ok) throw new Error(`Failed to fetch Icecast config: ${res.statusText}`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body?.error ?? `Failed to fetch Icecast config: ${res.statusText}`);
+  }
   const data = await res.json();
   return IcecastConfigSchema.parse(data);
 }

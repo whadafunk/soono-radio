@@ -7,8 +7,13 @@ import { generateRadioLiq, readLiquidsoapConfig } from '../services/liquidsoapCo
 
 export async function icecastRoutes(fastify: FastifyInstance) {
   fastify.get<{ Reply: any }>('/icecast/config', async (request, reply) => {
-    const config = await readIcecastConfig();
-    return reply.send(config);
+    try {
+      const config = await readIcecastConfig();
+      return reply.send(config);
+    } catch (err) {
+      fastify.log.error({ err }, 'Failed to read Icecast config');
+      return reply.status(500).send({ error: (err as Error).message });
+    }
   });
 
   fastify.post<{ Body: any; Reply: any }>('/icecast/config', async (request, reply) => {

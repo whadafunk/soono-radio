@@ -8,8 +8,8 @@ export type PlaylistType = (typeof PLAYLIST_TYPES)[number];
 
 export const PLAYLIST_SUBCATEGORIES = {
   music:     ['standard', 'hot_play', 'heavy_rotation'] as const,
-  // opener = show intro sting, closer = show outro sting, stationid = station ID clip, show = between-track jingle
-  jingle:    ['show', 'opener', 'closer', 'stationid']  as const,
+  // stationid = station ID clip, show = between-track jingle; opener/closer moved to envelope
+  jingle:    ['show', 'stationid']  as const,
   spot:      []                                         as const,
   promo:     []                                         as const,
   bed:       []                                         as const,
