@@ -18,11 +18,21 @@
 //   On finalized: activate immediately (no last-item trigger needed).
 //   Then: maybeRequestNextDraft for the following segment.
 //
-// Drift model (D51):
-//   planned_overshoot = sum(plan items durations) - nominal_segment_duration
-//   execution_drift   = actual_drift - planned_overshoot
-//   Corrections only trigger when |execution_drift| > threshold.
-//   planned_overshoot is already baked into the next plan's first_pass_target.
+// Boundary drift model:
+//   boundaryDrift(N) = planActivatedAtMs - scheduledSegmentStartMs(N)
+//   scheduledSegmentStartMs(N) = segmentEndMs(N) - segment.duration_seconds * 1000
+//   Positive = started late. Negative = started early.
+//
+//   firstPassTarget(N+1) = nominal(N+1) - (boundaryDrift(N) + plannedOvershoot(N))
+//
+//   This ensures accumulated drift self-corrects in one plan cycle. The old
+//   continuous rawDrift signal is gone — drift is only meaningful at boundaries.
+//
+// Hard-start monitoring (checked every tick, only when next segment is 'hard'):
+//   estimated_remaining = time_left_on_playing_item + sum(pending_planned_durations)
+//   gap = time_to_hard_boundary - estimated_remaining
+//   Fill trigger:  estimated_remaining ≤ 30s AND gap > 30s   → request filler content
+//   Trim trigger:  time_to_boundary ≤ 30s AND estimated > boundary + 30s → skip items
 //
 // Decision references:
 //   D29 — Two-plan model + cold start
@@ -48,10 +58,8 @@ import {
   plans as plansTable,
   playHistory as playHistoryTable,
   supervisorState as supervisorStateTable,
-  type PlanItem,
   type PlanItemContentType,
 } from '../../../db/schema.js';
-import type { DriftEventType } from '@soono/shared';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
 import { resolveCurrentSegment, type ResolvedSegment } from '../clockResolver.js';
@@ -61,28 +69,10 @@ import {
   stampStarted,
 } from '../playHistoryService.js';
 
-// ── Thresholds (will be read from supervisor_config in a later step) ──────────
+// ── Thresholds ────────────────────────────────────────────────────────────────
 const SECOND_PASS_LEAD_TIME_S = 30;           // T-30s finalization gate (D31)
-const DRIFT_CORRECTION_THRESHOLD_S = 10;       // execution drift threshold (D51)
-const COASTING_CORRECTION_THRESHOLD_S = 30;    // coasting threshold (D51)
-const ADJUSTED_TARGET_MIN_RATIO = 0.6;
-const ADJUSTED_TARGET_MAX_RATIO = 1.4;
-const SILENCE_ALERT_THRESHOLD_S = 30;          // seconds of no pushes before WARN
-
-// DriftEventType → plan_items.content_type mapping
-const DRIFT_TYPE_TO_CONTENT_TYPES: Record<DriftEventType, PlanItemContentType[]> = {
-  songs: ['music'],
-  jingles: ['jingle', 'branding'],
-  station_ids: ['station_id', 'branding'],
-  spots: ['campaign'],
-  promos: ['promo'],
-};
-
-type BoundaryDecision =
-  | 'accept_late'
-  | 'correct_immediately'
-  | 'accept_early'
-  | 'gap_fill_in_plan';
+const HARD_START_TOLERANCE_S = 30;            // fill/trim tolerance for hard boundaries
+const SILENCE_ALERT_THRESHOLD_S = 30;         // seconds of no pushes before WARN
 
 export class SupervisorProcess {
   private readonly unsubscribers: Array<() => void> = [];
@@ -94,20 +84,28 @@ export class SupervisorProcess {
   // Segment the next plan was drafted for — used to guard against premature
   // advancement to a future segment when the active plan exhausts early.
   private nextPlanSegmentId: number | null = null;
-  // Drift at the moment the first-pass draft for the next plan was requested.
-  // Compared against current_drift at T-30s to compute drift_delta (D31).
+  // Boundary drift at the moment the first-pass draft for the next plan was
+  // requested. Compared against boundaryDrift at T-30s to compute drift_delta.
   private nextPlanDraftDriftSeconds = 0;
   // Planned overshoot of the active plan (D51). Accounted drift — subtracted
-  // from raw drift before deciding whether corrections are needed.
+  // from nominal when computing the next plan's first-pass target.
   private plannedOvershootSeconds = 0;
   // Always 0 until fire-early/late is implemented (D45).
   private readonly intentionalOffsetSeconds = 0;
-  private boundaryDecision: BoundaryDecision | null = null;
+
+  // ── Boundary drift (new model) ───────────────────────────────────────────────
+  // Drift computed once at plan activation: how early/late the segment actually
+  // started vs its scheduled wall-clock start time.
+  private boundaryDriftSeconds = 0;
+  // segmentEndMs of the next plan's segment, set when requesting the draft.
+  // Used to compute boundaryDrift at activation.
+  private nextPlanScheduledEndMs: number | null = null;
 
   // ── Segment tracking ────────────────────────────────────────────────────────
   private currentSegmentId: number | null = null;
   private currentSegmentEndMs: number | null = null;
   private currentClockInstanceMs: number | null = null;
+  // Stored in DB as current_drift_seconds; kept equal to boundaryDriftSeconds.
   private currentDriftSeconds = 0;
   private planActivatedAtMs = 0;
 
@@ -127,14 +125,11 @@ export class SupervisorProcess {
   private isPaused = false;
 
   // ── Segment observability ────────────────────────────────────────────────────
-  // Drift at the start of the current segment — used in SEGMENT_SUMMARY.
   private segmentEntryDriftSeconds = 0;
   // Tracks which part of tick() is executing for richer TICK_FAILED logs (B4).
   private tickOperation = 'init';
 
   // ── Silence alert (Phase F) ──────────────────────────────────────────────────
-  // Updated each time a push is confirmed sent to harbor (PUSH_SENT bus event).
-  // Initialized to now so we don't alert immediately on cold start.
   private lastPushSentMs = Date.now();
   private silenceAlertFired = false;
 
@@ -236,6 +231,8 @@ export class SupervisorProcess {
       this.activePlanId = row.active_plan_id ?? null;
       this.nextPlanId = row.next_plan_id ?? null;
       this.nextPlanDraftDriftSeconds = row.next_plan_draft_drift_seconds ?? 0;
+      this.boundaryDriftSeconds = row.boundary_drift_seconds ?? 0;
+      this.currentDriftSeconds = this.boundaryDriftSeconds;
 
       if (this.nextPlanId != null) {
         const [nextPlanRow] = await this.db
@@ -252,7 +249,7 @@ export class SupervisorProcess {
         // idea what LiquidSoap was actually playing. Leaving them as 'playing'
         // causes computePlanPlayhead to read their stale play_history.started_at
         // (hours old), producing a massive negative drift that triggers a
-        // runaway CORRECTION_FILL loop on every tick.
+        // runaway loop on every tick.
         await this.db
           .update(planItemsTable)
           .set({ status: 'pending' })
@@ -276,10 +273,6 @@ export class SupervisorProcess {
           }
         }
         this.planActivatedAtMs = Date.now() - consumedMs;
-        this.currentDriftSeconds = 0;
-        await this.db.update(supervisorStateTable)
-          .set({ current_drift_seconds: 0 })
-          .where(eq(supervisorStateTable.id, 1));
       }
     } catch (err) {
       this.logger?.error({ err, process: 'supervisor', event: 'HYDRATE_FAILED' }, 'supervisor: failed to hydrate state from DB');
@@ -355,7 +348,6 @@ export class SupervisorProcess {
         clock_instance_started_at: resolved.clockInstanceStartedAt,
       }, 'supervisor: segment boundary crossed');
 
-      // Record drift at segment entry for SEGMENT_SUMMARY on exit.
       this.segmentEntryDriftSeconds = this.currentDriftSeconds;
 
       // Cold start: no active plan and no next plan building.
@@ -374,27 +366,9 @@ export class SupervisorProcess {
 
     if (this.activePlanId == null) return;
 
-    // ── Plan playhead + drift ──────────────────────────────────────────────
+    // ── Plan playhead (for push timing) ───────────────────────────────────
     this.tickOperation = 'playhead_calc';
-    const { consumedSeconds, expectedEndMs } = await this.computePlanPlayhead(nowMs);
-
-    const planRelativeElapsedSeconds =
-      this.planActivatedAtMs > 0 ? (nowMs - this.planActivatedAtMs) / 1000 : 0;
-    const rawDrift = planRelativeElapsedSeconds - consumedSeconds;
-    if (Math.abs(rawDrift - this.currentDriftSeconds) > 0.5) {
-      this.currentDriftSeconds = rawDrift;
-      await this.db.update(supervisorStateTable)
-        .set({ current_drift_seconds: rawDrift })
-        .where(eq(supervisorStateTable.id, 1));
-      this.logger?.debug({
-        process: 'supervisor', event: 'DRIFT_UPDATE',
-        drift_seconds: rawDrift,
-        planned_overshoot_seconds: this.plannedOvershootSeconds,
-        execution_drift_seconds: rawDrift - this.plannedOvershootSeconds,
-        plan_relative_elapsed: planRelativeElapsedSeconds,
-        plan_consumed: consumedSeconds,
-      }, 'supervisor: drift updated from playheads');
-    }
+    const { expectedEndMs } = await this.computePlanPlayhead(nowMs);
 
     // ── Silence alert (Phase F) ────────────────────────────────────────────
     const stallSeconds = (nowMs - this.lastPushSentMs) / 1000;
@@ -408,30 +382,21 @@ export class SupervisorProcess {
     }
 
     // ── Push timing ─────────────────────────────────────────────────────────
-    // When nothing is playing (expectedEndMs==null) check for two sub-cases:
-    //   a) pending items exist → push immediately
-    //   b) no pending items   → plan is exhausted; advance to next plan if ready
     this.tickOperation = 'push_decision';
     if (expectedEndMs == null) {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
       } else {
-        // Plan exhausted with nothing playing. Normally the next plan activates
-        // when the last item's LS_TRACK_STARTED fires, but if the station went
-        // silent (restart, LS down, etc.) that webhook never comes. Force the
-        // advance here so playback resumes within the next tick interval.
         await this.handleExhaustedPlan(nowMs);
       }
     } else if (expectedEndMs - nowMs <= this.PUSH_LEAD_MS) {
       this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
     }
 
-    // ── Drift correction (execution drift only — D51) ───────────────────────
-    this.tickOperation = 'drift_correction';
-    if (consumedSeconds > 0) {
-      await this.maybeApplyDriftCorrection(nowMs);
-    }
+    // ── Hard-start gate ────────────────────────────────────────────────────
+    this.tickOperation = 'hard_start_gate';
+    await this.maybeHandleHardStartGate(nowMs);
   }
 
   // Counts played/skipped items in a plan for SEGMENT_SUMMARY.
@@ -560,6 +525,155 @@ export class SupervisorProcess {
     return row != null;
   }
 
+  // ─── Hard-start gate ─────────────────────────────────────────────────────────
+  //
+  // Checked every tick. Only active when next segment has hard start_policy.
+  // Fill trigger: plan running short → request filler to bridge to hard boundary.
+  // Trim trigger: plan running long → skip items near hard boundary.
+
+  private async maybeHandleHardStartGate(nowMs: number): Promise<void> {
+    if (this.activePlanId == null || this.currentSegmentEndMs == null) return;
+
+    const resolved = await this.getCachedSegment(nowMs);
+    if (!resolved) return;
+
+    const next = await resolveCurrentSegment(resolved.segmentEndMs + 1, this.db);
+    if (!next) return;
+
+    const policy = readStartPolicy(next.segment.start_policy);
+    if (policy.type !== 'hard') return;
+
+    const estimatedRemainingSec = await this.computeEstimatedRemaining(nowMs);
+    const timeToHardBoundarySec = (this.currentSegmentEndMs - nowMs) / 1000;
+    const gapSec = timeToHardBoundarySec - estimatedRemainingSec;
+
+    // Fill trigger: plan is running short, gap exceeds tolerance.
+    if (
+      estimatedRemainingSec <= HARD_START_TOLERANCE_S &&
+      gapSec > HARD_START_TOLERANCE_S &&
+      this.pendingReplanForPlanId !== this.activePlanId
+    ) {
+      const fromPosition = await this.firstPendingPosition(this.activePlanId);
+      const requestId = randomUUID();
+      this.pendingReplanForPlanId = this.activePlanId;
+      this.logger?.info({
+        process: 'supervisor', event: 'HARD_START_FILL',
+        plan_id: this.activePlanId,
+        estimated_remaining_seconds: estimatedRemainingSec,
+        time_to_boundary_seconds: timeToHardBoundarySec,
+        gap_seconds: gapSec,
+        request_id: requestId,
+      }, 'supervisor: hard-start fill triggered — plan running short');
+      this._bus.emit({
+        type: 'PLAN_REPLAN_REQUESTED',
+        request_id: requestId,
+        plan_id: this.activePlanId,
+        from_position: fromPosition,
+        remaining_seconds: Math.floor(timeToHardBoundarySec),
+        now_ms: nowMs,
+      });
+      return;
+    }
+
+    // Trim trigger: within 30s of hard boundary and plan will run over.
+    if (
+      timeToHardBoundarySec <= HARD_START_TOLERANCE_S &&
+      estimatedRemainingSec > timeToHardBoundarySec + HARD_START_TOLERANCE_S
+    ) {
+      await this.applyHardStartTrim(nowMs);
+    }
+  }
+
+  // Returns how many seconds of content remain in the active plan.
+  private async computeEstimatedRemaining(nowMs: number): Promise<number> {
+    if (this.activePlanId == null) return 0;
+
+    const items = await this.db
+      .select({
+        status: planItemsTable.status,
+        planned_duration_seconds: planItemsTable.planned_duration_seconds,
+        play_history_id: planItemsTable.play_history_id,
+      })
+      .from(planItemsTable)
+      .where(eq(planItemsTable.plan_id, this.activePlanId))
+      .orderBy(asc(planItemsTable.position));
+
+    let remaining = 0;
+    for (const item of items) {
+      if (item.status === 'playing') {
+        if (item.play_history_id != null) {
+          const [ph] = await this.db
+            .select({ started_at: playHistoryTable.started_at })
+            .from(playHistoryTable)
+            .where(eq(playHistoryTable.id, item.play_history_id));
+          const startedAtMs = ph?.started_at ? new Date(ph.started_at).getTime() : nowMs;
+          const elapsed = (nowMs - startedAtMs) / 1000;
+          remaining += Math.max(0, (item.planned_duration_seconds ?? 0) - elapsed);
+        } else {
+          remaining += (item.planned_duration_seconds ?? 0) * 0.5;
+        }
+      } else if (item.status === 'pending') {
+        remaining += item.planned_duration_seconds ?? 0;
+      }
+    }
+    return remaining;
+  }
+
+  // Skip one item near the hard boundary (highest-priority skippable type first).
+  // Called one item per tick so the gate re-evaluates after each removal.
+  private async applyHardStartTrim(nowMs: number): Promise<void> {
+    if (this.activePlanId == null) return;
+
+    const items = await this.db
+      .select()
+      .from(planItemsTable)
+      .where(eq(planItemsTable.plan_id, this.activePlanId))
+      .orderBy(asc(planItemsTable.position));
+
+    const liveItems = items.filter((i) => i.status === 'pending' || i.status === 'playing');
+
+    // Skip order: branding/jingle/station_id first, then music (cut_allowed).
+    const priorityGroups: Array<{ types: PlanItemContentType[]; allowCut: boolean }> = [
+      { types: ['jingle', 'branding', 'station_id'], allowCut: true },
+      { types: ['music'], allowCut: true },
+    ];
+
+    for (const { types, allowCut } of priorityGroups) {
+      for (const item of liveItems) {
+        if (!types.includes(item.content_type)) continue;
+        if (item.mandatory) continue;
+        const isPlaying = item.status === 'playing';
+        if (isPlaying && (!allowCut || !item.cut_allowed)) continue;
+        if (!isPlaying && !item.skip_allowed) continue;
+
+        await this.db.update(planItemsTable)
+          .set({ status: 'supervisor_skipped' })
+          .where(eq(planItemsTable.id, item.id));
+
+        if (isPlaying) {
+          try {
+            await HarborClient.skip();
+          } catch (err) {
+            this.logger?.error({ err, process: 'supervisor', event: 'HARBOR_SKIP_FAILED', plan_item_id: item.id }, 'supervisor: hard-start trim harbor skip failed');
+          }
+        }
+
+        this.logger?.info({
+          process: 'supervisor', event: 'HARD_START_TRIM',
+          plan_item_id: item.id, content_type: item.content_type, on_air: isPlaying,
+        }, 'supervisor: hard-start trim — item removed');
+
+        void nowMs;
+        return; // one item per tick; gate re-evaluates next tick
+      }
+    }
+
+    this.logger?.warn({
+      process: 'supervisor', event: 'HARD_START_TRIM_STUCK',
+      plan_id: this.activePlanId,
+    }, 'supervisor: hard-start trim — no skippable items available');
+  }
+
   // ─── LS_TRACK_STARTED ───────────────────────────────────────────────────────
 
   private async handleTrackStarted(msg: BusMessage & { type: 'LS_TRACK_STARTED' }): Promise<void> {
@@ -624,7 +738,6 @@ export class SupervisorProcess {
   // Returns true when the plan item that just transitioned to 'playing' is the
   // last one in `planId` — i.e. there are no more pending items left.
   private async isLastPendingNowPlaying(planId: number, phid: number): Promise<boolean> {
-    // Check if the item with this phid is in the active plan.
     const [item] = await this.db
       .select({ id: planItemsTable.id })
       .from(planItemsTable)
@@ -635,7 +748,6 @@ export class SupervisorProcess {
       .limit(1);
     if (!item) return false;
 
-    // Check if there are any pending items remaining.
     const hasPending = await this.hasPendingItems(planId);
     return !hasPending;
   }
@@ -646,7 +758,6 @@ export class SupervisorProcess {
     if (this.nextPlanId == null) return;
     const planId = this.nextPlanId;
 
-    // Look up segment nominal duration to compute planned overshoot (D51).
     const [plan] = await this.db
       .select({ segment_id: plansTable.segment_id })
       .from(plansTable)
@@ -673,16 +784,24 @@ export class SupervisorProcess {
     const nominal = segment?.duration_seconds ?? 0;
     this.plannedOvershootSeconds = totalPlanned - nominal;
 
-    // Determine boundary decision from the segment after next (D51).
-    // The segment that follows the newly activated plan's segment.
-    this.boundaryDecision = await this.computeBoundaryDecision(plan.segment_id, this.plannedOvershootSeconds);
+    // Compute boundary drift: how late/early this segment actually started
+    // vs its scheduled wall-clock start time.
+    //   scheduledStartMs = segmentEndMs - segment.duration_seconds * 1000
+    //   boundaryDrift = planActivatedAtMs - scheduledStartMs
+    //
+    // nextPlanScheduledEndMs is set by maybeRequestNextDraft; fall back to
+    // currentSegmentEndMs for cold-start and exhausted-plan paths.
+    const segEndMs = this.nextPlanScheduledEndMs ?? this.currentSegmentEndMs ?? nowMs;
+    const scheduledStartMs = segEndMs - nominal * 1000;
+    this.boundaryDriftSeconds = (nowMs - scheduledStartMs) / 1000;
+    this.currentDriftSeconds = this.boundaryDriftSeconds;
 
     // Update in-memory state.
     this.activePlanId = planId;
     this.nextPlanId = null;
     this.nextPlanSegmentId = null;
+    this.nextPlanScheduledEndMs = null;
     this.planActivatedAtMs = nowMs;
-    this.currentDriftSeconds = 0;
     this.finalizationRequestedForPlanId = null;
     this.draftedForNextSegment = null;
 
@@ -694,7 +813,8 @@ export class SupervisorProcess {
       .set({
         active_plan_id: planId,
         next_plan_id: null,
-        current_drift_seconds: 0,
+        current_drift_seconds: this.boundaryDriftSeconds,
+        boundary_drift_seconds: this.boundaryDriftSeconds,
         planned_overshoot_seconds: this.plannedOvershootSeconds,
         intentional_offset_seconds: this.intentionalOffsetSeconds,
         next_plan_draft_drift_seconds: null,
@@ -706,50 +826,8 @@ export class SupervisorProcess {
       process: 'supervisor', event: 'PLAN_ACTIVATED',
       plan_id: planId, segment_id: plan.segment_id,
       planned_overshoot_seconds: this.plannedOvershootSeconds,
-      boundary_decision: this.boundaryDecision,
+      boundary_drift_seconds: this.boundaryDriftSeconds,
     }, 'supervisor: plan activated');
-
-    // Trigger immediately_correct when the plan will run long into a hard boundary.
-    if (this.boundaryDecision === 'correct_immediately') {
-      this.logger?.info({
-        process: 'supervisor', event: 'BOUNDARY_CORRECTION_PENDING',
-        plan_id: planId, planned_overshoot_seconds: this.plannedOvershootSeconds,
-      }, 'supervisor: plan will overshoot hard boundary — correction will be applied');
-      // The tick's drift correction loop will act once drift exceeds threshold.
-    }
-  }
-
-  // Evaluates what the supervisor should do at the boundary of the newly
-  // activated plan (D51). Looks up the start_policy of the segment that
-  // follows the active plan's segment.
-  private async computeBoundaryDecision(
-    activeSegmentId: number,
-    plannedOvershootSeconds: number,
-  ): Promise<BoundaryDecision> {
-    // Find the segment that comes after activeSegmentId in the same clock.
-    const [activeSeg] = await this.db
-      .select({ clock_id: clockSegmentsTable.clock_id, sort_order: clockSegmentsTable.sort_order })
-      .from(clockSegmentsTable)
-      .where(eq(clockSegmentsTable.id, activeSegmentId));
-    if (!activeSeg) return 'accept_late';
-
-    const allSegs = await this.db
-      .select({ sort_order: clockSegmentsTable.sort_order, start_policy: clockSegmentsTable.start_policy })
-      .from(clockSegmentsTable)
-      .where(eq(clockSegmentsTable.clock_id, activeSeg.clock_id))
-      .orderBy(asc(clockSegmentsTable.sort_order));
-
-    const nextSeg = allSegs.find((s) => s.sort_order > activeSeg.sort_order);
-    if (!nextSeg) return 'accept_late'; // end of clock — no fixed boundary
-
-    const policy = readStartPolicy(nextSeg.start_policy);
-
-    if (plannedOvershootSeconds > 0) {
-      return policy.type === 'hard' ? 'correct_immediately' : 'accept_late';
-    } else {
-      const earlySeconds = policy.type === 'flexible' ? (policy.early_seconds ?? null) : 0;
-      return earlySeconds !== 0 ? 'accept_early' : 'gap_fill_in_plan';
-    }
   }
 
   // ─── Live takeover ──────────────────────────────────────────────────────────
@@ -810,9 +888,6 @@ export class SupervisorProcess {
 
   // ─── Planner responses ──────────────────────────────────────────────────────
 
-  // PLAN_DRAFT_READY fires when the planner finishes the first pass.
-  // Normal case: store as nextPlanId, record drift at first-pass time.
-  // Cold start case: also immediately request finalization (no T-30s gate).
   private async handlePlanDraftReady(msg: BusMessage & { type: 'PLAN_DRAFT_READY' }): Promise<void> {
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_DRAFT_READY',
@@ -821,20 +896,18 @@ export class SupervisorProcess {
 
     const isColdStartDraft = msg.segment_id === this.currentSegmentId && this.activePlanId == null;
 
-    // Store as next plan candidate.
     this.nextPlanId = msg.plan_id;
     this.nextPlanSegmentId = msg.segment_id;
-    this.nextPlanDraftDriftSeconds = this.currentDriftSeconds;
+    this.nextPlanDraftDriftSeconds = this.boundaryDriftSeconds;
 
     await this.db.update(supervisorStateTable)
       .set({
         next_plan_id: msg.plan_id,
-        next_plan_draft_drift_seconds: this.currentDriftSeconds,
+        next_plan_draft_drift_seconds: this.boundaryDriftSeconds,
       })
       .where(eq(supervisorStateTable.id, 1));
 
     if (isColdStartDraft && !this.coldStartFinalizeSent) {
-      // Cold start: skip T-30s gate, finalize immediately with no drift adjustment.
       this.coldStartFinalizeSent = true;
       this.finalizationRequestedForPlanId = msg.plan_id;
       const requestId = randomUUID();
@@ -854,30 +927,22 @@ export class SupervisorProcess {
     }
   }
 
-  // PLAN_FINALIZED fires when the planner completes the second pass.
-  // Cold start: activate immediately (no last-item trigger available).
-  // Normal: plan sits in DB until last item of active plan starts playing.
   private async handlePlanFinalized(msg: BusMessage & { type: 'PLAN_FINALIZED' }): Promise<void> {
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_FINALIZED',
       plan_id: msg.plan_id,
     }, 'supervisor: plan finalized and ready');
 
-    // Cold start: activePlanId is null — activate the just-finalized plan immediately.
     if (this.activePlanId == null && this.nextPlanId === msg.plan_id) {
       await this.activateNextPlan(Date.now());
-      // Now request draft for the following segment.
       if (this.cachedSegment) {
         await this.maybeRequestNextDraft(this.cachedSegment, Date.now());
       }
     }
-    // Otherwise: normal path — plan becomes active when last item starts playing.
   }
 
   // ─── Draft request helpers ───────────────────────────────────────────────────
 
-  // Requests a draft for the current segment on cold start. Uses remaining time
-  // as target (not nominal, since we're mid-segment).
   private async requestColdStartDraft(resolved: ResolvedSegment, nowMs: number): Promise<void> {
     const remainingMs = Math.max(0, resolved.segmentEndMs - nowMs);
     const targetDuration = Math.floor(remainingMs / 1000);
@@ -899,10 +964,12 @@ export class SupervisorProcess {
     });
   }
 
-  // Requests a draft for the segment that follows `current` (segment N+1 when
-  // we just entered segment N). Uses first_pass_target = nominal_N+1 - planned_overshoot_N (D51).
+  // Requests a draft for the segment that follows `current`.
+  // first_pass_target = nominal(N+1) - (boundaryDrift(N) + plannedOvershoot(N))
+  //
+  // Both terms estimate how much over/under the active plan will run at segment
+  // N's boundary, so N+1's plan is pre-corrected before the T-30s second pass.
   private async maybeRequestNextDraft(current: ResolvedSegment, nowMs: number): Promise<void> {
-    // Resolve the following segment.
     const next = await resolveCurrentSegment(current.segmentEndMs + 1, this.db);
     if (!next) {
       this.logger?.info({
@@ -912,7 +979,6 @@ export class SupervisorProcess {
       return;
     }
 
-    // Dedup guard — don't re-request for the same segment instance.
     if (
       this.draftedForNextSegment &&
       this.draftedForNextSegment.segmentId === next.segment.id &&
@@ -921,7 +987,6 @@ export class SupervisorProcess {
       return;
     }
 
-    // Don't request if a plan already exists for this segment instance.
     const [existing] = await this.db
       .select({ id: plansTable.id, status: plansTable.status })
       .from(plansTable)
@@ -940,17 +1005,17 @@ export class SupervisorProcess {
       return;
     }
 
-    // first_pass_target = nominal_N+1 - planned_overshoot_N (D51)
-    // planned_overshoot can be negative (current plan shorter than its segment),
-    // in which case the next plan is asked to cover the shortfall:
-    //   overshoot = -60s → next target = nominal + 60s
-    //   overshoot = +60s → next target = nominal - 60s (corrects the overshoot)
     const nominalNext = next.segment.duration_seconds;
+    // Both boundaryDrift and plannedOvershoot represent accumulated lateness at
+    // the upcoming segment boundary. Subtracting both from nominal pre-corrects
+    // the draft so boundary drift self-corrects in one plan cycle.
     const firstPassTarget = Math.max(
       30,
-      nominalNext - this.plannedOvershootSeconds,
+      nominalNext - (this.boundaryDriftSeconds + this.plannedOvershootSeconds),
     );
 
+    // Store segment end time so activateNextPlan can compute boundary drift.
+    this.nextPlanScheduledEndMs = next.segmentEndMs;
     this.draftedForNextSegment = { segmentId: next.segment.id, instanceMs: next.clockInstanceStartedAt };
     const requestId = randomUUID();
     this.logger?.info({
@@ -958,6 +1023,7 @@ export class SupervisorProcess {
       segment_id: next.segment.id,
       target_duration_seconds: firstPassTarget,
       nominal_duration_seconds: nominalNext,
+      boundary_drift_seconds: this.boundaryDriftSeconds,
       planned_overshoot_applied_seconds: this.plannedOvershootSeconds,
       request_id: requestId,
     }, 'supervisor: requesting first-pass draft for next segment');
@@ -974,6 +1040,7 @@ export class SupervisorProcess {
   }
 
   // T-30s gate: emit PLAN_FINALIZE_REQUESTED with drift_delta and adjusted_target (D31).
+  // Uses boundary drift (stable, boundary-based) instead of per-tick rawDrift.
   private async maybeRequestFinalization(nowMs: number): Promise<void> {
     if (this.nextPlanId == null) return;
     if (this.finalizationRequestedForPlanId === this.nextPlanId) return;
@@ -994,12 +1061,14 @@ export class SupervisorProcess {
       .where(eq(clockSegmentsTable.id, plan.segment_id));
     const nominal = segment?.duration_seconds ?? 0;
 
-    const driftDelta = this.currentDriftSeconds - this.nextPlanDraftDriftSeconds;
-    // adjusted_target = nominal - current_drift, clamped to [60%, 140%] of nominal (D31)
-    const rawTarget = nominal - this.currentDriftSeconds;
+    // driftDelta = how much drift changed since the first pass was requested.
+    // Since boundaryDrift is stable within a segment, delta is typically 0 — but
+    // may differ in edge cases where plan was forced-advanced to a new segment.
+    const driftDelta = this.boundaryDriftSeconds - this.nextPlanDraftDriftSeconds;
+    const rawTarget = nominal - this.boundaryDriftSeconds;
     const adjustedTarget = Math.max(
-      nominal * ADJUSTED_TARGET_MIN_RATIO,
-      Math.min(nominal * ADJUSTED_TARGET_MAX_RATIO, rawTarget),
+      nominal * 0.6,
+      Math.min(nominal * 1.4, rawTarget),
     );
 
     this.finalizationRequestedForPlanId = this.nextPlanId;
@@ -1009,7 +1078,7 @@ export class SupervisorProcess {
       plan_id: this.nextPlanId, segment_id: plan.segment_id,
       drift_delta_seconds: driftDelta,
       adjusted_target_seconds: adjustedTarget,
-      current_drift_seconds: this.currentDriftSeconds,
+      boundary_drift_seconds: this.boundaryDriftSeconds,
       time_to_segment_end_seconds: timeToEnd / 1000,
       request_id: requestId,
     }, 'supervisor: T-30s finalization gate fired');
@@ -1025,118 +1094,11 @@ export class SupervisorProcess {
       now_ms: nowMs,
       adjusted_target_seconds: adjustedTarget,
       drift_delta_seconds: driftDelta,
-      current_drift_seconds: this.currentDriftSeconds,
+      current_drift_seconds: this.boundaryDriftSeconds,
     });
   }
 
-  // ─── Drift correction (execution drift only) ─────────────────────────────────
-
-  private async maybeApplyDriftCorrection(nowMs: number): Promise<void> {
-    if (this.activePlanId == null || this.currentSegmentId == null) return;
-
-    // Execution drift strips out the accounted organic overshoot (D51).
-    const executionDrift = this.currentDriftSeconds - this.plannedOvershootSeconds;
-
-    if (executionDrift > DRIFT_CORRECTION_THRESHOLD_S) {
-      await this.correctRunningBehind(nowMs);
-      return;
-    }
-    if (executionDrift < -COASTING_CORRECTION_THRESHOLD_S) {
-      await this.correctRunningAhead(nowMs);
-      return;
-    }
-  }
-
-  private async correctRunningBehind(nowMs: number): Promise<void> {
-    const resolved = await this.getCachedSegment(nowMs);
-    if (!resolved) return;
-    const order = parseDriftOrder(resolved.segment.catching_up_order);
-    if (order.length === 0) return;
-
-    const driftBefore = this.currentDriftSeconds;
-    let remainingDrift = driftBefore;
-
-    for (const type of order) {
-      if (remainingDrift - this.plannedOvershootSeconds <= DRIFT_CORRECTION_THRESHOLD_S) break;
-      const planItem = await this.findSkipCandidate(this.activePlanId!, type);
-      if (!planItem) continue;
-      // D34: never skip mandatory items or items where skip_allowed=false.
-      if (planItem.mandatory || !planItem.skip_allowed) continue;
-
-      const isCurrentlyPlaying =
-        this.currentPlayHistoryId != null && planItem.play_history_id === this.currentPlayHistoryId;
-
-      await this.db.update(planItemsTable)
-        .set({ status: 'supervisor_skipped' })
-        .where(eq(planItemsTable.id, planItem.id));
-
-      if (isCurrentlyPlaying) {
-        try {
-          await HarborClient.skip();
-        } catch (err) {
-          this.logger?.error({ err, process: 'supervisor', event: 'HARBOR_SKIP_FAILED', plan_item_id: planItem.id }, 'supervisor: harbor skip failed');
-        }
-      }
-
-      remainingDrift -= planItem.planned_duration_seconds ?? 0;
-      this.logger?.info({
-        process: 'supervisor', event: 'CORRECTION_SKIP',
-        plan_item_id: planItem.id, content_type: planItem.content_type,
-        drift_before_seconds: driftBefore, drift_after_seconds: remainingDrift,
-        on_air: isCurrentlyPlaying,
-      }, 'supervisor: correction skip applied');
-    }
-    void nowMs;
-  }
-
-  private async correctRunningAhead(nowMs: number): Promise<void> {
-    if (this.activePlanId == null) return;
-    if (this.pendingReplanForPlanId === this.activePlanId) return;
-
-    const fromPosition = await this.firstPendingPosition(this.activePlanId);
-    const executionDrift = this.currentDriftSeconds - this.plannedOvershootSeconds;
-    const baseRemainingSeconds =
-      this.currentSegmentEndMs != null
-        ? Math.max(0, Math.floor((this.currentSegmentEndMs - nowMs) / 1000))
-        : 0;
-    const targetRemainingSeconds = baseRemainingSeconds + Math.abs(executionDrift);
-    const requestId = randomUUID();
-    this.pendingReplanForPlanId = this.activePlanId;
-    this._bus.emit({
-      type: 'PLAN_REPLAN_REQUESTED',
-      request_id: requestId,
-      plan_id: this.activePlanId,
-      from_position: fromPosition,
-      remaining_seconds: Math.floor(targetRemainingSeconds),
-      now_ms: nowMs,
-    });
-    this.logger?.info({
-      process: 'supervisor', event: 'CORRECTION_FILL',
-      drift_seconds: this.currentDriftSeconds,
-      execution_drift_seconds: executionDrift,
-      plan_id: this.activePlanId,
-      from_position: fromPosition,
-      target_remaining_seconds: targetRemainingSeconds,
-      request_id: requestId,
-    }, 'supervisor: coasting correction replan requested');
-  }
-
-  private async findSkipCandidate(planId: number, type: DriftEventType): Promise<PlanItem | null> {
-    const contentTypes = DRIFT_TYPE_TO_CONTENT_TYPES[type];
-    if (!contentTypes || contentTypes.length === 0) return null;
-    const rows = await this.db
-      .select()
-      .from(planItemsTable)
-      .where(eq(planItemsTable.plan_id, planId))
-      .orderBy(asc(planItemsTable.position));
-    for (const row of rows) {
-      if (row.status !== 'pending' && row.status !== 'playing') continue;
-      if (row.mandatory || !row.skip_allowed) continue;
-      if (!contentTypes.includes(row.content_type)) continue;
-      return row;
-    }
-    return null;
-  }
+  // ─── Helpers ─────────────────────────────────────────────────────────────────
 
   private async firstPendingPosition(planId: number): Promise<number> {
     const [row] = await this.db
@@ -1155,29 +1117,13 @@ export class SupervisorProcess {
   }
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
+// ─── Module-level helpers ─────────────────────────────────────────────────────
 
 function parsePhidFromMetadata(meta: Record<string, string>): number | null {
   const raw = meta['play_history_id'];
   if (typeof raw !== 'string' || raw === '') return null;
   const n = parseInt(raw, 10);
   return Number.isFinite(n) ? n : null;
-}
-
-function parseDriftOrder(raw: unknown): DriftEventType[] {
-  const acceptable: DriftEventType[] = ['songs', 'jingles', 'station_ids', 'spots', 'promos'];
-  const out: DriftEventType[] = [];
-  let arr: unknown = raw;
-  if (typeof arr === 'string') {
-    try { arr = JSON.parse(arr); } catch { return out; }
-  }
-  if (!Array.isArray(arr)) return out;
-  for (const v of arr) {
-    if (typeof v === 'string' && acceptable.includes(v as DriftEventType)) {
-      out.push(v as DriftEventType);
-    }
-  }
-  return out;
 }
 
 function readStartPolicy(raw: unknown): { type: 'hard' | 'flexible'; early_seconds?: number | null } {

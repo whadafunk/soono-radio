@@ -1208,6 +1208,7 @@ export const supervisorState = sqliteTable('supervisor_state', {
   next_plan_drift_delta_seconds: real('next_plan_drift_delta_seconds'),
   intentional_offset_seconds: real('intentional_offset_seconds').notNull().default(0),
   planned_overshoot_seconds: real('planned_overshoot_seconds').notNull().default(0),
+  boundary_drift_seconds: real('boundary_drift_seconds'),
 });
 
 export type SupervisorStateRow = typeof supervisorState.$inferSelect;
