@@ -1039,16 +1039,17 @@ export class SupervisorProcess {
     // Both boundaryDrift and plannedOvershoot represent accumulated lateness at
     // the upcoming segment boundary. Subtracting both from nominal pre-corrects
     // the draft so boundary drift self-corrects in one plan cycle.
-    // Cap at nominalNext: the first pass should never request MORE than one full
-    // segment of content. When plannedOvershoot is very negative (previous plan
-    // ran far short), the raw formula overshoots upward and the planner fills
-    // with whatever it can find (often branding) instead of segment-appropriate
-    // content. The T-30s finalization gate can still extend up to 140% of nominal
-    // if the boundary drift turns out to be negative (segment started early).
+    //
+    // Recovery cap: allow up to 1.5× nominal when the station is running early
+    // (negative boundary drift). Without this, the min(nominalNext, …) ceiling
+    // means negative drift can never self-correct — every plan targets exactly
+    // nominal and the early-running condition persists indefinitely. The 1.5×
+    // cap limits per-segment catch-up so the planner doesn't try to fill 5×
+    // nominal with branding when music pools are short.
     const firstPassTarget = Math.max(
       30,
       Math.min(
-        nominalNext,
+        nominalNext * 1.5,
         nominalNext - (this.boundaryDriftSeconds + this.plannedOvershootSeconds),
       ),
     );
