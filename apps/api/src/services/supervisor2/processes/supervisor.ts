@@ -435,6 +435,17 @@ export class SupervisorProcess {
         process: 'supervisor', event: 'PLAN_STALL', reason: 'no_next_plan',
         active_plan_id: this.activePlanId,
       }, 'supervisor: active plan exhausted with nothing playing; no next plan ready');
+      // No next plan ready and no draft in flight — trigger an emergency cold-start
+      // so the station recovers without a manual restart. Reset coldStartFinalizeSent
+      // so the handler fires even if a cold start already ran in this session.
+      if (this.draftedForNextSegment == null) {
+        const resolved = await this.getCachedSegment(nowMs);
+        if (resolved) {
+          this.coldStartFinalizeSent = false;
+          await this.requestColdStartDraft(resolved, nowMs);
+          this.draftedForNextSegment = { segmentId: resolved.segment.id, instanceMs: resolved.clockInstanceStartedAt };
+        }
+      }
       return;
     }
     const [nextPlan] = await this.db
@@ -1012,7 +1023,9 @@ export class SupervisorProcess {
       this.draftedForNextSegment = { segmentId: next.segment.id, instanceMs: next.clockInstanceStartedAt };
       // Wire up nextPlanId so handleExhaustedPlan can activate when the active
       // plan runs out — without this, PLAN_STALL fires after every restart.
-      if (this.nextPlanId == null) {
+      // Only adopt draft/finalized plans — adopting an already-active plan would
+      // cause handleExhaustedPlan to bail (status check) and loop forever.
+      if (this.nextPlanId == null && (existing.status === 'draft' || existing.status === 'finalized')) {
         this.nextPlanId = existing.id;
         this.nextPlanSegmentId = next.segment.id;
         await this.db.update(supervisorStateTable)
