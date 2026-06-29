@@ -198,7 +198,7 @@ const TYPE_DEFAULTS: Record<ClockSegmentType, {
   accept_live: boolean;
   sweeper_config: SegmentSweeperConfig | null;
 }> = {
-  music:         { sources: [],                                         start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'station_ids', 'songs'],  coasting_order: ['jingles', 'station_ids', 'songs'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
+  music:         { sources: [],                                         start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['station_ids', 'songs', 'jingles'],  coasting_order: ['songs', 'station_ids', 'jingles'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
   live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
   stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
   news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: null                         },
@@ -1227,10 +1227,6 @@ function SegmentDrawer({
     ...(draft.type !== 'stop_set' ? [{ id: 'live' as DrawerTab, label: 'Sweepers & Live' }] : []),
   ];
 
-  const flexPolicy = draft.start_policy.type === 'flexible'
-    ? (draft.start_policy as Extract<StartPolicy, { type: 'flexible' }>)
-    : { type: 'flexible' as const, late_seconds: 0, early_seconds: 0 };
-
   return (
     <div className="border-t border-zinc-700/60 bg-white/10">
       <div className="flex border-b border-zinc-700/60 px-4">
@@ -1431,75 +1427,29 @@ function SegmentDrawer({
           <div className="grid grid-cols-2 gap-4">
             <div className="col-span-2">
               <p className="text-xs font-semibold text-zinc-300 mb-2">Start policy</p>
-              <div className="space-y-2">
-                {/* Start late */}
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer select-none w-28 shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={flexPolicy.late_seconds !== 0}
-                      onChange={(e) => {
-                        const next = { ...flexPolicy, late_seconds: e.target.checked ? null : 0 };
-                        update({ start_policy: next.late_seconds === 0 && next.early_seconds === 0 ? { type: 'hard' } : next });
-                      }}
-                      className="accent-brand-500"
-                    />
-                    <span className="text-xs text-zinc-300">Start late</span>
-                    <HelpTooltip text="Wait for the previous segment to finish naturally. Empty limit = natural end; set seconds to force a cut after N seconds of overtime." />
-                  </label>
-                  {flexPolicy.late_seconds !== 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-zinc-300">up to</span>
-                      <input
-                        type="number"
-                        min={1}
-                        placeholder="∞"
-                        value={flexPolicy.late_seconds ?? ''}
-                        onKeyDown={(e) => { if (!/^\d$/.test(e.key) && !['Backspace','Delete','ArrowLeft','ArrowRight','Tab','Home','End'].includes(e.key) && !e.metaKey && !e.ctrlKey) e.preventDefault(); }}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value);
-                          update({ start_policy: { ...flexPolicy, late_seconds: isNaN(v) || v <= 0 ? null : v } });
-                        }}
-                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 text-center"
-                      />
-                      <span className="text-xs text-zinc-300">sec late{flexPolicy.late_seconds === null ? ' (natural end)' : ''}</span>
-                    </div>
-                  )}
-                </div>
-                {/* Start early */}
-                <div className="flex items-center gap-3">
-                  <label className="flex items-center gap-2 cursor-pointer select-none w-28 shrink-0">
-                    <input
-                      type="checkbox"
-                      checked={flexPolicy.early_seconds !== 0}
-                      onChange={(e) => {
-                        const next = { ...flexPolicy, early_seconds: e.target.checked ? null : 0 };
-                        update({ start_policy: next.late_seconds === 0 && next.early_seconds === 0 ? { type: 'hard' } : next });
-                      }}
-                      className="accent-brand-500"
-                    />
-                    <span className="text-xs text-zinc-300">Start early</span>
-                    <HelpTooltip text="Start early if the previous segment finishes ahead of schedule. Empty limit = fill gap immediately; set seconds to cap how early it can pull forward." />
-                  </label>
-                  {flexPolicy.early_seconds !== 0 && (
-                    <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-zinc-300">up to</span>
-                      <input
-                        type="number"
-                        min={1}
-                        placeholder="∞"
-                        value={flexPolicy.early_seconds ?? ''}
-                        onKeyDown={(e) => { if (!/^\d$/.test(e.key) && !['Backspace','Delete','ArrowLeft','ArrowRight','Tab','Home','End'].includes(e.key) && !e.metaKey && !e.ctrlKey) e.preventDefault(); }}
-                        onChange={(e) => {
-                          const v = parseInt(e.target.value);
-                          update({ start_policy: { ...flexPolicy, early_seconds: isNaN(v) || v <= 0 ? null : v } });
-                        }}
-                        className="w-16 px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 text-center"
-                      />
-                      <span className="text-xs text-zinc-300">sec early{flexPolicy.early_seconds === null ? ' (fill gap)' : ''}</span>
-                    </div>
-                  )}
-                </div>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="radio"
+                    name="start_policy"
+                    checked={draft.start_policy.type === 'flexible'}
+                    onChange={() => update({ start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 } })}
+                    className="accent-brand-500"
+                  />
+                  <span className="text-xs text-zinc-300">Flexible</span>
+                  <HelpTooltip text="This segment starts when the previous one ends naturally. Drift is absorbed by the planning algorithm." />
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer select-none">
+                  <input
+                    type="radio"
+                    name="start_policy"
+                    checked={draft.start_policy.type === 'hard'}
+                    onChange={() => update({ start_policy: { type: 'hard' } })}
+                    className="accent-brand-500"
+                  />
+                  <span className="text-xs text-zinc-300">Hard</span>
+                  <HelpTooltip text="This segment must start at its scheduled clock time. The previous segment will be trimmed or padded to hit the boundary." />
+                </label>
               </div>
             </div>
 

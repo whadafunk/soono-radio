@@ -35,7 +35,7 @@
 // works offline — it never calls HarborClient.
 
 import { randomUUID } from 'crypto';
-import { and, eq, gte, inArray } from 'drizzle-orm';
+import { and, asc, eq, gt, gte, inArray } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -706,6 +706,42 @@ export class PlannerProcess {
   }
 
   // ─── Music segment assembly ─────────────────────────────────────────────────
+  //
+  // Assembly order and rules for a music segment:
+  //
+  //  (0) Show-start envelope (if first segment of show block).
+  //  (a) Segment-start envelope.
+  //  (b/c) Music + interstitial cadence loop:
+  //    - Iterates music candidates in LRP rotation order.
+  //    - For each candidate: check tryFitItem FIRST (track must fit within
+  //      remaining + 30s overshoot tolerance) before injecting any interstitials.
+  //      This is critical — if the check came after, a station ID or jingle would
+  //      fire for every skipped candidate while musicCount stays constant,
+  //      exhausting the branding pool in a burst.
+  //    - When the track fits and musicCount % N == 0, inject the configured
+  //      interstitial (jingle and/or station ID) before placing the track.
+  //    - Loop exits when remaining ≤ −30s (overshoot limit) or all candidates
+  //      have been visited.
+  //  (d) End-of-segment gap handling — bidirectional ±30s tolerance:
+  //    - Runs only if remaining > 30s after the music loop (gap too large to accept).
+  //    - d1: try one branding item (station ID or jingle, longest first) that
+  //      lands remaining inside [−30, +30]. At most one item is placed.
+  //    - d2: if still > 30s, find the unplaced music candidate with the smallest
+  //      overshoot (duration − remaining). Apply the bidirectional rule:
+  //        · overshoot ≤ 30s            → place normally (overshoot < undershoot)
+  //        · overshoot > 30s, overshoot < remaining, next segment is hard
+  //                                     → place with cut_allowed=true; the audio
+  //                                       engine hard-stops at the boundary
+  //        · otherwise                  → leave the gap; for flexible next segments
+  //                                       drift self-corrects in the next plan; for
+  //                                       hard next segments the hard-start gate
+  //                                       handles ≤30s residuals at T−30s
+  //  (e) Segment-end envelope.
+  //  (f) Show-end envelope (if last segment of show block).
+  //
+  // The pool is overserved by POOL_MULTIPLIER (2.5×) so d2 has candidates
+  // available for the end-of-segment fit even after the main loop places its fill.
+  // No arrangement-trying occurs — the pass is a single greedy sweep.
 
   private async assembleMusicPlan(
     segment: ClockSegment,
@@ -787,6 +823,14 @@ export class PlannerProcess {
       if (remaining <= 0 && isHardEnd) break;
       if (remaining <= -FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) break;
 
+      // Check if the music track fits before injecting any interstitials.
+      // Interstitials must not fire for skipped candidates — otherwise musicCount
+      // stays constant and the "every N tracks" condition fires for every rejected
+      // candidate, exhausting the branding pool in a burst.
+      if (!tryFitItem(candidate.duration_seconds)) {
+        continue;
+      }
+
       // Interstitial injection before each music track (except the very first).
       if (musicCount > 0) {
         if (
@@ -825,38 +869,73 @@ export class PlannerProcess {
         }
       }
 
-      if (!tryFitItem(candidate.duration_seconds)) {
-        continue;
-      }
       items.push(withCutSkip(musicCandidateToItem(candidate), config));
       usedMusicIds.add(candidate.id);
       remaining -= candidate.duration_seconds;
       musicCount += 1;
     }
 
-    // (d) Gap fill via coasting_order when allowed and gap is large enough.
-    if (segment.can_fill && remaining > MIN_FILL_GAP_SECONDS) {
-      const coastingOrder = parseDriftEventTypes(segment.coasting_order);
-      let madeProgress = true;
-      while (remaining > MIN_FILL_GAP_SECONDS && madeProgress) {
-        madeProgress = false;
-        for (const type of coastingOrder) {
-          if (remaining <= MIN_FILL_GAP_SECONDS) break;
-          const placed = this.tryGapFill(
-            type,
-            remaining,
-            { music, branding, campaign: null },
-            usedMusicIds,
-            usedBrandingIds,
-            new Set(),
-            new Set(),
+    // (d) End-of-segment gap handling.
+    // When remaining > 30s (outside the undershoot tolerance window), the loop
+    // ended without filling the target. Apply a two-step approach:
+    //   d1. Try a single branding item (station ID or jingle, longest first) that
+    //       lands remaining inside [−30, +30] — i.e., closer to the target than
+    //       leaving the gap as-is.
+    //   d2. Find the unplaced music candidate with the smallest overshoot and
+    //       apply the bidirectional 30s tolerance rule:
+    //         - overshoot ≤ 30s  →  place normally (overshoot < undershoot by definition)
+    //         - overshoot > 30s, overshoot < remaining, next is hard  →  place with
+    //           cut_allowed=true so the audio engine hard-stops at the boundary
+    //         - otherwise  →  leave the gap (next is flexible; drift self-corrects)
+    if (remaining > FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) {
+      // d1: one branding item to close the gap into tolerance.
+      const availableBranding = [
+        ...branding.station_ids.filter(c => !usedBrandingIds.has(c.id)),
+        ...branding.jingles.filter(c => !usedBrandingIds.has(c.id)),
+      ].sort((a, b) => b.duration_seconds - a.duration_seconds); // longest first
+
+      for (const bc of availableBranding) {
+        const afterPlace = remaining - bc.duration_seconds;
+        const deviationIfPlaced = Math.abs(afterPlace);
+        if (deviationIfPlaced <= FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS && deviationIfPlaced < remaining) {
+          items.push(withCutSkip(
+            brandingToItem(bc, `end-of-segment branding fill: gap≈${Math.round(remaining)}s`),
             config,
-          );
-          if (placed) {
-            items.push(placed.item);
-            remaining -= placed.item.planned_duration_seconds;
-            madeProgress = true;
+          ));
+          usedBrandingIds.add(bc.id);
+          remaining = afterPlace;
+          break;
+        }
+      }
+
+      // d2: best-fit unplaced music candidate with bidirectional tolerance.
+      if (remaining > FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) {
+        const nextPolicy = await this.lookupNextSegmentPolicy(segment);
+        const isNextHard = nextPolicy.type === 'hard';
+
+        const bestFit = music.candidates
+          .filter(c => !usedMusicIds.has(c.id) && c.duration_seconds > remaining)
+          .sort((a, b) => (a.duration_seconds - remaining) - (b.duration_seconds - remaining))[0]
+          ?? null;
+
+        if (bestFit) {
+          const overshoot = bestFit.duration_seconds - remaining;
+          if (overshoot <= FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) {
+            // Overshoot within tolerance and smaller than the undershoot — place normally.
+            items.push(withCutSkip(musicCandidateToItem(bestFit), config));
+            usedMusicIds.add(bestFit.id);
+            remaining -= bestFit.duration_seconds;
+          } else if (isNextHard && overshoot < remaining) {
+            // Neither tolerance qualifies, but overshoot is the smaller of the two
+            // deviations and the next boundary is hard: silence is unacceptable.
+            // Place with cut_allowed=true — the audio engine hard-stops at the boundary.
+            items.push({ ...withCutSkip(musicCandidateToItem(bestFit), config), cut_allowed: true });
+            usedMusicIds.add(bestFit.id);
+            remaining -= bestFit.duration_seconds;
           }
+          // else: undershoot ≤ overshoot, or next segment is flexible.
+          // Leave the gap — drift self-corrects in the next plan for flexible
+          // segments; the hard-start gate covers ≤30s gaps for hard ones.
         }
       }
     }
@@ -1362,6 +1441,27 @@ export class PlannerProcess {
     }
 
     return { isShowStart, isShowEnd };
+  }
+
+  // Returns the start_policy of the segment immediately following `segment`
+  // within the same clock (by sort_order). Used by the end-of-segment gap
+  // handler to decide whether a cut_allowed fill is necessary.
+  private async lookupNextSegmentPolicy(
+    segment: ClockSegment,
+  ): Promise<{ type: 'hard' | 'flexible' }> {
+    const [next] = await this.db
+      .select({ start_policy: clockSegments.start_policy })
+      .from(clockSegments)
+      .where(
+        and(
+          eq(clockSegments.clock_id, segment.clock_id),
+          gt(clockSegments.sort_order, segment.sort_order),
+        ),
+      )
+      .orderBy(asc(clockSegments.sort_order))
+      .limit(1);
+    if (!next) return { type: 'flexible' };
+    return readStartPolicy(next.start_policy);
   }
 
   // Try a single gap-fill placement for `type`. Returns the item placed, or
