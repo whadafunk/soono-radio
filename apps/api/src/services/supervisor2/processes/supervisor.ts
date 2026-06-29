@@ -469,20 +469,21 @@ export class SupervisorProcess {
       return;
     }
     const [nextPlan] = await this.db
-      .select({ status: plansTable.status, segment_id: plansTable.segment_id })
+      .select({ status: plansTable.status, segment_id: plansTable.segment_id, clock_instance_started_at: plansTable.clock_instance_started_at })
       .from(plansTable)
       .where(eq(plansTable.id, this.nextPlanId));
     if (!nextPlan) return;
     if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') return;
 
-    // Don't advance to a plan for a future segment before its wall-clock time.
-    // If the active plan exhausted early (e.g. empty stop-set) and the next
-    // plan is for the NEXT segment, hold until the current segment's time ends
-    // so we don't skip a segment that still has wall-clock time remaining.
+    // Don't advance to a plan that belongs to a clock instance that hasn't
+    // started yet. This prevents the last segment of one clock hour from
+    // exhausting early and immediately consuming content from the next hour.
+    // Within the same clock instance, early advancement is intentional —
+    // organic drift means a short plan legitimately hands off to the next
+    // segment's plan before the wall-clock boundary.
     if (
-      nextPlan.segment_id !== this.currentSegmentId &&
-      this.currentSegmentEndMs != null &&
-      nowMs < this.currentSegmentEndMs
+      nextPlan.clock_instance_started_at != null &&
+      nowMs < nextPlan.clock_instance_started_at
     ) {
       return;
     }
@@ -940,10 +941,14 @@ export class SupervisorProcess {
     }
 
     // first_pass_target = nominal_N+1 - planned_overshoot_N (D51)
+    // planned_overshoot can be negative (current plan shorter than its segment),
+    // in which case the next plan is asked to cover the shortfall:
+    //   overshoot = -60s → next target = nominal + 60s
+    //   overshoot = +60s → next target = nominal - 60s (corrects the overshoot)
     const nominalNext = next.segment.duration_seconds;
     const firstPassTarget = Math.max(
       30,
-      nominalNext - Math.max(0, this.plannedOvershootSeconds),
+      nominalNext - this.plannedOvershootSeconds,
     );
 
     this.draftedForNextSegment = { segmentId: next.segment.id, instanceMs: next.clockInstanceStartedAt };
