@@ -1010,6 +1010,15 @@ export class SupervisorProcess {
         existing_plan_id: existing.id, status: existing.status,
       }, 'supervisor: plan already exists for next segment, skipping draft request');
       this.draftedForNextSegment = { segmentId: next.segment.id, instanceMs: next.clockInstanceStartedAt };
+      // Wire up nextPlanId so handleExhaustedPlan can activate when the active
+      // plan runs out — without this, PLAN_STALL fires after every restart.
+      if (this.nextPlanId == null) {
+        this.nextPlanId = existing.id;
+        this.nextPlanSegmentId = next.segment.id;
+        await this.db.update(supervisorStateTable)
+          .set({ next_plan_id: existing.id })
+          .where(eq(supervisorStateTable.id, 1));
+      }
       return;
     }
 
