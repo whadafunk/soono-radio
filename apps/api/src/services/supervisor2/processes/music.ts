@@ -291,22 +291,41 @@ export class MusicProcess {
     const separationSeconds = readSeparationMinutes(cfg.rotation.params) * 60;
     const nowSeconds = Math.floor(nowMs / 1000);
 
-    // Build LRP ranking. Never-played first (treated as -Infinity timestamp),
-    // then ascending by latest started_at.
-    const ranked = mediaIds
-      .filter((id) => {
-        // Apply separation: skip tracks played within the rotation window.
-        const latest = latestByMediaId.get(id);
-        if (latest == null) return true;
-        if (separationSeconds <= 0) return true;
-        return nowSeconds - latest >= separationSeconds;
-      })
-      .sort((a, b) => {
-        const ta = latestByMediaId.get(a) ?? -Infinity;
-        const tb = latestByMediaId.get(b) ?? -Infinity;
-        return ta - tb;
-      })
-      .slice(0, limit);
+    // LRP sort across all tracks. Never-played first (-Infinity), then oldest
+    // most-recently-played.
+    const allSorted = mediaIds.slice().sort((a, b) => {
+      const ta = latestByMediaId.get(a) ?? -Infinity;
+      const tb = latestByMediaId.get(b) ?? -Infinity;
+      return ta - tb;
+    });
+
+    // Partition into tracks that pass the separation window and those that
+    // don't, preserving LRP order within each group.
+    const passes: number[] = [];
+    const fails: number[] = [];
+    for (const id of allSorted) {
+      const latest = latestByMediaId.get(id);
+      const ok = latest == null || separationSeconds <= 0 || nowSeconds - latest >= separationSeconds;
+      if (ok) passes.push(id);
+      else fails.push(id);
+    }
+
+    // Separation-passing tracks fill the pool first. When the pass group is
+    // smaller than needed, fall through to recently-played tracks (still in
+    // LRP order) so the segment isn't left short and padded with branding.
+    if (fails.length > 0 && passes.length < limit) {
+      this.logger?.info({
+        process: 'music',
+        event: 'SEPARATION_RELAXED',
+        rotation_id: cfg.rotation_id,
+        playlist_id: cfg.playlist_id,
+        separation_seconds: separationSeconds,
+        passes: passes.length,
+        fallback_used: Math.min(fails.length, limit - passes.length),
+      }, 'music: separation filter relaxed — not enough candidates within window');
+    }
+
+    const ranked = [...passes, ...fails].slice(0, limit);
 
     return ranked
       .map<MusicCandidate | null>((mediaId) => {

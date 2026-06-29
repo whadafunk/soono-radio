@@ -107,7 +107,7 @@ queue.on_track(fun (meta) ->
         play_history_id = phid
       })
       ignore(http.post(
-        headers=[("Content-Type", "application/json")],
+        headers=[("Content-Type", "application/json"), ("Authorization", "Bearer cmonica")],
         data=payload,
         "#{api_url}/internal/ls/track-started"
       ))
@@ -129,7 +129,7 @@ on_end(
           play_history_id = phid
         })
         ignore(http.post(
-          headers=[("Content-Type", "application/json")],
+          headers=[("Content-Type", "application/json"), ("Authorization", "Bearer cmonica")],
           data=payload,
           "#{api_url}/internal/ls/track-ending"
         ))
