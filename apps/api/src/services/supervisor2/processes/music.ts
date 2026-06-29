@@ -25,6 +25,7 @@ import {
   musicCampaigns as musicCampaignsTable,
   playHistory as playHistoryTable,
   playlistMedia as playlistMediaTable,
+  playlists as playlistsTable,
   rotations as rotationsTable,
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
@@ -128,14 +129,8 @@ export class MusicProcess {
       (s): s is { type: 'playlist'; playlist_id: number; rotation_id?: number | null } =>
         s.type === 'playlist' && typeof s.playlist_id === 'number',
     );
-    if (playlistSources.length === 0) {
-      return { candidates: [], total_duration_seconds: 0 };
-    }
 
-    // Resolve each source to a (rotation, playlist_id) pair. Sources that
-    // don't define a rotation_id are skipped — we don't have a fallback
-    // rotation algorithm to apply, and the Planner can re-request with a
-    // wider net if it needs to.
+    // Resolve each source to a (rotation, playlist_id) pair.
     const rotationConfigs: RotationSourceConfig[] = [];
     const seenRotationIds = new Set<number>();
     for (const src of playlistSources) {
@@ -152,6 +147,46 @@ export class MusicProcess {
         rotation: row,
       });
       seenRotationIds.add(src.rotation_id);
+    }
+
+    // Fallback: when no sources are configured or all sources lack a rotation_id,
+    // use the default music rotation with all available music playlists so that
+    // unconfigured segments still play music rather than falling through to
+    // coasting fill.
+    if (rotationConfigs.length === 0) {
+      const [defaultRotation] = await this.db
+        .select()
+        .from(rotationsTable)
+        .where(and(eq(rotationsTable.is_default, true), eq(rotationsTable.kind, 'music')))
+        .limit(1);
+      if (defaultRotation) {
+        // Use any playlist_id from configured sources; if none, query all music playlists.
+        const fallbackPlaylistIds = playlistSources.length > 0
+          ? playlistSources.map((s) => s.playlist_id)
+          : (await this.db
+              .select({ id: playlistsTable.id })
+              .from(playlistsTable)
+              .where(eq(playlistsTable.type, 'music'))
+            ).map((r) => r.id);
+        for (const playlistId of fallbackPlaylistIds) {
+          rotationConfigs.push({
+            rotation_id: defaultRotation.id,
+            playlist_id: playlistId,
+            rotation: defaultRotation,
+          });
+        }
+        this.logger?.warn({
+          process: 'music',
+          event: 'ROTATION_FALLBACK',
+          segment_id: segmentId,
+          default_rotation_id: defaultRotation.id,
+          fallback_playlist_ids: fallbackPlaylistIds,
+        }, 'music: segment has no rotation configured — falling back to default rotation');
+      }
+    }
+
+    if (rotationConfigs.length === 0) {
+      return { candidates: [], total_duration_seconds: 0 };
     }
 
     const targetPerSource = Math.max(
