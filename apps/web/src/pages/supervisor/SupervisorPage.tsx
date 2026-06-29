@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   CheckCircle,
   Circle,
+  Clock,
   Mic2,
   Music2,
   Megaphone,
@@ -30,6 +31,7 @@ import {
   postSupervisorSkip,
   postSupervisorPause,
   postSupervisorResume,
+  postSupervisorAlignToWallClock,
 } from '../../api';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -114,10 +116,12 @@ function ControlBar({
   paused,
   hasActivePlan,
   liveTakeoverActive,
+  driftSeconds,
 }: {
   paused: boolean;
   hasActivePlan: boolean;
   liveTakeoverActive: boolean;
+  driftSeconds: number;
 }) {
   const queryClient = useQueryClient();
 
@@ -136,8 +140,14 @@ function ControlBar({
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
   });
 
+  const alignMutation = useMutation({
+    mutationFn: postSupervisorAlignToWallClock,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
+  });
+
   const skipDisabled = !hasActivePlan || liveTakeoverActive || skipMutation.isPending;
   const toggleDisabled = pauseMutation.isPending || resumeMutation.isPending;
+  const alignDisabled = !hasActivePlan || liveTakeoverActive || Math.abs(driftSeconds) < 5 || alignMutation.isPending;
 
   return (
     <div className="flex items-center gap-3">
@@ -152,6 +162,20 @@ function ControlBar({
       >
         <SkipForward className="w-4 h-4" />
         Skip
+      </button>
+
+      <button
+        onClick={() => alignMutation.mutate()}
+        disabled={alignDisabled}
+        title="Rebuild remaining plan items to land exactly at the segment's wall-clock boundary"
+        className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
+          ${alignDisabled
+            ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
+            : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'
+          }`}
+      >
+        <Clock className="w-4 h-4" />
+        Align to clock
       </button>
 
       {paused ? (
@@ -813,6 +837,7 @@ export function SupervisorPage() {
             paused={data?.paused ?? false}
             hasActivePlan={data?.active_plan_id != null}
             liveTakeoverActive={data?.live_takeover_active ?? false}
+            driftSeconds={data?.current_drift_seconds ?? 0}
           />
         </div>
       </div>
