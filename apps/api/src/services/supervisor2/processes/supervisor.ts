@@ -383,7 +383,11 @@ export class SupervisorProcess {
 
     // ── Push timing ─────────────────────────────────────────────────────────
     this.tickOperation = 'push_decision';
-    if (expectedEndMs == null) {
+    // Treat a stale 'playing' item (expectedEndMs far in the past) as null so
+    // the exhausted-plan path fires instead of endlessly re-emitting pushes
+    // that the queue feeder can't act on (no pending items remain).
+    const isStale = expectedEndMs != null && expectedEndMs < nowMs - 5_000;
+    if (expectedEndMs == null || isStale) {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
@@ -726,6 +730,10 @@ export class SupervisorProcess {
       const isTransition = await this.isLastPendingNowPlaying(this.activePlanId, currentPhid);
       if (isTransition) {
         await this.activateNextPlan(Date.now());
+        // Notify queue feeder so it starts pushing the newly activated plan
+        // immediately — without this, it would wait for the next LS_TRACK_ENDING
+        // webhook, which may never arrive if LS falls through to blank().
+        this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'plan_transition' });
       }
     }
 
@@ -1009,9 +1017,18 @@ export class SupervisorProcess {
     // Both boundaryDrift and plannedOvershoot represent accumulated lateness at
     // the upcoming segment boundary. Subtracting both from nominal pre-corrects
     // the draft so boundary drift self-corrects in one plan cycle.
+    // Cap at nominalNext: the first pass should never request MORE than one full
+    // segment of content. When plannedOvershoot is very negative (previous plan
+    // ran far short), the raw formula overshoots upward and the planner fills
+    // with whatever it can find (often branding) instead of segment-appropriate
+    // content. The T-30s finalization gate can still extend up to 140% of nominal
+    // if the boundary drift turns out to be negative (segment started early).
     const firstPassTarget = Math.max(
       30,
-      nominalNext - (this.boundaryDriftSeconds + this.plannedOvershootSeconds),
+      Math.min(
+        nominalNext,
+        nominalNext - (this.boundaryDriftSeconds + this.plannedOvershootSeconds),
+      ),
     );
 
     // Store segment end time so activateNextPlan can compute boundary drift.
