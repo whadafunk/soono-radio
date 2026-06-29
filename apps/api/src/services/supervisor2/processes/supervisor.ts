@@ -1006,13 +1006,15 @@ export class SupervisorProcess {
       return;
     }
 
+    // Only look for draft/finalized — an 'active' plan is already in use and
+    // should not prevent creating a new plan for the next segment.
     const [existing] = await this.db
       .select({ id: plansTable.id, status: plansTable.status })
       .from(plansTable)
       .where(and(
         eq(plansTable.segment_id, next.segment.id),
         eq(plansTable.clock_instance_started_at, next.clockInstanceStartedAt),
-        inArray(plansTable.status, ['draft', 'finalized', 'active']),
+        inArray(plansTable.status, ['draft', 'finalized']),
       ))
       .limit(1);
     if (existing) {
@@ -1023,9 +1025,7 @@ export class SupervisorProcess {
       this.draftedForNextSegment = { segmentId: next.segment.id, instanceMs: next.clockInstanceStartedAt };
       // Wire up nextPlanId so handleExhaustedPlan can activate when the active
       // plan runs out — without this, PLAN_STALL fires after every restart.
-      // Only adopt draft/finalized plans — adopting an already-active plan would
-      // cause handleExhaustedPlan to bail (status check) and loop forever.
-      if (this.nextPlanId == null && (existing.status === 'draft' || existing.status === 'finalized')) {
+      if (this.nextPlanId == null) {
         this.nextPlanId = existing.id;
         this.nextPlanSegmentId = next.segment.id;
         await this.db.update(supervisorStateTable)
