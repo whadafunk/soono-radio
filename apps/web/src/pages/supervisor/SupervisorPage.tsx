@@ -811,6 +811,17 @@ export function SupervisorPage() {
     refetchInterval: 3000,
   });
 
+  // Compute live drift: how many seconds the wall clock is ahead of audio consumption.
+  // This is the meaningful "on-time?" metric for an operator. current_drift_seconds is
+  // an internal planner value (boundary offset) and should not drive operator-facing UI.
+  const liveDriftSeconds = (() => {
+    const startMs = data?.segment_started_at_ms;
+    const consumed = data?.plan_consumed_seconds ?? 0;
+    if (startMs == null) return 0;
+    const elapsed = Math.max(0, (Date.now() - startMs) / 1000);
+    return elapsed - consumed;
+  })();
+
   return (
     <div className="space-y-6">
       <div className="flex items-start justify-between">
@@ -837,7 +848,7 @@ export function SupervisorPage() {
             paused={data?.paused ?? false}
             hasActivePlan={data?.active_plan_id != null}
             liveTakeoverActive={data?.live_takeover_active ?? false}
-            driftSeconds={data?.current_drift_seconds ?? 0}
+            driftSeconds={liveDriftSeconds}
           />
         </div>
       </div>
@@ -875,7 +886,7 @@ export function SupervisorPage() {
       />
 
       <DriftPanel
-        driftSeconds={data?.current_drift_seconds ?? 0}
+        driftSeconds={liveDriftSeconds}
         lastHeartbeatAt={data?.last_heartbeat_at ?? null}
       />
 
