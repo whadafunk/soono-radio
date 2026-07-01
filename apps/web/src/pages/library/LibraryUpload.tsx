@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { MEDIA_CATEGORIES, MediaCategory, IngestJob } from '@soono/shared';
 import { fetchIngestJobs, clearIngestJobs, uploadLibraryFiles } from '../../api';
+import { useUploadStore, ActiveUpload } from '../../stores/uploadStore';
 
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
   music:     'Music',
@@ -34,16 +35,6 @@ const CATEGORY_GROUPS: { label: string; categories: MediaCategory[] }[] = [
   { label: 'Advertising',categories: ['spot', 'promo'] },
   { label: 'Other',      categories: ['bed', 'recording'] },
 ];
-
-interface ActiveUpload {
-  uid: string;
-  filename: string;
-  size: number;
-  loaded: number;
-  status: 'uploading' | 'queued' | 'failed';
-  error?: string;
-  jobId?: string;
-}
 
 type IngestTab = 'pending' | 'completed' | 'failed';
 
@@ -115,11 +106,10 @@ function CategoryPickerModal({
 // ─── Main page ────────────────────────────────────────────────────────────────
 
 export function LibraryUpload() {
-  const [active, setActive] = useState<ActiveUpload[]>([]);
+  const { active, setActive, batchJobIds, setBatchJobIds } = useUploadStore();
   const [dragActive, setDragActive] = useState(false);
   const [pendingFiles, setPendingFiles] = useState<File[] | null>(null);
   const [ingestTab, setIngestTab] = useState<IngestTab>('pending');
-  const [batchJobIds, setBatchJobIds] = useState<Set<string>>(new Set());
   const [clearing, setClearing] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const queryClient = useQueryClient();
