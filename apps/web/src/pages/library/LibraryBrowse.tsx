@@ -636,8 +636,13 @@ function BulkActionBar({
   onSuccess: () => void;
 }) {
   const ids = useMemo(() => Array.from(selection), [selection]);
+  // `items` is only the current page (see `limit` below) — a selected id from a
+  // different page won't be found here. Fail closed: treat "can't verify this
+  // item's category" as non-music, not as "assume it's fine". Otherwise a
+  // selection spanning multiple pages silently lets non-music files through
+  // (this is exactly how promo .wav files ended up in a bulk Lookup ID run).
   const hasNonMusic = useMemo(
-    () => ids.some((id) => { const item = items.find((m) => m.id === id); return item !== undefined && item.category !== 'music'; }),
+    () => ids.some((id) => { const item = items.find((m) => m.id === id); return item === undefined || item.category !== 'music'; }),
     [ids, items],
   );
   // IDs whose media item is visible on this page and already has a title set.
