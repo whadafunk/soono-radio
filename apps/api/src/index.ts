@@ -75,9 +75,14 @@ fastify.register(cors, { origin: corsOrigins });
 fastify.register(multipart, {
   limits: {
     // Audio uploads need much more headroom than certs. A typical 5-minute
-    // FLAC sits around 30–50 MB; allow 500 MB so users can drop full albums.
+    // FLAC sits around 30–50 MB; allow 4 GB per file so users can drop full albums.
     fileSize: 4 * 1024 * 1024 * 1024,
-    files: 100,
+    // Batch imports of a whole back-catalog can easily exceed 100 files. When
+    // this limit is hit, @fastify/multipart rejects the WHOLE request with its
+    // own generic 413 (not our per-file size-limit check) — every file in the
+    // batch shows the same "Payload Too Large" with no indication it was a
+    // count limit, not a size one. Raised well above any realistic batch size.
+    files: 1000,
   },
 });
 
