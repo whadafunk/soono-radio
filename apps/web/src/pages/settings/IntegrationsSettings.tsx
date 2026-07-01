@@ -185,7 +185,25 @@ export function IntegrationsSettings() {
             </p>
           </div>
 
-          <div>
+          <div className="flex items-center justify-between py-2">
+            <div>
+              <span className="text-sm font-medium text-zinc-300">Analyse music on import</span>
+              <p className="text-xs text-zinc-400 mt-1">
+                Turn off to skip BPM/key/energy/danceability/mood analysis entirely — tracks import faster
+                and use no extra CPU/RAM, but won't have these fields until analysed manually.
+              </p>
+            </div>
+            <input
+              type="checkbox"
+              checked={(draft ?? config!).audio_analysis_enabled}
+              onChange={(e) =>
+                setDraft((d) => ({ ...(d ?? config!), audio_analysis_enabled: e.target.checked }))
+              }
+              className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-brand-500 focus:ring-brand-500 focus:ring-offset-zinc-900 flex-shrink-0 ml-4"
+            />
+          </div>
+
+          <div className={(draft ?? config!).audio_analysis_enabled ? '' : 'opacity-50 pointer-events-none'}>
             <div className="flex items-center justify-between mb-2">
               <label className="text-sm font-medium text-zinc-300">Max concurrent analyses</label>
               <span className="text-sm font-mono text-brand-300">
@@ -201,6 +219,7 @@ export function IntegrationsSettings() {
               onChange={(e) =>
                 setDraft((d) => ({ ...(d ?? config!), max_concurrent_analysis: parseInt(e.target.value, 10) }))
               }
+              disabled={!(draft ?? config!).audio_analysis_enabled}
               className="w-full accent-brand-500"
             />
             <p className="mt-1.5 text-xs text-zinc-400">
