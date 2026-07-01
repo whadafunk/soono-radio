@@ -4,7 +4,7 @@ import { media } from '../db/schema.js';
 import { mediaPathForSha } from './ingest/paths.js';
 import { runFpcalc } from './ingest/fpcalc.js';
 import { getIntegrationsConfig } from './integrations/config.js';
-import { parseFilename, searchMusicBrainz, searchMusicBrainzByArtist, searchMusicBrainzFreeText, artistAppearsInFilename, titleMatchesPart, findExtraCoverArtist } from './musicbrainz.js';
+import { parseFilename, searchMusicBrainz, searchMusicBrainzByArtist, searchMusicBrainzFreeText, artistAppearsInFilename, titleMatchesPart, findExtraCoverArtist, confirmArtist } from './musicbrainz.js';
 
 const ACOUSTID_URL = 'https://api.acoustid.org/v2/lookup';
 
@@ -20,10 +20,14 @@ export interface AcoustIDCandidate {
   artist: string | null;
   album: string | null;
   year: number | null;
-  /** acoustid  — matched by fingerprint
-   *  musicbrainz — matched by text search
-   *  filename    — synthesised from filename when cover detected but not in MB */
-  source: 'acoustid' | 'musicbrainz' | 'filename';
+  /** acoustid         — matched by fingerprint
+   *  musicbrainz      — matched by text search
+   *  filename         — synthesised from filename when cover detected but not in MB;
+   *                      both title and artist are unverified guesses
+   *  artist-confirmed — artist independently verified as a real MusicBrainz artist by
+   *                      name (not tied to this specific recording); title is taken
+   *                      as-is from the other filename half, unverified */
+  source: 'acoustid' | 'musicbrainz' | 'filename' | 'artist-confirmed';
   /** True when the result came from the free-text MusicBrainz fallback rather
    *  than the structured artist+title query. Free-text results score on token
    *  overlap so they can produce plausible-looking but wrong matches (e.g.
@@ -33,6 +37,32 @@ export interface AcoustIDCandidate {
 
 function synthesisCandidate(title: string, artist: string): AcoustIDCandidate {
   return { acoustid: 'filename', score: 0, title, artist, album: null, year: null, source: 'filename' };
+}
+
+/**
+ * Last resort when a recording-level MusicBrainz search can't confirm a
+ * match: check each filename half against MusicBrainz's artist index
+ * directly. If exactly one half is a real, known artist, that's a reliable
+ * signal regardless of whether the specific title/recording could be found —
+ * use the confirmed (canonically-spelled) artist and take the other half as
+ * the title verbatim. Ambiguous (both or neither resolve) returns null so the
+ * caller can fall back to its existing guess-based logic.
+ */
+async function resolveArtistConfirmedCandidate(
+  partA: string,
+  partB: string,
+): Promise<AcoustIDCandidate | null> {
+  const confirmedA = await confirmArtist(partA);
+  await new Promise((r) => setTimeout(r, 1100)); // respect MusicBrainz 1 req/sec limit
+  const confirmedB = await confirmArtist(partB);
+
+  if (confirmedA && !confirmedB) {
+    return { acoustid: 'filename', score: 0, title: partB, artist: confirmedA, album: null, year: null, source: 'artist-confirmed' };
+  }
+  if (confirmedB && !confirmedA) {
+    return { acoustid: 'filename', score: 0, title: partA, artist: confirmedB, album: null, year: null, source: 'artist-confirmed' };
+  }
+  return null;
 }
 
 export async function identifyMedia(id: number): Promise<AcoustIDCandidate[]> {
@@ -148,8 +178,22 @@ export async function identifyMedia(id: number): Promise<AcoustIDCandidate[]> {
         await new Promise((r) => setTimeout(r, 1100));
         const coverResults = await searchMusicBrainz(artistSide, titleSide, { freeTextFallback: false });
         if (coverResults.length > 0) return coverResults;
+
+        // `top` is an unrelated recording (that's why we're in this branch at
+        // all) — its title offered no reliable signal for artistSide/titleSide.
+        // Check the filename halves against MusicBrainz's artist index directly
+        // rather than trusting that guess.
+        await new Promise((r) => setTimeout(r, 1100));
+        const confirmed = await resolveArtistConfirmedCandidate(parsed.partA, parsed.partB);
+        if (confirmed) return [confirmed];
+
         return [synthesisCandidate(titleSide, artistSide)];
       }
+
+      // No MusicBrainz match at all for either ordering — before giving up,
+      // check whether either filename half is independently a confirmed artist.
+      const confirmed = await resolveArtistConfirmedCandidate(parsed.partA, parsed.partB);
+      if (confirmed) return [confirmed];
 
       return [];
     }
@@ -176,6 +220,10 @@ export function isAutoApply(
   if (candidates.length === 0) return false;
   const top = candidates[0];
   if (top.source === 'filename') return false; // synthesised from filename, always needs human review
+  // Artist independently confirmed against MusicBrainz's artist index — title is
+  // taken as-is from the filename (may include "(Live)", a year, etc. verbatim),
+  // but the artist/title split itself is verified rather than guessed.
+  if (top.source === 'artist-confirmed') return true;
   if (top.source === 'musicbrainz') {
     // Free-text results are unreliable for auto-apply — token overlap can match
     // completely wrong songs (e.g. "You Can't Rock me" for "Kid Rock - Until You Can't").

@@ -1,8 +1,12 @@
 import type { AcoustIDCandidate } from './acoustid.js';
 
 const MB_URL = 'https://musicbrainz.org/ws/2/recording';
+const MB_ARTIST_URL = 'https://musicbrainz.org/ws/2/artist';
 // MusicBrainz requires a descriptive User-Agent.
 const USER_AGENT = 'RadioSonara/1.0 (radio-automation-server)';
+// Minimum artist-search score (0-100) to treat a filename fragment as a
+// confirmed, real artist name rather than a coincidental text match.
+const ARTIST_CONFIRM_MIN_SCORE = 90;
 
 export interface FilenameParseResult {
   partA: string;
@@ -181,10 +185,43 @@ async function fetchMBResults(query: string, freeText = false): Promise<AcoustID
 }
 
 /**
+ * Check whether a filename fragment is a real, known MusicBrainz artist —
+ * independent of any specific recording/title match. Used as a last resort
+ * when a recording-level search can't confirm a match: knowing which half of
+ * a filename is definitely the artist lets the other half be used as the
+ * title as-is, without guessing the split from an unrelated top search hit
+ * (that guess is what previously produced swapped title/artist results).
+ *
+ * Returns the canonical MusicBrainz artist name (correct spelling/casing) on
+ * a confident match, or null.
+ */
+export async function confirmArtist(name: string): Promise<string | null> {
+  const clean = name.replace(/"/g, '').trim();
+  if (!clean) return null;
+
+  const qs = new URLSearchParams({ query: `artist:"${clean}"`, fmt: 'json', limit: '1' });
+  const res = await fetch(`${MB_ARTIST_URL}?${qs}`, { headers: { 'User-Agent': USER_AGENT } });
+  if (!res.ok) throw new Error(`MusicBrainz artist search error: ${res.status} ${res.statusText}`);
+
+  const data = (await res.json()) as { artists?: { name: string; score?: number }[] };
+  const top = data.artists?.[0];
+  if (!top || (top.score ?? 0) < ARTIST_CONFIRM_MIN_SCORE) return null;
+  return top.name;
+}
+
+/**
  * Search MusicBrainz when the cover artist is known but we don't know which
  * filename part is the song title. Tries every title candidate in a single
  * OR query — no free-text fallback (avoids returning the original artist's
  * recording instead of the cover).
+ *
+ * The artist field is an exact quoted phrase (that name should be reliable),
+ * but the recording field is deliberately NOT phrase-quoted: MusicBrainz's
+ * Lucene backend treats a quoted phrase as an exact token sequence, so a
+ * single extra/missing word in the title (e.g. a filename saying "Breaking
+ * off the Rules" when MusicBrainz has "Breaking the Rules") causes a total
+ * miss rather than a lower-scored match. Un-quoting keeps the artist match
+ * strict while tolerating minor title wording differences.
  */
 export async function searchMusicBrainzByArtist(
   artist: string,
@@ -197,8 +234,8 @@ export async function searchMusicBrainzByArtist(
   for (const title of titles) {
     const t = cleanTitleForSearch(title.replace(/"/g, ''));
     if (!t) continue;
-    clauses.push(`(recording:"${t}" AND artist:"${a}")`);
-    if (pA !== a) clauses.push(`(recording:"${t}" AND artist:"${pA}")`);
+    clauses.push(`(recording:(${t}) AND artist:"${a}")`);
+    if (pA !== a) clauses.push(`(recording:(${t}) AND artist:"${pA}")`);
   }
   if (clauses.length === 0) return [];
 
@@ -233,12 +270,15 @@ export async function searchMusicBrainz(
   const pB = primaryName(b);
 
   // Build a single OR query covering both orderings and primary-artist variants.
+  // Artist stays an exact quoted phrase; recording is deliberately unquoted so a
+  // minor title wording difference doesn't cause a total miss — see
+  // searchMusicBrainzByArtist's comment above for why.
   const clauses: string[] = [
-    `(recording:"${b}" AND artist:"${a}")`,
-    `(recording:"${a}" AND artist:"${b}")`,
+    `(recording:(${b}) AND artist:"${a}")`,
+    `(recording:(${a}) AND artist:"${b}")`,
   ];
-  if (pA !== a) clauses.push(`(recording:"${b}" AND artist:"${pA}")`);
-  if (pB !== b) clauses.push(`(recording:"${a}" AND artist:"${pB}")`);
+  if (pA !== a) clauses.push(`(recording:(${b}) AND artist:"${pA}")`);
+  if (pB !== b) clauses.push(`(recording:(${a}) AND artist:"${pB}")`);
 
   let candidates = await fetchMBResults(clauses.join(' OR '));
 

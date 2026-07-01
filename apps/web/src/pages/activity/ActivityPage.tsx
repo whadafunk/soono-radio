@@ -61,6 +61,7 @@ function TypeIcon({ type }: { type: BackgroundJob['type'] }) {
 function SourceBadge({ source }: { source: StoredCandidate['source'] }) {
   if (source === 'acoustid') return <span className="text-[10px] bg-brand-900/40 border border-brand-700 text-brand-300 px-1.5 py-0.5 rounded">AcoustID</span>;
   if (source === 'musicbrainz') return <span className="text-[10px] bg-purple-900/40 border border-purple-700 text-purple-300 px-1.5 py-0.5 rounded">MusicBrainz</span>;
+  if (source === 'artist-confirmed') return <span className="text-[10px] bg-emerald-900/40 border border-emerald-700 text-emerald-300 px-1.5 py-0.5 rounded">Artist confirmed</span>;
   return <span className="text-[10px] bg-zinc-800 border border-zinc-700 text-zinc-400 px-1.5 py-0.5 rounded">Filename</span>;
 }
 

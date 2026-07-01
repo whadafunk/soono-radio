@@ -11,7 +11,7 @@ export const StoredCandidateSchema = z.object({
   artist: z.string().nullable(),
   album: z.string().nullable(),
   year: z.number().nullable(),
-  source: z.enum(['acoustid', 'musicbrainz', 'filename']),
+  source: z.enum(['acoustid', 'musicbrainz', 'filename', 'artist-confirmed']),
   fromFreeText: z.boolean().optional(),
 });
 export type StoredCandidate = z.infer<typeof StoredCandidateSchema>;

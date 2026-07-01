@@ -1753,7 +1753,8 @@ function AcoustIDPickerModal({
   const top5 = candidates.slice(0, 5);
   const top = top5[0];
   const isRecommended = (c: AcoustIDCandidate, idx: number) =>
-    idx === 0 && c.source !== 'filename' && !c.fromFreeText && c.score >= 0.8;
+    idx === 0 &&
+    (c.source === 'artist-confirmed' || (c.source !== 'filename' && !c.fromFreeText && c.score >= 0.8));
 
   return (
     <div className="absolute inset-0 z-10 flex items-center justify-center bg-black/60 p-6" onClick={onClose}>
@@ -1769,15 +1770,19 @@ function AcoustIDPickerModal({
               <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
                 top.source === 'filename'
                   ? 'bg-zinc-700/60 text-zinc-300 border border-zinc-600/60'
-                  : top.source === 'musicbrainz'
-                    ? 'bg-amber-900/40 text-amber-300 border border-amber-800/60'
-                    : 'bg-brand-900/40 text-brand-300 border border-brand-800/60'
+                  : top.source === 'artist-confirmed'
+                    ? 'bg-emerald-900/40 text-emerald-300 border border-emerald-800/60'
+                    : top.source === 'musicbrainz'
+                      ? 'bg-amber-900/40 text-amber-300 border border-amber-800/60'
+                      : 'bg-brand-900/40 text-brand-300 border border-brand-800/60'
               }`}>
                 {top.source === 'filename'
                   ? 'Cover — from filename'
-                  : top.source === 'musicbrainz'
-                    ? 'Filename search'
-                    : 'Fingerprint'}
+                  : top.source === 'artist-confirmed'
+                    ? 'Artist confirmed'
+                    : top.source === 'musicbrainz'
+                      ? 'Filename search'
+                      : 'Fingerprint'}
               </span>
             )}
           </div>
@@ -1816,6 +1821,11 @@ function AcoustIDPickerModal({
                       Cover not found in MusicBrainz — extracted from filename
                     </p>
                   )}
+                  {c.source === 'artist-confirmed' && (
+                    <p className="text-[10px] text-zinc-400 mt-0.5">
+                      Artist verified on MusicBrainz — title taken as-is from filename
+                    </p>
+                  )}
                   {c.fromFreeText && (
                     <p className="text-[10px] text-amber-500 mt-0.5 flex items-center gap-1">
                       <AlertTriangle className="w-3 h-3" />
@@ -1825,9 +1835,9 @@ function AcoustIDPickerModal({
                 </div>
                 <div className="flex-shrink-0 flex flex-col items-end gap-1 pt-0.5">
                   <span className={`text-xs font-mono ${isRecommended(c, i) ? 'text-brand-300' : 'text-zinc-300'}`}>
-                    {c.source === 'filename' ? '—' : `${Math.round(c.score * 100)}%`}
+                    {c.source === 'filename' || c.source === 'artist-confirmed' ? '—' : `${Math.round(c.score * 100)}%`}
                   </span>
-                  {c.source !== 'filename' && (
+                  {c.source !== 'filename' && c.source !== 'artist-confirmed' && (
                     <div className="w-16 h-1.5 bg-zinc-700 rounded-full overflow-hidden">
                       <div
                         className={`h-full rounded-full transition-colors ${

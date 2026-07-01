@@ -568,7 +568,7 @@ export interface AcoustIDCandidate {
   artist: string | null;
   album: string | null;
   year: number | null;
-  source: 'acoustid' | 'musicbrainz' | 'filename';
+  source: 'acoustid' | 'musicbrainz' | 'filename' | 'artist-confirmed';
   fromFreeText?: boolean;
 }
 
