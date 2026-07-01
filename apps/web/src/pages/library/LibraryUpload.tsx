@@ -143,6 +143,9 @@ export function LibraryUpload() {
     if (!finished) return;
     const allFailed = batch.every((j) => j.status === 'failed');
     setIngestTab(allFailed ? 'failed' : 'completed');
+    // Everything tracked has resolved — clear so the next batch starts its own
+    // scope instead of carrying these (now-irrelevant) ids forward forever.
+    setBatchJobIds(new Set());
   }, [jobs, batchJobIds]);
 
   const startUpload = useCallback(async (files: File[], category: MediaCategory) => {
@@ -184,8 +187,9 @@ export function LibraryUpload() {
         }),
       );
 
-      // Replace (not append) batch tracker so the progress bar shows only this batch.
-      setBatchJobIds(new Set(result.jobs.map((j: { job_id: string }) => j.job_id)));
+      // Merge into the batch tracker (not replace) so the progress bar and
+      // auto-tab-switch still account for a batch that was already in flight.
+      setBatchJobIds((prev) => new Set([...prev, ...result.jobs.map((j: { job_id: string }) => j.job_id)]));
     } catch (err) {
       setActive((prev) =>
         prev.map((u) => {

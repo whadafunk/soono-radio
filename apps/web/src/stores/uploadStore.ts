@@ -14,7 +14,7 @@ interface UploadStore {
   active: ActiveUpload[];
   batchJobIds: Set<string>;
   setActive: (updater: ActiveUpload[] | ((prev: ActiveUpload[]) => ActiveUpload[])) => void;
-  setBatchJobIds: (ids: Set<string>) => void;
+  setBatchJobIds: (updater: Set<string> | ((prev: Set<string>) => Set<string>)) => void;
 }
 
 // Lives outside any page component so in-flight/queued uploads (and the
@@ -29,5 +29,8 @@ export const useUploadStore = create<UploadStore>((set) => ({
     set((state) => ({
       active: typeof updater === 'function' ? updater(state.active) : updater,
     })),
-  setBatchJobIds: (ids) => set({ batchJobIds: ids }),
+  setBatchJobIds: (updater) =>
+    set((state) => ({
+      batchJobIds: typeof updater === 'function' ? updater(state.batchJobIds) : updater,
+    })),
 }));
