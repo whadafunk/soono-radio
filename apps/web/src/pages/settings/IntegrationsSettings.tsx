@@ -176,6 +176,40 @@ export function IntegrationsSettings() {
           </div>
         </div>
 
+        {/* Audio analysis */}
+        <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
+          <div>
+            <h2 className="text-base font-semibold text-white">Audio Analysis</h2>
+            <p className="text-sm text-zinc-400 mt-1">
+              BPM/key/mood analysis runs automatically for imported music tracks.
+            </p>
+          </div>
+
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <label className="text-sm font-medium text-zinc-300">Max concurrent analyses</label>
+              <span className="text-sm font-mono text-brand-300">
+                {(draft ?? config!).max_concurrent_analysis}
+              </span>
+            </div>
+            <input
+              type="range"
+              min={1}
+              max={8}
+              step={1}
+              value={(draft ?? config!).max_concurrent_analysis}
+              onChange={(e) =>
+                setDraft((d) => ({ ...(d ?? config!), max_concurrent_analysis: parseInt(e.target.value, 10) }))
+              }
+              className="w-full accent-brand-500"
+            />
+            <p className="mt-1.5 text-xs text-zinc-400">
+              How many tracks can be analysed at once during a batch import. Each analysis can use several
+              hundred MB of RAM — raise this only if the host has memory to spare. Default of 1 is safest.
+            </p>
+          </div>
+        </div>
+
         <div className="flex gap-3">
           <button
             type="submit"

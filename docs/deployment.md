@@ -11,6 +11,8 @@ The application has two runtime dependency stacks that must both be present:
 
 The Python stack is the harder one to provision — it requires a specific Python version, packages from a non-PyPI index, and ~200MB of downloaded model files.
 
+**RAM:** mood analysis loads TensorFlow plus the MusiCNN embedding model and 7 per-mood classifier models per track. On hosts with under ~2GB free RAM, this can get OOM-killed by the kernel mid-analysis — the API reports this as `analyse.py was killed by signal SIGKILL`. If you see that error, either free up RAM on the host or skip mood analysis (delete/rename `apps/api/analysis/models/msd-musicnn-1.pb` — the script skips mood analysis and returns a warning instead of loading the embedding model).
+
 ---
 
 ## Recommended: Docker Compose

@@ -1,6 +1,7 @@
 import { spawn } from 'child_process';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
+import { getIntegrationsConfig } from '../integrations/config.js';
 
 export interface AudioAnalysisResult {
   bpm: number | null;
@@ -21,24 +22,62 @@ const MODELS_DIR = join(ANALYSIS_DIR, 'models');
 const VENV_PYTHON = join(ANALYSIS_DIR, 'venv', 'bin', 'python3');
 
 export async function runAudioAnalysis(filePath: string): Promise<AudioAnalysisResult> {
-  const raw = await run([VENV_PYTHON, SCRIPT_PATH, filePath, MODELS_DIR]);
-  const parsed = JSON.parse(raw) as AudioAnalysisResult & { error?: string };
-  if (parsed.error) throw new Error(parsed.error);
-  return {
-    bpm: parsed.bpm ?? null,
-    musical_key: parsed.musical_key ?? null,
-    key_scale: parsed.key_scale ?? null,
-    mood_tags: parsed.mood_tags ?? [],
-    energy: parsed.energy ?? null,
-    danceability: parsed.danceability ?? null,
-    warnings: parsed.warnings,
-  };
+  const releaseSlot = await acquireAnalysisSlot();
+  try {
+    const raw = await run([VENV_PYTHON, SCRIPT_PATH, filePath, MODELS_DIR]);
+    const parsed = JSON.parse(raw) as AudioAnalysisResult & { error?: string };
+    if (parsed.error) throw new Error(parsed.error);
+    return {
+      bpm: parsed.bpm ?? null,
+      musical_key: parsed.musical_key ?? null,
+      key_scale: parsed.key_scale ?? null,
+      mood_tags: parsed.mood_tags ?? [],
+      energy: parsed.energy ?? null,
+      danceability: parsed.danceability ?? null,
+      warnings: parsed.warnings,
+    };
+  } finally {
+    releaseSlot();
+  }
+}
+
+// Caps concurrent analyse.py subprocesses (each can pull several hundred MB
+// for TensorFlow/Essentia) so a batch import doesn't fire off N of them at
+// once — see docs/deployment.md for why that risks an OOM kill. Re-reads the
+// configured max on every acquire so a settings change takes effect for new
+// analyses without a restart.
+let activeAnalyses = 0;
+const analysisWaiters: Array<() => void> = [];
+
+function acquireAnalysisSlot(): Promise<() => void> {
+  const max = Math.max(1, getIntegrationsConfig().max_concurrent_analysis);
+  if (activeAnalyses < max) {
+    activeAnalyses++;
+    return Promise.resolve(releaseAnalysisSlot);
+  }
+  return new Promise((resolve) => {
+    analysisWaiters.push(() => {
+      activeAnalyses++;
+      resolve(releaseAnalysisSlot);
+    });
+  });
+}
+
+function releaseAnalysisSlot(): void {
+  activeAnalyses--;
+  const next = analysisWaiters.shift();
+  if (next) next();
 }
 
 function run(args: string[]): Promise<string> {
   return new Promise((resolve, reject) => {
     const [cmd, ...rest] = args;
-    const proc = spawn(cmd, rest, { stdio: ['ignore', 'pipe', 'pipe'] });
+    const proc = spawn(cmd, rest, {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      // Suppress TensorFlow's benign INFO/WARNING noise (missing-GPU dlerrors,
+      // allocator-size notices) so stderr only carries genuine failures.
+      env: { ...process.env, TF_CPP_MIN_LOG_LEVEL: '2' },
+    });
     let stdout = '';
     let stderr = '';
     proc.stdout.on('data', (chunk: Buffer) => (stdout += chunk));
@@ -52,9 +91,18 @@ function run(args: string[]): Promise<string> {
         reject(err);
       }
     });
-    proc.on('close', (code: number | null) => {
-      if (code === 0) resolve(stdout);
-      else reject(new Error(`analyse.py exited ${code ?? '?'}: ${stderr.trim()}`));
+    proc.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      if (code === 0) {
+        resolve(stdout);
+      } else if (signal) {
+        const hint =
+          signal === 'SIGKILL'
+            ? ' — likely killed by the OS for using too much memory (out-of-memory); see docs/deployment.md for RAM requirements'
+            : '';
+        reject(new Error(`analyse.py was killed by signal ${signal}${hint}: ${stderr.trim()}`));
+      } else {
+        reject(new Error(`analyse.py exited ${code}: ${stderr.trim()}`));
+      }
     });
   });
 }
