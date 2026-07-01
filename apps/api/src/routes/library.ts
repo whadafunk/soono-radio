@@ -648,11 +648,9 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     const rows = await db
       .select()
       .from(ingestJobs)
-      .orderBy(ingestJobs.created_at)
+      .orderBy(desc(ingestJobs.created_at))
       .limit(200);
-    // Reverse so newest comes first without a separate desc() in case
-    // we want to keep this query simple.
-    return reply.send({ jobs: rows.reverse() });
+    return reply.send({ jobs: rows });
   });
 
   fastify.delete<{ Querystring: { status: string } }>('/library/ingest', async (request, reply) => {
