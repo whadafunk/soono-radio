@@ -85,6 +85,8 @@ services:
       start_period: 30s
     networks:
       - soono-net
+      - egress   # AcoustID/MusicBrainz lookups need outbound internet; other soono-net
+                 # peers (icecast, web, liquidsoap) stay internal-only.
 
   # ── Web (React SPA served by nginx) ─────────────────────────────────────────
   web:
@@ -130,6 +132,13 @@ networks:
   soono-net:
     driver: bridge
     internal: true   # containers cannot initiate outbound internet connections
+  egress:
+    name: soono-egress   # outbound-only internet access for soono-api (AcoustID/MusicBrainz
+                          # lookups); not internal, but also not shared with other services or
+                          # projects like macnet-40 is — soono-api is the only thing on it.
+    driver: bridge
+    driver_opts:
+      com.docker.network.bridge.name: soono-egress
   dmz:
     external: true   # pre-created macvlan network; customize IPs above per deployment
     name: macnet-40
