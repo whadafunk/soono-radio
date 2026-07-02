@@ -454,7 +454,11 @@ export function SchedulePage() {
                 if (boundary <= slotStart) continue;
                 if (boundary > 24 * 60) break;
                 const dist = Math.abs(raw - boundary);
-                if (dist < bestDist) { bestDist = dist; best = boundary; }
+                // <= (not <): on an exact tie, prefer the later boundary — when
+                // dragging toward end of day, "include the last segment" should
+                // win over "stop one boundary short" rather than the earlier
+                // candidate winning just because it was found first.
+                if (dist <= bestDist) { bestDist = dist; best = boundary; }
               }
             }
             if (best !== null) return best;
@@ -478,7 +482,14 @@ export function SchedulePage() {
       } else if (current.op === 'resize-start') {
         startMin = Math.max(0, Math.min(current.endMin - 15, snapMin(clamped)));
       } else {
-        endMin = Math.max(current.startMin + 15, Math.min(24 * 60 - 1, snapMin(clamped)));
+        // Resize-end: let the snap search see all the way to true midnight
+        // (1440), not just 1439 — otherwise the last real boundary of the day
+        // (the end of the clock's final segment, at 1440) can never be closer
+        // to the cursor than the second-to-last boundary, and a short final
+        // segment becomes impossible to fully include. Only the STORED value
+        // clamps to 23:59, since "1440" has no valid same-day HH:MM string.
+        const rawForEnd = Math.max(0, Math.min(24 * 60, raw));
+        endMin = Math.max(current.startMin + 15, Math.min(24 * 60 - 1, snapMin(rawForEnd)));
       }
 
       // Cross-day: only for move op
