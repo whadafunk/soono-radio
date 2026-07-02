@@ -47,7 +47,7 @@
 //   D51 — Organic drift vs execution drift; boundary decision at activation
 
 import { randomUUID } from 'crypto';
-import { and, asc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -228,6 +228,17 @@ export class SupervisorProcess {
       const [row] = await this.db.select().from(supervisorStateTable).where(eq(supervisorStateTable.id, 1));
       if (!row) return;
       this.currentSegmentId = row.current_segment_id ?? null;
+      if (this.currentSegmentId != null) {
+        // Not persisted in supervisor_state — re-resolve so the first tick's
+        // boundary detection doesn't see a null-vs-real mismatch and treat an
+        // in-progress segment as having just started (spurious SEGMENT_START/
+        // SEGMENT_SUMMARY pair on every restart).
+        const resolved = await resolveCurrentSegment(Date.now(), this.db);
+        if (resolved && resolved.segment.id === this.currentSegmentId) {
+          this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
+          this.currentSegmentEndMs = resolved.segmentEndMs;
+        }
+      }
       this.activePlanId = row.active_plan_id ?? null;
       this.nextPlanId = row.next_plan_id ?? null;
       this.nextPlanDraftDriftSeconds = row.next_plan_draft_drift_seconds ?? 0;
@@ -363,6 +374,26 @@ export class SupervisorProcess {
     // ── T-30s finalization gate (D31) ──────────────────────────────────────
     this.tickOperation = 'finalization_check';
     await this.maybeRequestFinalization(nowMs);
+
+    // ── Orphaned-plan self-heal ─────────────────────────────────────────────
+    // A restart can leave activePlanId null while a plan for the CURRENT
+    // segment already reached 'finalized' status under a previous process
+    // instance (finalized but not yet activated when the process died).
+    // hydrateFromDb() only restores nextPlanId (the segment AFTER current),
+    // so that plan is otherwise invisible and the rest of the segment would
+    // play silently until the next segment's own finalization cycle happens
+    // to activate its plan instead.
+    this.tickOperation = 'orphan_recovery';
+    if (this.activePlanId == null) {
+      const orphaned = await this.findOrphanedFinalizedPlan(resolved.segment.id, resolved.clockInstanceStartedAt);
+      if (orphaned) {
+        this.logger?.warn({
+          process: 'supervisor', event: 'ORPHANED_PLAN_RECOVERED',
+          plan_id: orphaned.id, segment_id: resolved.segment.id,
+        }, 'supervisor: activating orphaned finalized plan for current segment');
+        await this.activatePlanById(orphaned.id, nowMs, { clearNextPlan: false });
+      }
+    }
 
     if (this.activePlanId == null) return;
 
@@ -776,7 +807,39 @@ export class SupervisorProcess {
   private async activateNextPlan(nowMs: number): Promise<void> {
     if (this.nextPlanId == null) return;
     const planId = this.nextPlanId;
+    await this.activatePlanById(planId, nowMs, { clearNextPlan: true });
+  }
 
+  // Looks up a plan that already reached 'finalized' status for the given
+  // segment/clock-instance but was never activated — see ORPHANED_PLAN_RECOVERED
+  // above for how this can happen.
+  private async findOrphanedFinalizedPlan(
+    segmentId: number,
+    clockInstanceStartedAt: number,
+  ): Promise<{ id: number } | null> {
+    const [plan] = await this.db
+      .select({ id: plansTable.id })
+      .from(plansTable)
+      .where(and(
+        eq(plansTable.segment_id, segmentId),
+        eq(plansTable.clock_instance_started_at, clockInstanceStartedAt),
+        eq(plansTable.status, 'finalized'),
+      ))
+      .orderBy(desc(plansTable.id))
+      .limit(1);
+    return plan ?? null;
+  }
+
+  // Shared activation core used both for the normal next-plan transition
+  // (D44) and for the orphaned-plan self-heal above. `clearNextPlan` must be
+  // false for the self-heal case: the orphaned plan belongs to the CURRENT
+  // segment, so the legitimately-tracked nextPlanId (the segment AFTER
+  // current) must be left alone.
+  private async activatePlanById(
+    planId: number,
+    nowMs: number,
+    opts: { clearNextPlan: boolean },
+  ): Promise<void> {
     const [plan] = await this.db
       .select({ segment_id: plansTable.segment_id })
       .from(plansTable)
@@ -817,9 +880,11 @@ export class SupervisorProcess {
 
     // Update in-memory state.
     this.activePlanId = planId;
-    this.nextPlanId = null;
-    this.nextPlanSegmentId = null;
-    this.nextPlanScheduledEndMs = null;
+    if (opts.clearNextPlan) {
+      this.nextPlanId = null;
+      this.nextPlanSegmentId = null;
+      this.nextPlanScheduledEndMs = null;
+    }
     this.planActivatedAtMs = nowMs;
     this.finalizationRequestedForPlanId = null;
     this.draftedForNextSegment = null;
@@ -831,13 +896,13 @@ export class SupervisorProcess {
     await this.db.update(supervisorStateTable)
       .set({
         active_plan_id: planId,
-        next_plan_id: null,
+        ...(opts.clearNextPlan
+          ? { next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null }
+          : {}),
         current_drift_seconds: this.boundaryDriftSeconds,
         boundary_drift_seconds: this.boundaryDriftSeconds,
         planned_overshoot_seconds: this.plannedOvershootSeconds,
         intentional_offset_seconds: this.intentionalOffsetSeconds,
-        next_plan_draft_drift_seconds: null,
-        next_plan_drift_delta_seconds: null,
       })
       .where(eq(supervisorStateTable.id, 1));
 

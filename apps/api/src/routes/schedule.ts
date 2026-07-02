@@ -102,6 +102,18 @@ function materializeTemplateEntry(
     : [{ time_start: te.time_start, time_end: te.time_end, show_id: te.show_id, clock_id: te.clock_id }];
 }
 
+// HH:MM strings compare correctly with plain string ordering as long as both
+// are zero-padded 2-digit — true everywhere in this codebase (clockResolver.ts
+// relies on the same assumption). Overnight wraparound (e.g. 22:00 → 02:00) is
+// not supported: every day gets its own row spanning ~00:00-23:59, so
+// time_end < time_start is always a data-entry mistake, not an intentional
+// wraparound. Uncaught, it makes the window unmatchable by the Supervisor's
+// clock resolver (plain string comparison, no wraparound handling) for the
+// entire day — has caused two silent dead-air incidents.
+function isValidTimeWindow(start: string, end: string): boolean {
+  return end >= start;
+}
+
 function applyHasOverlap(
   startStr: string,
   endStr: string,
@@ -123,6 +135,9 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/template-entries', async (request, reply) => {
     const parsed = TemplateEntryCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (!isValidTimeWindow(parsed.data.time_start, parsed.data.time_end)) {
+      return reply.status(400).send({ error: `time_end (${parsed.data.time_end}) must not be before time_start (${parsed.data.time_start}) — overnight wraparound isn't supported` });
+    }
     if (parsed.data.clock_id != null) {
       const err = await validateClockForScheduling(parsed.data.clock_id);
       if (err) return reply.status(409).send({ error: err });
@@ -152,6 +167,15 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     if (parsed.data.show_id != null) {
       const err = await validateShowForScheduling(parsed.data.show_id);
       if (err) return reply.status(409).send({ error: err });
+    }
+    if (parsed.data.time_start != null || parsed.data.time_end != null) {
+      const [current] = await db.select().from(templateEntries).where(eq(templateEntries.id, id));
+      if (!current) return reply.status(404).send({ error: 'Template entry not found' });
+      const newStart = parsed.data.time_start ?? current.time_start;
+      const newEnd = parsed.data.time_end ?? current.time_end;
+      if (!isValidTimeWindow(newStart, newEnd)) {
+        return reply.status(400).send({ error: `time_end (${newEnd}) must not be before time_start (${newStart}) — overnight wraparound isn't supported` });
+      }
     }
     const [updated] = await db.update(templateEntries)
       .set(parsed.data)
@@ -188,6 +212,9 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
   fastify.post<{ Body: unknown }>('/calendar-entries', async (request, reply) => {
     const parsed = CalendarEntryCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    if (!isValidTimeWindow(parsed.data.time_start, parsed.data.time_end)) {
+      return reply.status(400).send({ error: `time_end (${parsed.data.time_end}) must not be before time_start (${parsed.data.time_start}) — overnight wraparound isn't supported` });
+    }
     if (parsed.data.clock_id != null) {
       const err = await validateClockForScheduling(parsed.data.clock_id);
       if (err) return reply.status(409).send({ error: err });
@@ -226,6 +253,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
 
     const newDate      = parsed.data.date       ?? current.date;
     const newTimeStart = parsed.data.time_start  ?? current.time_start;
+    const newTimeEnd   = parsed.data.time_end    ?? current.time_end;
+    if (!isValidTimeWindow(newTimeStart, newTimeEnd)) {
+      return reply.status(400).send({ error: `time_end (${newTimeEnd}) must not be before time_start (${newTimeStart}) — overnight wraparound isn't supported` });
+    }
     const positionChanged = newDate !== current.date || newTimeStart !== current.time_start;
 
     // Resolve effective clock_id for rundown migration: prefer the entry's own
@@ -452,6 +483,12 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       const existing      = applyMode === 'fill' ? (existingByDate.get(dateStr) ?? []) : [];
 
       for (const te of dayEntries) {
+        if (!isValidTimeWindow(te.time_start, te.time_end)) {
+          // Defense in depth: the write endpoints reject this shape, but
+          // don't propagate a legacy bad row into the calendar if one exists.
+          skipped++;
+          continue;
+        }
         for (const slot of materializeTemplateEntry(te, hourOverrides)) {
           if (applyMode === 'fill' && applyHasOverlap(slot.time_start, slot.time_end, existing)) {
             skipped++;

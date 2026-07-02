@@ -346,6 +346,7 @@ export function SchedulePage() {
     mutationFn: ({ id, patch }: { id: number; patch: Parameters<typeof updateTemplateEntry>[1] }) =>
       updateTemplateEntry(id, patch),
     onSuccess: invalidateTemplate,
+    onError: (err) => setScheduleError(extractApiError(err)),
   });
   const deleteMutation = useMutation({ mutationFn: deleteTemplateEntry, onSuccess: invalidateTemplate });
 
@@ -360,6 +361,7 @@ export function SchedulePage() {
     mutationFn: ({ id, patch }: { id: number; patch: Parameters<typeof updateCalendarEntry>[1] }) =>
       updateCalendarEntry(id, patch),
     onSuccess: () => { invalidateCal(); invalidateContent(); },
+    onError: (err) => setScheduleError(extractApiError(err)),
   });
   const calDeleteMutation = useMutation({ mutationFn: deleteCalendarEntry, onSuccess: invalidateCal });
 
