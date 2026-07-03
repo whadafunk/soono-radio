@@ -45,8 +45,9 @@ const API = '/api';
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${API}${path}`, init);
   if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`${init?.method ?? 'GET'} ${path} → ${res.status}: ${body}`);
+    const data = await res.json().catch(() => ({}));
+    const message = data?.error ?? data?.errors?.[0]?.message ?? `${init?.method ?? 'GET'} ${path} → ${res.status}`;
+    throw new Error(message);
   }
   if (res.status === 204) return undefined as T;
   return res.json();
