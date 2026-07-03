@@ -1023,7 +1023,7 @@ export class SupervisorProcess {
     opts: { allowActivate: boolean; targetDurationSeconds: number },
   ): Promise<void> {
     const identity = computeResolutionIdentity(resolved);
-    const [best] = await this.db
+    const candidates = await this.db
       .select({ id: plansTable.id, status: plansTable.status, resolution_identity: plansTable.resolution_identity })
       .from(plansTable)
       .where(and(
@@ -1031,12 +1031,22 @@ export class SupervisorProcess {
         eq(plansTable.clock_instance_started_at, resolved.clockInstanceStartedAt),
         inArray(plansTable.status, ['draft', 'finalized', 'active']),
       ))
-      .orderBy(desc(plansTable.id))
-      .limit(1);
+      .orderBy(desc(plansTable.id));
     // A badly-timed restart can leave two draft rows for the same occurrence
     // (a request in flight when the process died, then requested again on
     // reconcile). Deliberately not prevented — the most-recent-wins ordering
-    // above absorbs it; the older duplicate just sits unused.
+    // below absorbs it; the older duplicate just sits unused.
+    //
+    // But the plan we're already running for this occurrence must never be
+    // outranked by a newer duplicate just because it has a higher id — that
+    // would swap a live, already-playing plan out for a fresh, unplayed one
+    // for no reason. Confirmed live 2026-07-03: a redundant draft created by
+    // one reconcile() call got a higher id than the still-correct active
+    // plan, and would have been wrongly activated on the next call.
+    const activeHere = candidates.find((c) => c.id === this.activePlanId);
+    if (activeHere && activeHere.resolution_identity === identity) return;
+
+    const best = candidates[0] ?? null;
     const valid = best != null && best.resolution_identity === identity;
 
     if (valid && (best.status === 'finalized' || best.status === 'active')) {
