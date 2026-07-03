@@ -964,53 +964,114 @@ export class SupervisorProcess {
       segment_id: resolved.segment.id, clock_instance_started_at: resolved.clockInstanceStartedAt,
     }, 'reconcile: starting');
 
-    // Establish ground truth for the current segment. hydrateFromDb() only
-    // trusts persisted state (and gives up on a mismatch); this trusts a
-    // fresh resolve, which is the actual fix for restart-correctness.
-    this.currentSegmentId = resolved.segment.id;
-    this.currentSegmentEndMs = resolved.segmentEndMs;
-    this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
-
-    const currentTargetDuration = Math.max(0, Math.floor((resolved.segmentEndMs - nowMs) / 1000));
-    await this.reconcileOccurrence(resolved, nowMs, {
-      allowActivate: true,
-      targetDurationSeconds: currentTargetDuration,
-    });
-
-    // Runway model: decide whether the next segment is worth proactively
-    // planning-only, or worth cutting over to early (see
-    // supervisor-runway-threshold-proposal). Ensuring a draft/finalize exists
-    // for `next` happens regardless of runway — that's just the normal
-    // proactive-drafting cadence, which a restart can otherwise miss
-    // entirely (tick()'s isNewSegment won't re-fire for an already-current
-    // segment). Only early ACTIVATION is gated by runway.
-    const next = await resolveCurrentSegment(resolved.segmentEndMs + 1, this.db);
-    if (!next) {
-      this.logger?.info({
-        process: 'supervisor', event: 'RECONCILE_NO_NEXT_SEGMENT', trigger,
-        after_segment_id: resolved.segment.id,
-      }, 'reconcile: no segment follows current');
+    // The active plan may already legitimately be AHEAD of what wall-clock
+    // resolution alone says is current — organic early handoff within a
+    // clock instance is intentional (see handleExhaustedPlan: a short plan
+    // can hand off to the next segment's plan before the wall-clock
+    // boundary). Confirmed live 2026-07-03: reconcile() forced activation
+    // back to the wall-clock-resolved (but already-superseded) segment,
+    // undoing a correct organic advance — masked that time only because the
+    // very next thing it checked (the following segment) happened to be the
+    // plan that was actually right. Once something is truly active we let
+    // it ride rather than yanking it back (same philosophy as not
+    // interrupting in-progress content on a live schedule edit).
+    const trustedEndMs = await this.activePlanSegmentEndMs(resolved.clockInstanceStartedAt);
+    if (trustedEndMs != null) {
+      this.currentSegmentEndMs = trustedEndMs;
+      await this.reconcileNext(trustedEndMs, nowMs);
     } else {
-      const remainingSeconds = (resolved.segmentEndMs - nowMs) / 1000;
-      const nextIsHard = readStartPolicy(next.segment.start_policy).type === 'hard';
-      // Hard boundaries can't be pulled earlier — defer entirely to the
-      // existing fill/trim gate (maybeHandleHardStartGate), which already
-      // runs every tick. The <3s floor still applies regardless: at that
-      // point there's nothing meaningful left to distinguish "early" from
-      // "at," and it's well within the gate's own 30s tolerance.
-      const cutoverAllowed =
-        remainingSeconds < RUNWAY_FLOOR_S ||
-        (remainingSeconds < RUNWAY_WORTH_IT_THRESHOLD_S && !nextIsHard);
+      // No trustworthy active plan for this clock instance — establish
+      // ground truth from a fresh resolve. hydrateFromDb() only trusts
+      // persisted state (and gives up on a mismatch); this is the actual
+      // fix for restart-correctness.
+      this.currentSegmentId = resolved.segment.id;
+      this.currentSegmentEndMs = resolved.segmentEndMs;
+      this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
 
-      await this.reconcileOccurrence(next, nowMs, {
-        allowActivate: cutoverAllowed,
-        targetDurationSeconds: this.computeFirstPassTarget(next.segment.duration_seconds),
+      const currentTargetDuration = Math.max(0, Math.floor((resolved.segmentEndMs - nowMs) / 1000));
+      await this.reconcileOccurrence(resolved, nowMs, {
+        allowActivate: true,
+        targetDurationSeconds: currentTargetDuration,
       });
+      await this.reconcileNext(resolved.segmentEndMs, nowMs);
     }
 
     await this.db.update(supervisorStateTable)
       .set({ current_segment_id: this.currentSegmentId })
       .where(eq(supervisorStateTable.id, 1));
+  }
+
+  // Runway model: decide whether the segment after `afterMs` is worth
+  // proactively planning-only, or worth cutting over to early (see
+  // supervisor-runway-threshold-proposal). Ensuring a draft/finalize exists
+  // happens regardless of runway — that's just the normal proactive-
+  // drafting cadence, which a restart can otherwise miss entirely (tick()'s
+  // isNewSegment won't re-fire for an already-current segment). Only early
+  // ACTIVATION is gated by runway.
+  private async reconcileNext(afterMs: number, nowMs: number): Promise<void> {
+    const next = await resolveCurrentSegment(afterMs + 1, this.db);
+    if (!next) {
+      this.logger?.info({
+        process: 'supervisor', event: 'RECONCILE_NO_NEXT_SEGMENT',
+      }, 'reconcile: no segment follows current');
+      return;
+    }
+
+    const remainingSeconds = (afterMs - nowMs) / 1000;
+    const nextIsHard = readStartPolicy(next.segment.start_policy).type === 'hard';
+    // Hard boundaries can't be pulled earlier — defer entirely to the
+    // existing fill/trim gate (maybeHandleHardStartGate), which already
+    // runs every tick. The <3s floor still applies regardless: at that
+    // point there's nothing meaningful left to distinguish "early" from
+    // "at," and it's well within the gate's own 30s tolerance.
+    const cutoverAllowed =
+      remainingSeconds < RUNWAY_FLOOR_S ||
+      (remainingSeconds < RUNWAY_WORTH_IT_THRESHOLD_S && !nextIsHard);
+
+    await this.reconcileOccurrence(next, nowMs, {
+      allowActivate: cutoverAllowed,
+      targetDurationSeconds: this.computeFirstPassTarget(next.segment.duration_seconds),
+    });
+  }
+
+  // Returns the active plan's own segmentEndMs if it's a genuinely active
+  // plan belonging to the given clock instance — i.e. it's trustworthy on
+  // its own terms and doesn't need reconciling against wall-clock
+  // resolution. Returns null if there's no active plan, or it belongs to a
+  // different clock instance (stale from an earlier hour). Reconstructs the
+  // segment's end time from the clock's own segment list (same cursor walk
+  // resolveSegmentWithinClock uses) rather than re-running the full
+  // calendar/template resolution chain — we already know which clock
+  // instance and which structural segment.
+  private async activePlanSegmentEndMs(clockInstanceStartedAt: number): Promise<number | null> {
+    if (this.activePlanId == null) return null;
+    const [plan] = await this.db
+      .select({
+        status: plansTable.status,
+        clock_instance_started_at: plansTable.clock_instance_started_at,
+        segment_id: clockSegmentsTable.id,
+        clock_id: clockSegmentsTable.clock_id,
+      })
+      .from(plansTable)
+      .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
+      .where(eq(plansTable.id, this.activePlanId));
+    if (!plan || plan.status !== 'active' || plan.clock_instance_started_at !== clockInstanceStartedAt) {
+      return null;
+    }
+
+    const segments = await this.db
+      .select({ id: clockSegmentsTable.id, duration_seconds: clockSegmentsTable.duration_seconds })
+      .from(clockSegmentsTable)
+      .where(eq(clockSegmentsTable.clock_id, plan.clock_id))
+      .orderBy(clockSegmentsTable.sort_order);
+
+    let cursorMs = clockInstanceStartedAt;
+    for (const seg of segments) {
+      const segEndMs = cursorMs + seg.duration_seconds * 1000;
+      if (seg.id === plan.segment_id) return segEndMs;
+      cursorMs = segEndMs;
+    }
+    return null;
   }
 
   // Ensures a valid plan is active (or on its way to being active) for one
