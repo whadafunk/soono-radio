@@ -998,7 +998,11 @@ export class PlannerProcess {
 
     const items: PendingAssemblyItem[] = [];
     const placed: PendingAssemblyItem[] = [];
-    const usedCampaignIds = new Set<number>();
+    // Tracks which campaigns were placed at least once, for the unused_campaign_ids
+    // report only — NOT an eligibility filter. Per Decision 22, a campaign may
+    // appear more than once in a break; only adjacency (below) and
+    // advertiser_separation_spots constrain repeats.
+    const placedCampaignIds = new Set<number>();
     const usedPromoIds = new Set<number>();
     const excluded = new Set<number>();
     let remainingSeconds = targetDurationSeconds;
@@ -1021,7 +1025,7 @@ export class PlannerProcess {
           items.push(item);
           placed.push(item);
           remainingSeconds -= spot.duration_seconds;
-          usedCampaignIds.add(winner.id);
+          placedCampaignIds.add(winner.id);
           // (b) Apply exclusions after placing.
           for (const id of winner.competing_exclusions) excluded.add(id);
           // All other slot_1_required candidates drop out of the break.
@@ -1036,7 +1040,6 @@ export class PlannerProcess {
     while (remainingSeconds > MIN_VIABLE_SPOT_DURATION_SECONDS) {
       let eligible = pool.candidates.filter((c) => {
         if (excluded.has(c.id)) return false;
-        if (usedCampaignIds.has(c.id)) return false;
         return c.spot_pool.some((s) => s.duration_seconds <= remainingSeconds);
       });
 
@@ -1089,7 +1092,7 @@ export class PlannerProcess {
       items.push(item);
       placed.push(item);
       remainingSeconds -= spot.duration_seconds;
-      usedCampaignIds.add(chosen.id);
+      placedCampaignIds.add(chosen.id);
       for (const id of chosen.competing_exclusions) excluded.add(id);
     }
 
@@ -1112,7 +1115,7 @@ export class PlannerProcess {
       unused_music_ids: [],
       unused_branding_ids: [],
       unused_campaign_ids: pool.candidates
-        .filter((c) => !usedCampaignIds.has(c.id))
+        .filter((c) => !placedCampaignIds.has(c.id))
         .map((c) => c.id),
       unused_promo_ids: pool.promos
         .filter((p) => !usedPromoIds.has(p.id))
