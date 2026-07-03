@@ -146,7 +146,7 @@ export const PlaylistMediaAddSchema = z.object({
 export type PlaylistMediaAdd = z.infer<typeof PlaylistMediaAddSchema>;
 
 export const PlaylistMediaBulkAddSchema = z.object({
-  media_ids: z.array(z.number().int().positive()).min(1).max(200),
+  media_ids: z.array(z.number().int().positive()).min(1).max(500),
 });
 export type PlaylistMediaBulkAdd = z.infer<typeof PlaylistMediaBulkAddSchema>;
 

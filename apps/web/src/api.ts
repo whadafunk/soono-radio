@@ -636,7 +636,11 @@ export async function addTracksToPlaylist(playlistId: number, mediaIds: number[]
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ media_ids: mediaIds }),
   });
-  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const message = data?.error ?? data?.errors?.[0]?.message ?? `HTTP ${res.status}`;
+    throw new Error(message);
+  }
 }
 
 export async function bulkAnalyseAll(ids: number[]): Promise<{ job_id: string }> {
