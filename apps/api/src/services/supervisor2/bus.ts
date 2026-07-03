@@ -118,6 +118,13 @@ export type BusMessage =
       // to determine is_show_start / is_show_end via a calendar query.
       show_id: number | null;
       show_name: string | null;
+      // computeResolutionIdentity() of the ResolvedSegment behind this
+      // request — stamped onto the plans row so a later reconcile pass can
+      // detect a schedule change that resolves to the same clock/segment/
+      // hour but from a different calendar/template row. Null only for
+      // requests that don't come from a live resolution (none exist today,
+      // but kept optional for that eventuality).
+      resolution_identity: string | null;
     }
   | {
       // Planner → Supervisor + Queue Feeder: draft plan written to SQLite.
@@ -170,6 +177,16 @@ export type BusMessage =
       type: 'PLAN_REPLANNED';
       request_id: string;
       plan_id: number;
+    }
+  | {
+      // Route → Supervisor: run the heavier reconcile() pass immediately
+      // instead of waiting for the next start/restart. Today only emitted by
+      // the align-to-wall-clock control route (modeled on the existing
+      // PUSH_NEXT_REQUESTED pattern — resume() emits a bus nudge alongside
+      // its DB write; this is the same idea for a heavier operation).
+      type: 'RECONCILE_REQUESTED';
+      request_id: string;
+      now_ms: number;
     }
   // ─── Phase 4: Live takeover ─────────────────────────────────────────────────
   //

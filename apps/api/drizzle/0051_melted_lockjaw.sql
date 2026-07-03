@@ -1,0 +1,1 @@
+ALTER TABLE `plans` ADD `resolution_identity` text;

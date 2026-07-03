@@ -62,7 +62,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
-import { resolveCurrentSegment, type ResolvedSegment } from '../clockResolver.js';
+import { computeResolutionIdentity, resolveCurrentSegment, type ResolvedSegment } from '../clockResolver.js';
 import {
   closeMostRecentOpenRow,
   closeOpenRowsBefore,
@@ -73,6 +73,12 @@ import {
 const SECOND_PASS_LEAD_TIME_S = 30;           // T-30s finalization gate (D31)
 const HARD_START_TOLERANCE_S = 30;            // fill/trim tolerance for hard boundaries
 const SILENCE_ALERT_THRESHOLD_S = 30;         // seconds of no pushes before WARN
+// Runway model for reconcile() (validated against live data 2026-07-03: 369
+// music tracks average 254.8s, so 300s is ~one song plus headroom; measured
+// draft+finalize latency is 15-70ms, negligible, so there's no separate
+// build-time margin).
+const RUNWAY_WORTH_IT_THRESHOLD_S = 300;      // below this, not worth riding the current plan further
+const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offset dance entirely
 
 export class SupervisorProcess {
   private readonly unsubscribers: Array<() => void> = [];
@@ -197,8 +203,28 @@ export class SupervisorProcess {
         this.silenceAlertFired = false;
       }),
     );
+    // Operator-triggered reconcile (e.g. align-to-wall-clock). Routes can't
+    // hold a direct reference to this process (see supervisorControl.ts), so
+    // this is the only way in — same pattern as PUSH_NEXT_REQUESTED.
+    this.unsubscribers.push(
+      this._bus.on<BusMessage & { type: 'RECONCILE_REQUESTED' }>('RECONCILE_REQUESTED', (msg) => {
+        void this.reconcile(msg.now_ms, 'operator').catch((err) => {
+          this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'RECONCILE_REQUESTED' }, 'supervisor: RECONCILE_REQUESTED handler failed');
+        });
+      }),
+    );
 
-    void this.hydrateFromDb();
+    // Startup covers both cold boot and restart — hydration just finds
+    // different state either way. reconcile() runs right after to correct
+    // anything hydration got wrong (stale/orphaned plan pointers, etc.).
+    // Fire-and-forget, same as before: tick() already tolerates
+    // activePlanId being null for the brief window before this resolves.
+    void (async () => {
+      await this.hydrateFromDb();
+      await this.reconcile(Date.now(), 'startup');
+    })().catch((err) => {
+      this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'startup_reconcile' }, 'supervisor: startup reconcile failed');
+    });
 
     this.tickTimer = setInterval(() => {
       void this.tick().catch((err) => {
@@ -914,6 +940,168 @@ export class SupervisorProcess {
     }, 'supervisor: plan activated');
   }
 
+  // ─── Reconcile ──────────────────────────────────────────────────────────────
+  //
+  // Unlike tick(), which only reacts to bus events and assumes each one fires
+  // exactly once on the same process instance, reconcile() re-derives "what
+  // should be active right now" from scratch against a fresh resolve and the
+  // plans table. This is deliberately NOT run on every tick — only at process
+  // startup (covers cold boot and restart identically; hydrateFromDb() just
+  // finds different state either way) and on an explicit operator action
+  // (align-to-wall-clock). Ordinary segment-to-segment handoffs keep using
+  // the existing tick()/isNewSegment/D44 machinery untouched.
+  private async reconcile(nowMs: number, trigger: 'startup' | 'operator'): Promise<void> {
+    const resolved = await resolveCurrentSegment(nowMs, this.db);
+    if (!resolved) {
+      this.logger?.warn({
+        process: 'supervisor', event: 'RECONCILE_NO_SCHEDULE', trigger,
+      }, 'reconcile: no segment resolves for now');
+      return;
+    }
+
+    this.logger?.info({
+      process: 'supervisor', event: 'RECONCILE_START', trigger,
+      segment_id: resolved.segment.id, clock_instance_started_at: resolved.clockInstanceStartedAt,
+    }, 'reconcile: starting');
+
+    // Establish ground truth for the current segment. hydrateFromDb() only
+    // trusts persisted state (and gives up on a mismatch); this trusts a
+    // fresh resolve, which is the actual fix for restart-correctness.
+    this.currentSegmentId = resolved.segment.id;
+    this.currentSegmentEndMs = resolved.segmentEndMs;
+    this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
+
+    const currentTargetDuration = Math.max(0, Math.floor((resolved.segmentEndMs - nowMs) / 1000));
+    await this.reconcileOccurrence(resolved, nowMs, {
+      allowActivate: true,
+      targetDurationSeconds: currentTargetDuration,
+    });
+
+    // Runway model: decide whether the next segment is worth proactively
+    // planning-only, or worth cutting over to early (see
+    // supervisor-runway-threshold-proposal). Ensuring a draft/finalize exists
+    // for `next` happens regardless of runway — that's just the normal
+    // proactive-drafting cadence, which a restart can otherwise miss
+    // entirely (tick()'s isNewSegment won't re-fire for an already-current
+    // segment). Only early ACTIVATION is gated by runway.
+    const next = await resolveCurrentSegment(resolved.segmentEndMs + 1, this.db);
+    if (!next) {
+      this.logger?.info({
+        process: 'supervisor', event: 'RECONCILE_NO_NEXT_SEGMENT', trigger,
+        after_segment_id: resolved.segment.id,
+      }, 'reconcile: no segment follows current');
+    } else {
+      const remainingSeconds = (resolved.segmentEndMs - nowMs) / 1000;
+      const nextIsHard = readStartPolicy(next.segment.start_policy).type === 'hard';
+      // Hard boundaries can't be pulled earlier — defer entirely to the
+      // existing fill/trim gate (maybeHandleHardStartGate), which already
+      // runs every tick. The <3s floor still applies regardless: at that
+      // point there's nothing meaningful left to distinguish "early" from
+      // "at," and it's well within the gate's own 30s tolerance.
+      const cutoverAllowed =
+        remainingSeconds < RUNWAY_FLOOR_S ||
+        (remainingSeconds < RUNWAY_WORTH_IT_THRESHOLD_S && !nextIsHard);
+
+      await this.reconcileOccurrence(next, nowMs, {
+        allowActivate: cutoverAllowed,
+        targetDurationSeconds: this.computeFirstPassTarget(next.segment.duration_seconds),
+      });
+    }
+
+    await this.db.update(supervisorStateTable)
+      .set({ current_segment_id: this.currentSegmentId })
+      .where(eq(supervisorStateTable.id, 1));
+  }
+
+  // Ensures a valid plan is active (or on its way to being active) for one
+  // resolved occurrence. Shared shape for both the current segment (always
+  // allowed to activate/self-correct) and the next segment (activation
+  // gated by the runway model — see reconcile() above).
+  private async reconcileOccurrence(
+    resolved: ResolvedSegment,
+    nowMs: number,
+    opts: { allowActivate: boolean; targetDurationSeconds: number },
+  ): Promise<void> {
+    const identity = computeResolutionIdentity(resolved);
+    const [best] = await this.db
+      .select({ id: plansTable.id, status: plansTable.status, resolution_identity: plansTable.resolution_identity })
+      .from(plansTable)
+      .where(and(
+        eq(plansTable.segment_id, resolved.segment.id),
+        eq(plansTable.clock_instance_started_at, resolved.clockInstanceStartedAt),
+        inArray(plansTable.status, ['draft', 'finalized', 'active']),
+      ))
+      .orderBy(desc(plansTable.id))
+      .limit(1);
+    // A badly-timed restart can leave two draft rows for the same occurrence
+    // (a request in flight when the process died, then requested again on
+    // reconcile). Deliberately not prevented — the most-recent-wins ordering
+    // above absorbs it; the older duplicate just sits unused.
+    const valid = best != null && best.resolution_identity === identity;
+
+    if (valid && (best.status === 'finalized' || best.status === 'active')) {
+      if (opts.allowActivate) {
+        if (best.id !== this.activePlanId) {
+          this.logger?.info({
+            process: 'supervisor', event: 'RECONCILE_ACTIVATE',
+            plan_id: best.id, segment_id: resolved.segment.id,
+          }, 'reconcile: activating plan');
+          await this.activatePlanById(best.id, nowMs, { clearNextPlan: this.nextPlanId === best.id });
+        }
+      } else if (this.nextPlanId == null) {
+        // Not ready to cut over yet, but track it as next so the existing
+        // D44 trigger / handleExhaustedPlan can find it when the time comes.
+        this.nextPlanId = best.id;
+        this.nextPlanSegmentId = resolved.segment.id;
+        await this.db.update(supervisorStateTable)
+          .set({ next_plan_id: best.id })
+          .where(eq(supervisorStateTable.id, 1));
+      }
+      return;
+    }
+
+    if (valid && best.status === 'draft') {
+      if (this.finalizationRequestedForPlanId !== best.id) {
+        this.finalizationRequestedForPlanId = best.id;
+        const requestId = randomUUID();
+        this.logger?.info({
+          process: 'supervisor', event: 'PLAN_FINALIZE_REQUESTED',
+          plan_id: best.id, request_id: requestId, reconcile: true,
+        }, 'reconcile: finalizing existing draft');
+        this._bus.emit({
+          type: 'PLAN_FINALIZE_REQUESTED',
+          request_id: requestId,
+          plan_id: best.id,
+          now_ms: nowMs,
+          adjusted_target_seconds: 0,
+          drift_delta_seconds: 0,
+          current_drift_seconds: 0,
+        });
+      }
+      return;
+    }
+
+    // No valid plan for this occurrence — either none exists, or the one
+    // that does was drafted against a schedule that has since changed.
+    const requestId = randomUUID();
+    this.logger?.info({
+      process: 'supervisor', event: 'PLAN_DRAFT_REQUESTED',
+      segment_id: resolved.segment.id, target_duration_seconds: opts.targetDurationSeconds,
+      request_id: requestId, reconcile: true,
+    }, 'reconcile: requesting draft');
+    this._bus.emit({
+      type: 'PLAN_DRAFT_REQUESTED',
+      request_id: requestId,
+      segment_id: resolved.segment.id,
+      clock_instance_started_at: resolved.clockInstanceStartedAt,
+      target_duration_seconds: opts.targetDurationSeconds,
+      now_ms: nowMs,
+      show_id: resolved.show_id,
+      show_name: resolved.show_name,
+      resolution_identity: identity,
+    });
+  }
+
   // ─── Live takeover ──────────────────────────────────────────────────────────
 
   private async handleLiveStarted(msg: BusMessage & { type: 'LS_LIVE_STARTED' }): Promise<void> {
@@ -1027,6 +1215,26 @@ export class SupervisorProcess {
 
   // ─── Draft request helpers ───────────────────────────────────────────────────
 
+  // Both boundaryDrift and plannedOvershoot represent accumulated lateness at
+  // the upcoming segment boundary. Subtracting both from nominal pre-corrects
+  // the draft so boundary drift self-corrects in one plan cycle.
+  //
+  // Recovery cap: allow up to 1.5× nominal when the station is running early
+  // (negative boundary drift). Without this, the min(nominal, …) ceiling
+  // means negative drift can never self-correct — every plan targets exactly
+  // nominal and the early-running condition persists indefinitely. The 1.5×
+  // cap limits per-segment catch-up so the planner doesn't try to fill 5×
+  // nominal with branding when music pools are short.
+  private computeFirstPassTarget(nominal: number): number {
+    return Math.max(
+      30,
+      Math.min(
+        nominal * 1.5,
+        nominal - (this.boundaryDriftSeconds + this.plannedOvershootSeconds),
+      ),
+    );
+  }
+
   private async requestColdStartDraft(resolved: ResolvedSegment, nowMs: number): Promise<void> {
     const remainingMs = Math.max(0, resolved.segmentEndMs - nowMs);
     const targetDuration = Math.floor(remainingMs / 1000);
@@ -1045,6 +1253,7 @@ export class SupervisorProcess {
       now_ms: nowMs,
       show_id: resolved.show_id,
       show_name: resolved.show_name,
+      resolution_identity: computeResolutionIdentity(resolved),
     });
   }
 
@@ -1101,23 +1310,7 @@ export class SupervisorProcess {
     }
 
     const nominalNext = next.segment.duration_seconds;
-    // Both boundaryDrift and plannedOvershoot represent accumulated lateness at
-    // the upcoming segment boundary. Subtracting both from nominal pre-corrects
-    // the draft so boundary drift self-corrects in one plan cycle.
-    //
-    // Recovery cap: allow up to 1.5× nominal when the station is running early
-    // (negative boundary drift). Without this, the min(nominalNext, …) ceiling
-    // means negative drift can never self-correct — every plan targets exactly
-    // nominal and the early-running condition persists indefinitely. The 1.5×
-    // cap limits per-segment catch-up so the planner doesn't try to fill 5×
-    // nominal with branding when music pools are short.
-    const firstPassTarget = Math.max(
-      30,
-      Math.min(
-        nominalNext * 1.5,
-        nominalNext - (this.boundaryDriftSeconds + this.plannedOvershootSeconds),
-      ),
-    );
+    const firstPassTarget = this.computeFirstPassTarget(nominalNext);
 
     // Store segment end time so activateNextPlan can compute boundary drift.
     this.nextPlanScheduledEndMs = next.segmentEndMs;
@@ -1141,6 +1334,7 @@ export class SupervisorProcess {
       now_ms: nowMs,
       show_id: next.show_id,
       show_name: next.show_name,
+      resolution_identity: computeResolutionIdentity(next),
     });
   }
 

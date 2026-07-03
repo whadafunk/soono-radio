@@ -43,6 +43,20 @@ export interface ResolvedSegment {
   // Planner can request show-envelope candidates from the Branding process.
   show_id: number | null;
   show_name: string | null;
+  // Which row actually produced this resolution — lets a plan later detect
+  // that the schedule changed underneath it even when clock_id/segment/hour
+  // happen to resolve identically (see computeResolutionIdentity below).
+  source_type: 'calendar' | 'template_clock' | 'template';
+  source_id: number;
+}
+
+// A single deterministic value identifying "this exact schedule decision for
+// this exact hour" — the row that resolved it, plus the structural segment
+// and wall-clock instance it produced. Stored on `plans` at draft time so a
+// later reconcile pass can tell whether the calendar/template row backing an
+// in-progress plan has since been edited or replaced.
+export function computeResolutionIdentity(resolved: ResolvedSegment): string {
+  return `${resolved.source_type}:${resolved.source_id}:${resolved.segment.id}:${resolved.clockInstanceStartedAt}`;
 }
 
 // ISO weekday in our schema: 1 = Mon … 7 = Sun. JS Date.getDay() returns
@@ -87,7 +101,7 @@ export async function resolveCurrentSegment(
   for (const row of calendarRows) {
     const ctx = await resolveClockContext(db, row.clock_id, row.show_id);
     if (ctx != null) {
-      const resolved = await resolveSegmentWithinClock(db, ctx.clockId, nowMs, ctx.showId, ctx.showName);
+      const resolved = await resolveSegmentWithinClock(db, ctx.clockId, nowMs, ctx.showId, ctx.showName, 'calendar', row.id);
       if (resolved) return resolved;
     }
   }
@@ -104,7 +118,7 @@ export async function resolveCurrentSegment(
       ),
     );
   if (tce) {
-    const resolved = await resolveSegmentWithinClock(db, tce.clock_id, nowMs, null, null);
+    const resolved = await resolveSegmentWithinClock(db, tce.clock_id, nowMs, null, null, 'template_clock', tce.id);
     if (resolved) return resolved;
   }
 
@@ -122,7 +136,7 @@ export async function resolveCurrentSegment(
   for (const row of templateRows) {
     const ctx = await resolveClockContext(db, row.clock_id, row.show_id);
     if (ctx != null) {
-      const resolved = await resolveSegmentWithinClock(db, ctx.clockId, nowMs, ctx.showId, ctx.showName);
+      const resolved = await resolveSegmentWithinClock(db, ctx.clockId, nowMs, ctx.showId, ctx.showName, 'template', row.id);
       if (resolved) return resolved;
     }
   }
@@ -183,6 +197,8 @@ async function resolveSegmentWithinClock(
   nowMs: number,
   showId: number | null,
   showName: string | null,
+  sourceType: 'calendar' | 'template_clock' | 'template',
+  sourceId: number,
 ): Promise<ResolvedSegment | null> {
   const segments = await db
     .select()
@@ -216,6 +232,8 @@ async function resolveSegmentWithinClock(
         clockInstanceStartedAt: hourStartMs,
         show_id: showId,
         show_name: showName,
+        source_type: sourceType,
+        source_id: sourceId,
       };
     }
     cursorMs = segEnd;

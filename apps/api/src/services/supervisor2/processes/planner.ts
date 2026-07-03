@@ -193,6 +193,7 @@ export class PlannerProcess {
       msg.now_ms,
       msg.show_id,
       msg.show_name,
+      msg.resolution_identity,
     );
     this._bus.emit({
       type: 'PLAN_DRAFT_READY',
@@ -245,6 +246,7 @@ export class PlannerProcess {
     nowMs: number,
     showId: number | null,
     showName: string | null,
+    resolutionIdentity: string | null,
   ): Promise<number> {
     const [segment] = await this.db
       .select()
@@ -260,7 +262,7 @@ export class PlannerProcess {
     // intentionally skip plan_items for live segments. The Supervisor / Queue
     // Feeder treat an empty plan as a live-suspension marker.
     if (segment.type === 'live') {
-      return this.insertPlanRow(segment, clockInstanceStartedAt, nowMs);
+      return this.insertPlanRow(segment, clockInstanceStartedAt, nowMs, resolutionIdentity);
     }
 
     const config = await this.loadSupervisorConfig();
@@ -280,7 +282,7 @@ export class PlannerProcess {
 
     const showCtx: ShowContext = { showId, showName, isShowStart, isShowEnd, config };
 
-    const planId = await this.insertPlanRow(segment, clockInstanceStartedAt, nowMs);
+    const planId = await this.insertPlanRow(segment, clockInstanceStartedAt, nowMs, resolutionIdentity);
 
     const result = await this.assembleForSegment(
       segment,
@@ -1261,12 +1263,14 @@ export class PlannerProcess {
     segment: ClockSegment,
     clockInstanceStartedAt: number,
     nowMs: number,
+    resolutionIdentity: string | null,
   ): Promise<number> {
     const inserted = await this.db
       .insert(plansTable)
       .values({
         segment_id: segment.id,
         clock_instance_started_at: clockInstanceStartedAt,
+        resolution_identity: resolutionIdentity,
         status: 'draft',
         created_at: nowMs,
         finalized_at: null,

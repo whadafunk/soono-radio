@@ -1,11 +1,10 @@
 import { randomUUID } from 'crypto';
 import { FastifyInstance } from 'fastify';
-import { and, asc, eq } from 'drizzle-orm';
+import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { supervisorState, planItems } from '../db/schema.js';
 import { HarborClient } from '../services/supervisor2/harborClient.js';
 import { bus } from '../services/supervisor2/bus.js';
-import { resolveCurrentSegment } from '../services/supervisor2/clockResolver.js';
 
 export async function supervisorControlRoutes(fastify: FastifyInstance) {
   fastify.post('/supervisor/v2/skip', async (_request, reply) => {
@@ -38,51 +37,19 @@ export async function supervisorControlRoutes(fastify: FastifyInstance) {
     return reply.send({ ok: true });
   });
 
-  // Rebuild the remaining pending items in the active plan so they fill
-  // exactly to the current segment's wall-clock boundary. Equivalent to
-  // manually forcing a hard-start trim/fill for the current segment.
+  // Runs the supervisor's full reconcile() pass immediately instead of
+  // waiting for the next start/restart. Handles cases the old standalone
+  // trim-only logic couldn't: no active plan at all, calendar-segment
+  // identity mismatches, and next-segment runway — see
+  // supervisor-reconciler-redesign design notes. The route can't call the
+  // supervisor process directly (it's registered before that process
+  // exists), so this just nudges it via the bus, same pattern as resume().
   fastify.post('/supervisor/v2/align-to-wall-clock', async (_request, reply) => {
-    try {
-      const nowMs = Date.now();
-
-      const [stateRow] = await db.select().from(supervisorState).where(eq(supervisorState.id, 1));
-      const activePlanId = stateRow?.active_plan_id ?? null;
-      if (activePlanId == null) {
-        return reply.status(400).send({ ok: false, error: 'No active plan' });
-      }
-
-      const resolved = await resolveCurrentSegment(nowMs, db);
-      if (!resolved) {
-        return reply.status(400).send({ ok: false, error: 'No current segment' });
-      }
-
-      const remainingSeconds = Math.max(0, (resolved.segmentEndMs - nowMs) / 1000);
-      if (remainingSeconds < 10) {
-        return reply.status(400).send({ ok: false, error: 'Too close to segment boundary' });
-      }
-
-      const [firstPending] = await db
-        .select({ position: planItems.position })
-        .from(planItems)
-        .where(and(eq(planItems.plan_id, activePlanId), eq(planItems.status, 'pending')))
-        .orderBy(asc(planItems.position))
-        .limit(1);
-
-      const fromPosition = firstPending?.position ?? 0;
-
-      bus.emit({
-        type: 'PLAN_REPLAN_REQUESTED',
-        request_id: randomUUID(),
-        plan_id: activePlanId,
-        from_position: fromPosition,
-        remaining_seconds: Math.floor(remainingSeconds),
-        now_ms: nowMs,
-      });
-
-      return reply.send({ ok: true });
-    } catch (err) {
-      fastify.log.error(err, 'supervisor align-to-wall-clock failed');
-      return reply.status(500).send({ ok: false, error: 'Align failed' });
-    }
+    bus.emit({
+      type: 'RECONCILE_REQUESTED',
+      request_id: randomUUID(),
+      now_ms: Date.now(),
+    });
+    return reply.send({ ok: true });
   });
 }

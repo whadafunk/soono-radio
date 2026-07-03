@@ -1092,6 +1092,12 @@ export const plans = sqliteTable(
       .references(() => clockSegments.id, { onDelete: 'cascade' }),
     // Unix ms — identifies which clock-hour instance of the segment this plan covers.
     clock_instance_started_at: integer('clock_instance_started_at').notNull(),
+    // Snapshot of computeResolutionIdentity() at draft time — which calendar/
+    // template row + segment + clock instance produced this plan. Lets
+    // reconcile() detect a schedule change that resolves to the same
+    // clock_id/segment/hour but from a different source row. Null on rows
+    // created before this column existed.
+    resolution_identity: text('resolution_identity'),
     status: text('status', { enum: PLAN_STATUSES }).notNull(),
     created_at: integer('created_at').notNull(),
     finalized_at: integer('finalized_at'),
