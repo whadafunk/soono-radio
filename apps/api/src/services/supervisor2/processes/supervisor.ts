@@ -122,6 +122,10 @@ export class SupervisorProcess {
   private draftedForNextSegment: { segmentId: number; instanceMs: number } | null = null;
   // Prevents double-emitting a cold-start finalization.
   private coldStartFinalizeSent = false;
+  // Prevents re-running the exhausted-plan runway reconcile every tick while
+  // waiting for its async draft/finalize to land — keyed by the plan id that
+  // was exhausted, not segment/instance (this fires on a plan, not a segment).
+  private exhaustedPlanReconciledFor: number | null = null;
 
   // ── Other state ─────────────────────────────────────────────────────────────
   private currentPlayHistoryId: number | null = null;
@@ -492,15 +496,35 @@ export class SupervisorProcess {
         process: 'supervisor', event: 'PLAN_STALL', reason: 'no_next_plan',
         active_plan_id: this.activePlanId,
       }, 'supervisor: active plan exhausted with nothing playing; no next plan ready');
-      // No next plan ready and no draft in flight — trigger an emergency cold-start
-      // so the station recovers without a manual restart. Reset coldStartFinalizeSent
-      // so the handler fires even if a cold start already ran in this session.
-      if (this.draftedForNextSegment == null) {
-        const resolved = await this.getCachedSegment(nowMs);
-        if (resolved) {
-          this.coldStartFinalizeSent = false;
-          await this.requestColdStartDraft(resolved, nowMs);
-          this.draftedForNextSegment = { segmentId: resolved.segment.id, instanceMs: resolved.clockInstanceStartedAt };
+
+      // Use the just-exhausted plan's OWN segment as the reference point, not
+      // a fresh wall-clock resolve — the active plan can legitimately be
+      // ahead of wall clock (organic early handoff, see the block above), and
+      // resolving "now" would land back on the segment this plan already
+      // superseded, asking the planner to fill an ever-shrinking remainder
+      // that no track can ever fit. Confirmed live 2026-07-03: this produced
+      // ~100 empty plans in a row and ~115s of real dead air on segment 195.
+      // reconcileNext() applies the same runway model used at boot/restart/
+      // operator-action — if there isn't enough runway left, it offsets into
+      // whatever comes next (drift-corrected via computeFirstPassTarget)
+      // instead of trying to fill a gap nothing can fit.
+      if (this.exhaustedPlanReconciledFor !== this.activePlanId) {
+        this.exhaustedPlanReconciledFor = this.activePlanId;
+        const exhaustedSegmentEndMs = await this.exhaustedActivePlanSegmentEndMs();
+        if (exhaustedSegmentEndMs != null) {
+          this.logger?.info({
+            process: 'supervisor', event: 'EXHAUSTED_PLAN_RECONCILE',
+            active_plan_id: this.activePlanId, segment_end_ms: exhaustedSegmentEndMs,
+          }, 'supervisor: reconciling from the exhausted plan\'s own segment instead of wall clock');
+          await this.reconcileNext(exhaustedSegmentEndMs, nowMs);
+        } else {
+          // Unexpected: couldn't resolve the exhausted plan's own segment.
+          // Fall back to the old wall-clock cold-start as a last resort.
+          const resolved = await this.getCachedSegment(nowMs);
+          if (resolved) {
+            this.coldStartFinalizeSent = false;
+            await this.requestColdStartDraft(resolved, nowMs);
+          }
         }
       }
       return;
@@ -914,6 +938,7 @@ export class SupervisorProcess {
     this.planActivatedAtMs = nowMs;
     this.finalizationRequestedForPlanId = null;
     this.draftedForNextSegment = null;
+    this.exhaustedPlanReconciledFor = null;
 
     // DB writes.
     await this.db.update(plansTable)
@@ -1058,17 +1083,48 @@ export class SupervisorProcess {
     if (!plan || plan.status !== 'active' || plan.clock_instance_started_at !== clockInstanceStartedAt) {
       return null;
     }
+    return this.segmentEndMsWithinClock(plan.clock_id, plan.segment_id, clockInstanceStartedAt);
+  }
 
+  // Same reconstruction as activePlanSegmentEndMs, but for the plan that just
+  // exhausted (handleExhaustedPlan) rather than a plan being validated against
+  // an externally-known clock instance — there's nothing else to compare
+  // against here, this plan already IS this.activePlanId by construction.
+  private async exhaustedActivePlanSegmentEndMs(): Promise<number | null> {
+    if (this.activePlanId == null) return null;
+    const [plan] = await this.db
+      .select({
+        clock_instance_started_at: plansTable.clock_instance_started_at,
+        segment_id: clockSegmentsTable.id,
+        clock_id: clockSegmentsTable.clock_id,
+      })
+      .from(plansTable)
+      .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
+      .where(eq(plansTable.id, this.activePlanId));
+    if (!plan) return null;
+    return this.segmentEndMsWithinClock(plan.clock_id, plan.segment_id, plan.clock_instance_started_at);
+  }
+
+  // Reconstructs a specific structural segment's end time within a clock
+  // instance by walking the clock's own segment list in sort_order — the
+  // same cursor walk resolveSegmentWithinClock uses — rather than re-running
+  // the full calendar/template resolution chain. Used when we already know
+  // which clock instance and which structural segment we're asking about.
+  private async segmentEndMsWithinClock(
+    clockId: number,
+    segmentId: number,
+    clockInstanceStartedAt: number,
+  ): Promise<number | null> {
     const segments = await this.db
       .select({ id: clockSegmentsTable.id, duration_seconds: clockSegmentsTable.duration_seconds })
       .from(clockSegmentsTable)
-      .where(eq(clockSegmentsTable.clock_id, plan.clock_id))
+      .where(eq(clockSegmentsTable.clock_id, clockId))
       .orderBy(clockSegmentsTable.sort_order);
 
     let cursorMs = clockInstanceStartedAt;
     for (const seg of segments) {
       const segEndMs = cursorMs + seg.duration_seconds * 1000;
-      if (seg.id === plan.segment_id) return segEndMs;
+      if (seg.id === segmentId) return segEndMs;
       cursorMs = segEndMs;
     }
     return null;
