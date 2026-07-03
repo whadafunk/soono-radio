@@ -530,22 +530,56 @@ export class SupervisorProcess {
       return;
     }
     const [nextPlan] = await this.db
-      .select({ status: plansTable.status, segment_id: plansTable.segment_id, clock_instance_started_at: plansTable.clock_instance_started_at })
+      .select({
+        status: plansTable.status,
+        segment_id: plansTable.segment_id,
+        clock_instance_started_at: plansTable.clock_instance_started_at,
+        start_policy: clockSegmentsTable.start_policy,
+      })
       .from(plansTable)
+      .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
       .where(eq(plansTable.id, this.nextPlanId));
     if (!nextPlan) return;
     if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') return;
 
-    // Don't advance to a plan that belongs to a clock instance that hasn't
-    // started yet. This prevents the last segment of one clock hour from
-    // exhausting early and immediately consuming content from the next hour.
-    // Within the same clock instance, early advancement is intentional —
-    // organic drift means a short plan legitimately hands off to the next
-    // segment's plan before the wall-clock boundary.
-    if (
-      nextPlan.clock_instance_started_at != null &&
-      nowMs < nextPlan.clock_instance_started_at
-    ) {
+    // A plan for a clock instance that hasn't started yet is only blocked
+    // from early activation when its own segment is hard-start — the same
+    // hard/flexible decision used everywhere else for "is early OK," instead
+    // of a blanket cross-instance rule. Within the same clock instance, or
+    // into any flexible segment regardless of instance, early advancement is
+    // intentional (organic drift, see the runway model).
+    const notYetStarted =
+      nextPlan.clock_instance_started_at != null && nowMs < nextPlan.clock_instance_started_at;
+    if (notYetStarted && readStartPolicy(nextPlan.start_policy).type === 'hard') {
+      // Can't jump into the next segment early, and reconcileNext already
+      // determined there's nothing else scheduled between here and there.
+      // Top up the exhausted plan itself instead of sitting silent — reuses
+      // the same replan/assemble path maybeHandleHardStartGate's fill
+      // trigger already uses, so a boundary this still can't fully close
+      // gets the same cut_allowed=true fallback via the existing d2 logic.
+      // Confirmed live 2026-07-04: without this, exhausting on the clock's
+      // last segment produced ~125s of real dead air waiting for the next
+      // hour, even though the exhausted plan's own segment still had open
+      // runway that could have been filled.
+      if (this.activePlanId != null && this.pendingReplanForPlanId !== this.activePlanId) {
+        const remainingSeconds = (nextPlan.clock_instance_started_at! - nowMs) / 1000;
+        const fromPosition = await this.nextAppendPosition(this.activePlanId);
+        const requestId = randomUUID();
+        this.pendingReplanForPlanId = this.activePlanId;
+        this.logger?.info({
+          process: 'supervisor', event: 'EXHAUSTED_PLAN_TOPUP',
+          plan_id: this.activePlanId, next_plan_id: this.nextPlanId,
+          remaining_seconds: remainingSeconds, request_id: requestId,
+        }, 'supervisor: next segment is hard and not reachable yet — topping up the exhausted plan instead');
+        this._bus.emit({
+          type: 'PLAN_REPLAN_REQUESTED',
+          request_id: requestId,
+          plan_id: this.activePlanId,
+          from_position: fromPosition,
+          remaining_seconds: Math.max(0, Math.floor(remainingSeconds)),
+          now_ms: nowMs,
+        });
+      }
       return;
     }
 
@@ -556,6 +590,20 @@ export class SupervisorProcess {
     }, 'supervisor: forcing plan advance — active plan exhausted, nothing playing');
     await this.activateNextPlan(nowMs);
     this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'plan_exhausted_advance' });
+  }
+
+  // One past the highest existing position in the plan (across all
+  // statuses, not just pending) — where to append fresh items when a plan
+  // has zero pending items left (fully exhausted), unlike firstPendingPosition
+  // which assumes some pending tail already exists to splice into.
+  private async nextAppendPosition(planId: number): Promise<number> {
+    const [row] = await this.db
+      .select({ position: planItemsTable.position })
+      .from(planItemsTable)
+      .where(eq(planItemsTable.plan_id, planId))
+      .orderBy(desc(planItemsTable.position))
+      .limit(1);
+    return (row?.position ?? -1) + 1;
   }
 
   // ─── Segment cache ───────────────────────────────────────────────────────────
@@ -1055,7 +1103,7 @@ export class SupervisorProcess {
 
     await this.reconcileOccurrence(next, nowMs, {
       allowActivate: cutoverAllowed,
-      targetDurationSeconds: this.computeFirstPassTarget(next.segment.duration_seconds),
+      targetDurationSeconds: this.computeFirstPassTarget(next.segment),
     });
   }
 
@@ -1352,9 +1400,18 @@ export class SupervisorProcess {
   // nominal and the early-running condition persists indefinitely. The 1.5×
   // cap limits per-segment catch-up so the planner doesn't try to fill 5×
   // nominal with branding when music pools are short.
-  private computeFirstPassTarget(nominal: number): number {
+  //
+  // Stop-sets get a higher floor (their own nominal, not the generic 30s):
+  // an ad break shouldn't be shrunk to absorb an unrelated segment's
+  // overshoot. Confirmed live 2026-07-04: a +209s overshoot elsewhere pushed
+  // a 120s stop-set's target to the 30s floor, leaving it with one 16-second
+  // spot. Protecting the floor doesn't lose the correction — it just carries
+  // forward as accumulated drift for whatever flexible segment comes next.
+  private computeFirstPassTarget(segment: { type: string; duration_seconds: number }): number {
+    const nominal = segment.duration_seconds;
+    const floor = segment.type === 'stop_set' ? nominal : 30;
     return Math.max(
-      30,
+      floor,
       Math.min(
         nominal * 1.5,
         nominal - (this.boundaryDriftSeconds + this.plannedOvershootSeconds),
@@ -1436,8 +1493,7 @@ export class SupervisorProcess {
       return;
     }
 
-    const nominalNext = next.segment.duration_seconds;
-    const firstPassTarget = this.computeFirstPassTarget(nominalNext);
+    const firstPassTarget = this.computeFirstPassTarget(next.segment);
 
     // Store segment end time so activateNextPlan can compute boundary drift.
     this.nextPlanScheduledEndMs = next.segmentEndMs;
@@ -1447,7 +1503,7 @@ export class SupervisorProcess {
       process: 'supervisor', event: 'PLAN_DRAFT_REQUESTED',
       segment_id: next.segment.id,
       target_duration_seconds: firstPassTarget,
-      nominal_duration_seconds: nominalNext,
+      nominal_duration_seconds: next.segment.duration_seconds,
       boundary_drift_seconds: this.boundaryDriftSeconds,
       planned_overshoot_applied_seconds: this.plannedOvershootSeconds,
       request_id: requestId,

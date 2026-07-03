@@ -371,18 +371,28 @@ export class PlannerProcess {
 
     // Rundown segments are exempt from drift target adjustment (D35).
     const isRundown = segment.type === 'news' || segment.type === 'bulletin';
-    const needsFullReassembly = !isRundown && Math.abs(driftDeltaSeconds) >= threshold;
+    const pendingItems = await this.db
+      .select()
+      .from(planItemsTable)
+      .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
+    const pendingSumSeconds = pendingItems.reduce((acc, it) => acc + it.planned_duration_seconds, 0);
+    // driftDeltaSeconds alone misses cases where the target changed a lot
+    // without drift itself moving — first-pass and second-pass targets use
+    // different formulas (first-pass folds in plannedOvershoot, second-pass
+    // doesn't), so the target can jump even when drift_delta reads 0.
+    // Confirmed live 2026-07-04: a plan drafted against a 30s floor-clamped
+    // target sat un-reassembled after the T-30s gate recomputed 168s, because
+    // drift hadn't moved — only the formula had. Comparing actual planned
+    // content against the adjusted target catches that directly.
+    const contentGapSeconds = Math.abs(pendingSumSeconds - adjustedTargetSeconds);
+    const needsFullReassembly =
+      !isRundown && (Math.abs(driftDeltaSeconds) >= threshold || contentGapSeconds >= threshold);
 
     let substitutions = 0;
 
     if (needsFullReassembly) {
       // Full re-assembly: drop all pending items, rebuild from scratch with
       // the drift-adjusted target (D31).
-      const pendingItems = await this.db
-        .select()
-        .from(planItemsTable)
-        .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
-
       const dropMusic: number[] = [];
       const dropBranding: number[] = [];
       const dropCampaign: number[] = [];
@@ -457,16 +467,8 @@ export class PlannerProcess {
       // Lightweight substitution: re-request candidate pools and replace any
       // pending item whose backing candidate has disappeared (campaign hit
       // daily cap, etc.). Does not restructure the plan.
-      const pendingItems = await this.db
-        .select()
-        .from(planItemsTable)
-        .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
-
       if (pendingItems.length > 0) {
-        const sumPending = pendingItems.reduce(
-          (acc, it) => acc + it.planned_duration_seconds,
-          0,
-        );
+        const sumPending = pendingSumSeconds;
         const freshMusic =
           segment.type === 'music' || hasMusicGapNeeds(segment)
             ? await this.requestPool<MusicCandidatePool>('music', segment, plan, sumPending, nowMs)
@@ -914,6 +916,12 @@ export class PlannerProcess {
       if (remaining > FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) {
         const nextPolicy = await this.lookupNextSegmentPolicy(segment);
         const isNextHard = nextPolicy.type === 'hard';
+        // Ad breaks shouldn't be shortened by an earlier segment overshooting
+        // into their start time, even within normal tolerance — prefer
+        // handing over a little early instead. Hard still wins over this:
+        // dead air before a hard boundary is worse than delaying a flexible
+        // stop-set by a few seconds.
+        const nextIsFlexibleStopSet = nextPolicy.nextSegmentType === 'stop_set' && !isNextHard;
 
         const bestFit = music.candidates
           .filter(c => !usedMusicIds.has(c.id) && c.duration_seconds > remaining)
@@ -922,7 +930,7 @@ export class PlannerProcess {
 
         if (bestFit) {
           const overshoot = bestFit.duration_seconds - remaining;
-          if (overshoot <= FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) {
+          if (overshoot <= FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS && !nextIsFlexibleStopSet) {
             // Overshoot within tolerance and smaller than the undershoot — place normally.
             items.push(withCutSkip(musicCandidateToItem(bestFit), config));
             usedMusicIds.add(bestFit.id);
@@ -935,9 +943,10 @@ export class PlannerProcess {
             usedMusicIds.add(bestFit.id);
             remaining -= bestFit.duration_seconds;
           }
-          // else: undershoot ≤ overshoot, or next segment is flexible.
-          // Leave the gap — drift self-corrects in the next plan for flexible
-          // segments; the hard-start gate covers ≤30s gaps for hard ones.
+          // else: undershoot ≤ overshoot, next segment is flexible, or next is
+          // a flexible stop-set we'd rather hand over to early. Leave the gap
+          // — drift self-corrects in the next plan for flexible segments; the
+          // hard-start gate covers ≤30s gaps for hard ones.
         }
       }
     }
@@ -1452,9 +1461,9 @@ export class PlannerProcess {
   // handler to decide whether a cut_allowed fill is necessary.
   private async lookupNextSegmentPolicy(
     segment: ClockSegment,
-  ): Promise<{ type: 'hard' | 'flexible' }> {
+  ): Promise<{ type: 'hard' | 'flexible'; nextSegmentType: string | null }> {
     const [next] = await this.db
-      .select({ start_policy: clockSegments.start_policy })
+      .select({ start_policy: clockSegments.start_policy, type: clockSegments.type })
       .from(clockSegments)
       .where(
         and(
@@ -1464,8 +1473,8 @@ export class PlannerProcess {
       )
       .orderBy(asc(clockSegments.sort_order))
       .limit(1);
-    if (!next) return { type: 'flexible' };
-    return readStartPolicy(next.start_policy);
+    if (!next) return { ...readStartPolicy(null), nextSegmentType: null };
+    return { ...readStartPolicy(next.start_policy), nextSegmentType: next.type };
   }
 
   // Try a single gap-fill placement for `type`. Returns the item placed, or
