@@ -325,7 +325,23 @@ export class MusicProcess {
       }, 'music: separation filter relaxed — not enough candidates within window');
     }
 
-    const ranked = [...passes, ...fails].slice(0, limit);
+    // random_separation genuinely randomizes selection within each group,
+    // weighted toward the longest-waiting tracks — every other type keeps
+    // the strict LRP order above unchanged.
+    let orderedPasses = passes;
+    let orderedFails = fails;
+    if (cfg.rotation.type === 'random_separation') {
+      orderedPasses = weightedRandomOrder(passes);
+      orderedFails = weightedRandomOrder(fails);
+    } else if (cfg.rotation.type === 'round_robin' || cfg.rotation.type === 'weighted') {
+      this.logger?.warn({
+        process: 'music', event: 'ROTATION_TYPE_UNIMPLEMENTED',
+        rotation_id: cfg.rotation_id, type: cfg.rotation.type,
+      }, 'music: rotation type not implemented, falling back to least-recently-played order');
+    }
+
+    const ranked = [...orderedPasses, ...orderedFails].slice(0, limit);
+    const reasonLabel = cfg.rotation.type === 'random_separation' ? 'Random' : 'LRP';
 
     return ranked
       .map<MusicCandidate | null>((mediaId) => {
@@ -340,8 +356,8 @@ export class MusicProcess {
           rotation_id: cfg.rotation_id,
           reason_hint:
             lastTs == null
-              ? `LRP rotation_id=${cfg.rotation_id} (never played)`
-              : `LRP rotation_id=${cfg.rotation_id} (last played ${formatAge(nowSeconds - lastTs)} ago)`,
+              ? `${reasonLabel} rotation_id=${cfg.rotation_id} (never played)`
+              : `${reasonLabel} rotation_id=${cfg.rotation_id} (last played ${formatAge(nowSeconds - lastTs)} ago)`,
         };
       })
       .filter((c): c is MusicCandidate => c !== null);
@@ -580,6 +596,31 @@ function parseSources(raw: unknown): ParsedSource[] {
     }
   }
   return [];
+}
+
+// Weighted-random draw without replacement, for `random_separation` rotations.
+// Every remaining candidate can be picked at each step, but earlier LRP
+// positions (longer since last played) get proportionally more weight —
+// weights are N, N-1, ..., 1 for a pool of size N, so the longest-waiting
+// track is most likely to come out first without ever being guaranteed.
+// Confirmed live 2026-07-04: this rotation type never actually randomized
+// anything — every draw used the plain LRP sort below regardless of the
+// configured type, which is indistinguishable from round-robin in practice.
+function weightedRandomOrder(idsInLrpOrder: number[]): number[] {
+  const pool = idsInLrpOrder.slice();
+  const result: number[] = [];
+  while (pool.length > 0) {
+    const totalWeight = (pool.length * (pool.length + 1)) / 2;
+    let r = Math.random() * totalWeight;
+    let pickIndex = pool.length - 1;
+    for (let i = 0; i < pool.length; i++) {
+      r -= pool.length - i;
+      if (r <= 0) { pickIndex = i; break; }
+    }
+    result.push(pool[pickIndex]);
+    pool.splice(pickIndex, 1);
+  }
+  return result;
 }
 
 function readSeparationMinutes(params: unknown): number {
