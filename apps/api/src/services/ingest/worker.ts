@@ -39,7 +39,39 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
   let transcodedPath: string | null = null;
 
   try {
-    // 1. Probe original.
+    // 1. Hash the raw upload before any processing, and check it against
+    //    known sources. This catches byte-identical re-uploads even when
+    //    the post-transcode hash (step 5 below) would drift — e.g. after an
+    //    ffmpeg/lame version change re-encodes the same source differently.
+    //    Bailing here also skips the wasted ffprobe/loudness/transcode work.
+    const sourceSha = await sha256File(stagingPath);
+    const existingBySource = await db
+      .select()
+      .from(media)
+      .where(eq(media.source_sha256, sourceSha))
+      .limit(1);
+    if (existingBySource.length > 0) {
+      await markJobCompleted(jobId, existingBySource[0].id);
+      await safeUnlink(stagingPath);
+
+      if (job.lookup_job_id && job.category === 'music') {
+        await db.update(ingestJobs).set({
+          lookup_result: 'skipped',
+          lookup_result_json: JSON.stringify({ reason: 'Duplicate — already in library' }),
+        }).where(eq(ingestJobs.id, jobId));
+        maybeFinalizeLookupJob(job.lookup_job_id).catch(() => undefined);
+      }
+
+      return {
+        jobId,
+        status: 'completed',
+        mediaId: existingBySource[0].id,
+        error: null,
+        deduped: true,
+      };
+    }
+
+    // 2. Probe original.
     const probe = await ffprobe(stagingPath);
 
     await db
@@ -50,7 +82,7 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       })
       .where(eq(ingestJobs.id, jobId));
 
-    // 2. Loudness measurement on the original. Doing it before any transcode
+    // 3. Loudness measurement on the original. Doing it before any transcode
     //    means we measure the *source*; gain stored is what we want to apply
     //    at playout regardless of whether we re-encoded for the bitrate cap.
     const loudness = await measureLoudness(stagingPath);
@@ -64,7 +96,7 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       })
       .where(eq(ingestJobs.id, jobId));
 
-    // 3. Transcode decision.
+    // 4. Transcode decision.
     const decision = decideTranscode(probe);
 
     await db
@@ -92,10 +124,12 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       finalChannels = probe.channels;
     }
 
-    // 4. Hash the final file (post-transcode if any).
+    // 5. Hash the final file (post-transcode if any). Kept as a secondary
+    //    dedup path for the rare case of two different raw sources that
+    //    happen to transcode to identical output.
     const sha = await sha256File(finalPath);
 
-    // 5. Dedup check.
+    // 6. Dedup check.
     const existing = await db.select().from(media).where(eq(media.sha256, sha)).limit(1);
     if (existing.length > 0) {
       await markJobCompleted(jobId, existing[0].id);
@@ -120,7 +154,7 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       };
     }
 
-    // 6. Move final into the content-addressed media pool.
+    // 7. Move final into the content-addressed media pool.
     const destPath = mediaPathForSha(sha);
     await moveFile(finalPath, destPath);
 
@@ -129,10 +163,11 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       await safeUnlink(stagingPath);
     }
 
-    // 7. Insert the media row.
+    // 8. Insert the media row.
     const fileStat = await stat(destPath);
     const insert: MediaInsert = {
       sha256: sha,
+      source_sha256: sourceSha,
       category: job.category,
       original_filename: job.uploaded_filename,
       duration_seconds: probe.duration_seconds,

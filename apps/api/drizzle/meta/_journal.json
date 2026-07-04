@@ -365,6 +365,27 @@
       "when": 1783083244672,
       "tag": "0051_melted_lockjaw",
       "breakpoints": true
+    },
+    {
+      "idx": 52,
+      "version": "6",
+      "when": 1783117047437,
+      "tag": "0052_pink_hydra",
+      "breakpoints": true
+    },
+    {
+      "idx": 53,
+      "version": "6",
+      "when": 1783147945623,
+      "tag": "0053_fix_play_history_fk_ondelete",
+      "breakpoints": true
+    },
+    {
+      "idx": 54,
+      "version": "6",
+      "when": 1783148292970,
+      "tag": "0054_fix_remaining_fk_ondelete_drift",
+      "breakpoints": true
     }
   ]
 }

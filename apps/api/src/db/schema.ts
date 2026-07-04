@@ -28,6 +28,12 @@ export const media = sqliteTable(
   {
     id: integer('id').primaryKey({ autoIncrement: true }),
     sha256: text('sha256').notNull().unique(),
+    // Hash of the raw upload, taken before ffprobe/transcode. Catches
+    // byte-identical re-uploads even when the post-transcode `sha256` drifts
+    // (ffmpeg/lame version changes over the server's lifetime re-encode the
+    // same source to different bytes). Null for rows ingested before this
+    // column existed — their raw bytes are long gone.
+    source_sha256: text('source_sha256').unique(),
     category: text('category', { enum: MEDIA_CATEGORIES }).notNull(),
 
     title: text('title'),

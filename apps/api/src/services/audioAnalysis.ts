@@ -5,6 +5,26 @@ import { mediaPathForSha } from './ingest/paths.js';
 import { runAudioAnalysis } from './ingest/audioAnalysis.js';
 import { getIntegrationsConfig } from './integrations/config.js';
 
+/**
+ * On boot, mark any media row left at 'analysing' as failed — it was
+ * interrupted by a restart. The in-process concurrency queue in
+ * ingest/audioAnalysis.ts (acquireAnalysisSlot) lives only in memory, so a
+ * restart silently drops whatever was running or queued with no other trace.
+ * Mirrors recoverInterruptedJobs() in services/ingest/queue.ts for the same
+ * class of problem on the ingest side.
+ */
+export async function recoverInterruptedAnalysis(): Promise<number> {
+  const result = await db
+    .update(media)
+    .set({
+      analysis_status: 'failed',
+      analysis_error: 'Interrupted by API restart',
+      updated_at: new Date(),
+    })
+    .where(eq(media.analysis_status, 'analysing'));
+  return Number((result as any).rowsAffected ?? 0);
+}
+
 export async function analyseMedia(mediaId: number): Promise<void> {
   const rows = await db.select().from(media).where(eq(media.id, mediaId)).limit(1);
   if (rows.length === 0) throw new Error(`Media ${mediaId} not found`);

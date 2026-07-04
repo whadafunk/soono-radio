@@ -283,6 +283,10 @@ This matters because the Drizzle libsql migrator uses the `when` timestamp in `_
 1. Use `drizzle-kit generate` — it will emit a full table-recreation migration (CREATE new → copy data → DROP old → RENAME).
 2. Do not hand-write `ALTER TABLE ... DROP COLUMN` in a migration; it will fail silently or error at runtime.
 
+**Adding a nullable FK column to an *existing* table silently drops `onDelete`.** `drizzle-kit generate` emits a plain `ALTER TABLE ... ADD COLUMN ... REFERENCES x(id)` for this case — SQLite's ADD COLUMN form has no way to carry an `ON DELETE` clause, so whatever you declared in `schema.ts` (`onDelete: 'set null'`, `'cascade'`, etc.) is silently **not** applied to the live table, even though drizzle-kit's own snapshot believes it was. `drizzle-kit generate` run again later sees "no changes" — it has no way to detect the drift, since it diffs against its own snapshot, not the live DB. Found in production 2026-07-04 (`play_history.clock_segment_id` and three other columns) after this exact gap caused a 500 when deleting a `clock_segments` row that had play history logged against it — the FK defaulted to NO ACTION, blocking the delete instead of clearing the reference.
+- After adding a column like this, inspect the emitted `.sql` file — if it's a bare `ALTER TABLE ... ADD COLUMN ... REFERENCES`, the `onDelete` didn't make it in.
+- Fix: `drizzle-kit generate --custom`, then hand-write a full table-recreation migration (CREATE `__new_x` with the FK clause spelled out including `ON DELETE` → copy data → DROP → RENAME → recreate indexes) — same shape as the DROP COLUMN case above.
+
 **Known schema drift (intentional, harmless):**  
 `shows.type` and `shows.active` exist in the DB but are absent from `schema.ts`. They were removed from the application in May 2026 but could not be dropped via migration (libsql limitation). Drizzle ignores columns it doesn't know about — all reads/writes use explicit column lists, so these columns are inert. They have DB-level defaults (`type='automated'`, `active=1`) and do not affect any application logic.
 

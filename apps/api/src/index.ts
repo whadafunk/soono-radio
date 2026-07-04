@@ -31,6 +31,7 @@ import { supervisorControlRoutes } from './routes/supervisorControl.js';
 import { db, runMigrations } from './db/index.js';
 import { supervisorState as supervisorStateTable } from './db/schema.js';
 import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
+import { recoverInterruptedAnalysis } from './services/audioAnalysis.js';
 import { ensureDirs } from './services/ingest/paths.js';
 import { loadIntegrationsConfig } from './services/integrations/config.js';
 import { generateRadioLiq, readLiquidsoapConfig, readRadioLiq } from './services/liquidsoapConfig.js';
@@ -154,6 +155,10 @@ const start = async () => {
     const recovered = await recoverInterruptedJobs();
     if (recovered > 0) {
       fastify.log.info({ recovered }, 'Marked interrupted ingest jobs as failed');
+    }
+    const recoveredAnalysis = await recoverInterruptedAnalysis();
+    if (recoveredAnalysis > 0) {
+      fastify.log.info({ recovered: recoveredAnalysis }, 'Marked interrupted audio analysis as failed');
     }
     // Re-run identification for ingest jobs that completed but whose
     // fire-and-forget lookup was cut short by the previous shutdown.
