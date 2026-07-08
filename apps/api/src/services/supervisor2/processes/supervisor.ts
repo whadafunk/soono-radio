@@ -62,7 +62,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
-import { computeResolutionIdentity, resolveCurrentSegment, type ResolvedSegment } from '../clockResolver.js';
+import { computeResolutionIdentity, resolveCurrentSegment, segmentBoundsWithinClock, type ResolvedSegment } from '../clockResolver.js';
 import {
   closeMostRecentOpenRow,
   closeOpenRowsBefore,
@@ -1047,6 +1047,7 @@ export class SupervisorProcess {
     this.currentDriftSeconds = this.boundaryDriftSeconds;
 
     // Update in-memory state.
+    const previousActivePlanId = this.activePlanId;
     this.activePlanId = planId;
     if (opts.clearNextPlan) {
       this.nextPlanId = null;
@@ -1062,6 +1063,16 @@ export class SupervisorProcess {
     await this.db.update(plansTable)
       .set({ status: 'active' })
       .where(eq(plansTable.id, planId));
+    // Data hygiene (Decision 56): retire the plan being handed off from —
+    // previously this just moved the pointer and left the old row stuck at
+    // 'active' forever. Hasn't caused incorrect behavior (reconcileOccurrence
+    // breaks ties by highest plan id) but Align to Clock's invalidate step is
+    // the first code to explicitly retire a plan, so close this gap generally.
+    if (previousActivePlanId != null && previousActivePlanId !== planId) {
+      await this.db.update(plansTable)
+        .set({ status: 'completed' })
+        .where(and(eq(plansTable.id, previousActivePlanId), eq(plansTable.status, 'active')));
+    }
     await this.db.update(supervisorStateTable)
       .set({
         active_plan_id: planId,
@@ -1226,7 +1237,8 @@ export class SupervisorProcess {
     if ((await this.computeEstimatedRemaining(nowMs)) < RUNWAY_WORTH_IT_THRESHOLD_S) {
       return null;
     }
-    return this.segmentEndMsWithinClock(plan.clock_id, plan.segment_id, resolved.clockInstanceStartedAt);
+    const bounds = await segmentBoundsWithinClock(this.db, plan.clock_id, plan.segment_id, resolved.clockInstanceStartedAt);
+    return bounds?.endMs ?? null;
   }
 
   // Same reconstruction as activePlanSegmentEndMs, but for the plan that just
@@ -1245,32 +1257,8 @@ export class SupervisorProcess {
       .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
       .where(eq(plansTable.id, this.activePlanId));
     if (!plan) return null;
-    return this.segmentEndMsWithinClock(plan.clock_id, plan.segment_id, plan.clock_instance_started_at);
-  }
-
-  // Reconstructs a specific structural segment's end time within a clock
-  // instance by walking the clock's own segment list in sort_order — the
-  // same cursor walk resolveSegmentWithinClock uses — rather than re-running
-  // the full calendar/template resolution chain. Used when we already know
-  // which clock instance and which structural segment we're asking about.
-  private async segmentEndMsWithinClock(
-    clockId: number,
-    segmentId: number,
-    clockInstanceStartedAt: number,
-  ): Promise<number | null> {
-    const segments = await this.db
-      .select({ id: clockSegmentsTable.id, duration_seconds: clockSegmentsTable.duration_seconds })
-      .from(clockSegmentsTable)
-      .where(eq(clockSegmentsTable.clock_id, clockId))
-      .orderBy(clockSegmentsTable.sort_order);
-
-    let cursorMs = clockInstanceStartedAt;
-    for (const seg of segments) {
-      const segEndMs = cursorMs + seg.duration_seconds * 1000;
-      if (seg.id === segmentId) return segEndMs;
-      cursorMs = segEndMs;
-    }
-    return null;
+    const bounds = await segmentBoundsWithinClock(this.db, plan.clock_id, plan.segment_id, plan.clock_instance_started_at);
+    return bounds?.endMs ?? null;
   }
 
   // Ensures a valid plan is active (or on its way to being active) for one

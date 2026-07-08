@@ -236,5 +236,10 @@ export const SupervisorV2StatusSchema = z.object({
 });
 export type SupervisorV2Status = z.infer<typeof SupervisorV2StatusSchema>;
 
-export const SupervisorV2ControlResponseSchema = z.object({ ok: z.boolean() });
+export const SupervisorV2ControlResponseSchema = z.object({
+  ok: z.boolean(),
+  // Set by align-to-clock: whether it actually retired the active plan, or
+  // was a no-op because the plan was already at/ahead of wall clock.
+  invalidated: z.boolean().optional(),
+});
 export type SupervisorV2ControlResponse = z.infer<typeof SupervisorV2ControlResponseSchema>;

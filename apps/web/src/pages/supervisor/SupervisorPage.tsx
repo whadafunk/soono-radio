@@ -32,6 +32,7 @@ import {
   postSupervisorPause,
   postSupervisorResume,
   postSupervisorAlignToWallClock,
+  postSupervisorAlignToClock,
 } from '../../api';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -140,14 +141,20 @@ function ControlBar({
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
   });
 
-  const alignMutation = useMutation({
+  const reconcileMutation = useMutation({
     mutationFn: postSupervisorAlignToWallClock,
+    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
+  });
+
+  const alignToClockMutation = useMutation({
+    mutationFn: postSupervisorAlignToClock,
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
   });
 
   const skipDisabled = !hasActivePlan || liveTakeoverActive || skipMutation.isPending;
   const toggleDisabled = pauseMutation.isPending || resumeMutation.isPending;
-  const alignDisabled = !hasActivePlan || liveTakeoverActive || Math.abs(driftSeconds) < 5 || alignMutation.isPending;
+  const reconcileDisabled = !hasActivePlan || liveTakeoverActive || Math.abs(driftSeconds) < 5 || reconcileMutation.isPending;
+  const alignToClockDisabled = !hasActivePlan || liveTakeoverActive || alignToClockMutation.isPending;
 
   return (
     <div className="flex items-center gap-3">
@@ -165,17 +172,35 @@ function ControlBar({
       </button>
 
       <button
-        onClick={() => alignMutation.mutate()}
-        disabled={alignDisabled}
-        title="Rebuild remaining plan items to land exactly at the segment's wall-clock boundary"
+        onClick={() => reconcileMutation.mutate()}
+        disabled={reconcileDisabled}
+        title="Safely re-check the schedule and correct anything stale — never disturbs a plan that's already trustworthy"
         className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
-          ${alignDisabled
+          ${reconcileDisabled
             ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
             : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'
           }`}
       >
         <Clock className="w-4 h-4" />
-        Align to clock
+        Reconcile
+      </button>
+
+      <button
+        onClick={() => {
+          if (window.confirm('Align to Clock discards the active plan and rebuilds it from the wall clock. Content already queued but not yet aired will be dropped. Continue?')) {
+            alignToClockMutation.mutate();
+          }
+        }}
+        disabled={alignToClockDisabled}
+        title="Forcefully discard the active plan and rebuild from wall clock. Forward-only — a no-op if the plan is already at or ahead of the clock."
+        className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
+          ${alignToClockDisabled
+            ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
+            : 'bg-amber-900/20 text-amber-400 border border-amber-800 hover:bg-amber-900/40 hover:text-amber-300'
+          }`}
+      >
+        <AlertTriangle className="w-4 h-4" />
+        Align to Clock
       </button>
 
       {paused ? (

@@ -1381,7 +1381,13 @@ export async function postSupervisorResume(): Promise<SupervisorV2ControlRespons
 
 export async function postSupervisorAlignToWallClock(): Promise<SupervisorV2ControlResponse> {
   const res = await fetch(`${API_BASE}/supervisor/v2/align-to-wall-clock`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Align failed: ${res.statusText}`);
+  if (!res.ok) throw new Error(`Reconcile failed: ${res.statusText}`);
+  return SupervisorV2ControlResponseSchema.parse(await res.json());
+}
+
+export async function postSupervisorAlignToClock(): Promise<SupervisorV2ControlResponse> {
+  const res = await fetch(`${API_BASE}/supervisor/v2/align-to-clock`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Align to Clock failed: ${res.statusText}`);
   return SupervisorV2ControlResponseSchema.parse(await res.json());
 }
 

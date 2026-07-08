@@ -172,6 +172,33 @@ export async function resolveNextSegment(
   return resolveCurrentSegment(current.segmentEndMs + 1, db);
 }
 
+// Reconstructs a specific structural segment's [start, end) wall-clock bounds
+// within a clock instance by walking the clock's own segment list in
+// sort_order — the same cursor walk resolveSegmentWithinClock uses — rather
+// than re-running the full calendar/template resolution chain. Used when the
+// caller already knows which clock instance and which structural segment
+// it's asking about (e.g. validating/positioning the currently active plan).
+export async function segmentBoundsWithinClock(
+  db: typeof defaultDb,
+  clockId: number,
+  segmentId: number,
+  clockInstanceStartedAt: number,
+): Promise<{ startMs: number; endMs: number } | null> {
+  const segments = await db
+    .select({ id: clockSegmentsTable.id, duration_seconds: clockSegmentsTable.duration_seconds })
+    .from(clockSegmentsTable)
+    .where(eq(clockSegmentsTable.clock_id, clockId))
+    .orderBy(clockSegmentsTable.sort_order);
+
+  let cursorMs = clockInstanceStartedAt;
+  for (const seg of segments) {
+    const segEndMs = cursorMs + seg.duration_seconds * 1000;
+    if (seg.id === segmentId) return { startMs: cursorMs, endMs: segEndMs };
+    cursorMs = segEndMs;
+  }
+  return null;
+}
+
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 interface ClockContext {
