@@ -749,8 +749,8 @@ import {
   ClockSegment,
   ClockSegmentCreate,
   TemplateEntry,
-  TemplateEntryCreate,
-  TemplateEntryPatch,
+  TemplateEntryBatchOp,
+  EntryBatchResponse,
   CalendarEntry,
   CalendarEntryCreate,
   CalendarEntryPatch,
@@ -1159,16 +1159,8 @@ export function fetchTemplateEntries(): Promise<TemplateEntry[]> {
   return apiFetch('/template-entries');
 }
 
-export function createTemplateEntry(data: TemplateEntryCreate): Promise<TemplateEntry> {
-  return post('/template-entries', data);
-}
-
-export function updateTemplateEntry(id: number, patch_: TemplateEntryPatch): Promise<TemplateEntry> {
-  return patch(`/template-entries/${id}`, patch_);
-}
-
-export function deleteTemplateEntry(id: number): Promise<void> {
-  return del(`/template-entries/${id}`);
+export function batchTemplateEntries(ops: TemplateEntryBatchOp[]): Promise<EntryBatchResponse> {
+  return post('/template-entries/batch', { ops });
 }
 
 // ─── Calendar Entries ─────────────────────────────────────────────────────────

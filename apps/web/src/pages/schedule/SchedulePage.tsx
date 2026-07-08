@@ -3,10 +3,9 @@ import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye, CassetteTape, CalendarRange, HelpCircle } from 'lucide-react';
-import { Show, ShowColor, TemplateEntry, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@soono/shared';
+import { Show, ShowColor, TemplateEntry, TemplateEntryCreate, TemplateEntryPatch, TemplateEntryBatchOp, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@soono/shared';
 import {
-  fetchShows, fetchTemplateEntries,
-  createTemplateEntry, updateTemplateEntry, deleteTemplateEntry,
+  fetchShows, fetchTemplateEntries, batchTemplateEntries,
   fetchCalendarEntries, createCalendarEntry, updateCalendarEntry, deleteCalendarEntry,
   fetchClocks,
   fetchIntervals, createInterval, updateInterval, deleteInterval,
@@ -18,6 +17,7 @@ import {
   ApiError,
 } from '../../api';
 import type { RundownSlotContent } from '../../api';
+import { SaveStatus } from '../../components/SaveStatus';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -244,6 +244,56 @@ type DragState = {
   isCopy: boolean;
 };
 
+// ─── Staged editing (Decision 55) ─────────────────────────────────────────────
+//
+// Template-mode edits are staged locally as a squash-map (keyed by row id —
+// a real positive id for update/delete, a negative tempId for a not-yet-
+// persisted create) and committed in one batch on "Apply". See
+// TemplateEntryBatchOpSchema (apps/shared/src/schemas/scheduling.ts) for the
+// wire shape this mirrors.
+
+let _tempId = -1;
+function newTempId(): number { return _tempId--; }
+
+type TemplatePendingOp =
+  | { kind: 'create'; tempId: number; data: TemplateEntryCreate }
+  | { kind: 'update'; id: number; patch: TemplateEntryPatch }
+  | { kind: 'delete'; id: number };
+
+function mergeCreateData(data: TemplateEntryCreate, patch: TemplateEntryPatch): TemplateEntryCreate {
+  return {
+    day_of_week: patch.day_of_week ?? data.day_of_week,
+    time_start:  patch.time_start  ?? data.time_start,
+    time_end:    patch.time_end    ?? data.time_end,
+    show_id:  patch.show_id  !== undefined ? patch.show_id  : (data.show_id  ?? null),
+    clock_id: patch.clock_id !== undefined ? patch.clock_id : (data.clock_id ?? null),
+  };
+}
+
+/** Merges server rows with staged ops into the array the grid actually renders. */
+function applyTemplatePendingOps(rows: TemplateEntry[], ops: Map<number, TemplatePendingOp>): TemplateEntry[] {
+  if (ops.size === 0) return rows;
+  const result: TemplateEntry[] = [];
+  for (const row of rows) {
+    const op = ops.get(row.id);
+    if (!op || op.kind === 'create') { result.push(row); continue; }
+    if (op.kind === 'update') result.push({ ...row, ...op.patch });
+    // 'delete' → row is dropped
+  }
+  for (const op of ops.values()) {
+    if (op.kind !== 'create') continue;
+    result.push({
+      id: op.tempId,
+      day_of_week: op.data.day_of_week,
+      time_start: op.data.time_start,
+      time_end: op.data.time_end,
+      show_id: op.data.show_id ?? null,
+      clock_id: op.data.clock_id ?? null,
+    });
+  }
+  return result;
+}
+
 // ─── Rundown content helpers ──────────────────────────────────────────────────
 
 type ContentEntry = { id: number; playlist_id: number | null; playlist_name: string | null };
@@ -294,6 +344,15 @@ export function SchedulePage() {
   const { data: shows = [] }           = useQuery({ queryKey: ['shows'],            queryFn: fetchShows });
   const { data: clocks = [] }          = useQuery({ queryKey: ['clocks'],           queryFn: fetchClocks });
 
+  // Staged template edits (Decision 55) — squash-map of not-yet-applied ops,
+  // merged with the server rows for rendering/drag/overlap purposes.
+  const [pendingTemplateOps, setPendingTemplateOps] = useState<Map<number, TemplatePendingOp>>(() => new Map());
+  const effectiveTemplateEntries = useMemo(
+    () => applyTemplatePendingOps(templateEntries, pendingTemplateOps),
+    [templateEntries, pendingTemplateOps],
+  );
+  const [templateSaveStatus, setTemplateSaveStatus] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
+
   const activeShows = shows;
   const showMap     = useMemo(() => new Map(shows.map((s) => [s.id, s])), [shows]);
   const clockMap    = useMemo(() => new Map(clocks.map((c) => [c.id, c])), [clocks]);
@@ -335,20 +394,66 @@ export function SchedulePage() {
       ? (err.body as { error: string }).error
       : 'An unexpected error occurred';
 
-  // Template mutations
+  // Template staged editing (Decision 55)
   const invalidateTemplate = () => qc.invalidateQueries({ queryKey: ['template-entries'] });
-  const createMutation = useMutation({
-    mutationFn: createTemplateEntry,
-    onSuccess: () => { invalidateTemplate(); dismiss(); },
-    onError: (err) => setScheduleError(extractApiError(err)),
+
+  const stageTemplateCreate = (data: TemplateEntryCreate) => {
+    const tempId = newTempId();
+    setPendingTemplateOps((prev) => {
+      const next = new Map(prev);
+      next.set(tempId, { kind: 'create', tempId, data });
+      return next;
+    });
+  };
+
+  const stageTemplateUpdate = (id: number, patch: TemplateEntryPatch) => {
+    setPendingTemplateOps((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(id);
+      if (existing?.kind === 'create') {
+        next.set(id, { kind: 'create', tempId: existing.tempId, data: mergeCreateData(existing.data, patch) });
+      } else if (existing?.kind === 'update') {
+        next.set(id, { kind: 'update', id, patch: { ...existing.patch, ...patch } });
+      } else {
+        next.set(id, { kind: 'update', id, patch });
+      }
+      return next;
+    });
+  };
+
+  const stageTemplateDelete = (id: number) => {
+    setPendingTemplateOps((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(id);
+      if (existing?.kind === 'create') {
+        next.delete(id); // never persisted — just drop the pending create
+      } else {
+        next.set(id, { kind: 'delete', id });
+      }
+      return next;
+    });
+  };
+
+  const applyTemplateBatchMutation = useMutation({
+    mutationFn: (ops: TemplateEntryBatchOp[]) => batchTemplateEntries(ops),
+    onSuccess: () => {
+      setPendingTemplateOps(new Map());
+      invalidateTemplate();
+      setTemplateSaveStatus({ type: 'success', message: 'Template changes applied' });
+      setTimeout(() => setTemplateSaveStatus(null), 3000);
+    },
+    onError: (err) => setTemplateSaveStatus({ type: 'error', message: extractApiError(err) }),
   });
-  const updateMutation = useMutation({
-    mutationFn: ({ id, patch }: { id: number; patch: Parameters<typeof updateTemplateEntry>[1] }) =>
-      updateTemplateEntry(id, patch),
-    onSuccess: invalidateTemplate,
-    onError: (err) => setScheduleError(extractApiError(err)),
-  });
-  const deleteMutation = useMutation({ mutationFn: deleteTemplateEntry, onSuccess: invalidateTemplate });
+
+  const applyTemplateChanges = () => {
+    if (pendingTemplateOps.size === 0) return;
+    applyTemplateBatchMutation.mutate(Array.from(pendingTemplateOps.values()));
+  };
+
+  const discardTemplateChanges = () => {
+    setPendingTemplateOps(new Map());
+    setTemplateSaveStatus(null);
+  };
 
   // Calendar mutations
   const invalidateCal = () => qc.invalidateQueries({ queryKey: ['calendar-entries'] });
@@ -420,7 +525,7 @@ export function SchedulePage() {
     const computeSiblings = (targetDay: number): DragSibling[] => {
       const excludeId = initial.entry.id;
       if (mode === 'template') {
-        return templateEntries
+        return effectiveTemplateEntries
           .filter((e) => e.day_of_week === targetDay && e.id !== excludeId)
           .map(toSibling);
       }
@@ -534,14 +639,14 @@ export function SchedulePage() {
       if (drag.isCopy) {
         if (drag.entryKind === 'template') {
           const e = drag.entry as TemplateEntry;
-          createMutation.mutate({ day_of_week: tDay, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null });
+          stageTemplateCreate({ day_of_week: tDay, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null });
         } else {
           const e = drag.entry as TemplateEntry | CalendarEntry;
           calCreateMutation.mutate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
         }
       } else if (drag.entryKind === 'template') {
         const e = drag.entry as TemplateEntry;
-        updateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, day_of_week: tDay } });
+        stageTemplateUpdate(e.id, { time_start: newStart, time_end: newEnd, day_of_week: tDay });
       } else if (drag.entryKind === 'calendar') {
         const e = drag.entry as CalendarEntry;
         calUpdateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, date: tDate, is_override: true } });
@@ -564,6 +669,13 @@ export function SchedulePage() {
     if (main) main.scrollTop = Math.max(0, currentTop - HOUR_HEIGHT * 3);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (pendingTemplateOps.size === 0) return;
+    const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', handler);
+    return () => window.removeEventListener('beforeunload', handler);
+  }, [pendingTemplateOps]);
 
   const [scheduleError, setScheduleError] = useState<string | null>(null);
 
@@ -589,7 +701,15 @@ export function SchedulePage() {
           {(['template', 'calendar', 'intervals'] as Mode[]).map((m) => (
             <button
               key={m}
-              onClick={(e) => { e.stopPropagation(); setMode(m); dismiss(); }}
+              onClick={(e) => {
+                e.stopPropagation();
+                if (mode === 'template' && m !== 'template' && pendingTemplateOps.size > 0) {
+                  if (!window.confirm('You have unsaved template changes. Switching views will discard them. Continue?')) return;
+                  setPendingTemplateOps(new Map());
+                }
+                setMode(m);
+                dismiss();
+              }}
               className={`px-3 py-1.5 text-xs font-medium capitalize transition-colors ${
                 mode === m ? 'bg-zinc-700 text-white' : 'text-zinc-400 hover:text-zinc-200 bg-zinc-900'
               }`}
@@ -623,6 +743,29 @@ export function SchedulePage() {
             <CalendarRange className="w-3.5 h-3.5" />
             Run template
           </button>
+        )}
+
+        {/* Staged template edits — Apply/Discard (Decision 55) */}
+        {mode === 'template' && pendingTemplateOps.size > 0 && (
+          <div className="flex items-center gap-2 ml-auto" onClick={(e) => e.stopPropagation()}>
+            <span className="text-xs text-amber-400">
+              {pendingTemplateOps.size} pending change{pendingTemplateOps.size !== 1 ? 's' : ''}
+            </span>
+            <button
+              onClick={discardTemplateChanges}
+              disabled={applyTemplateBatchMutation.isPending}
+              className="px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded-lg transition-colors disabled:opacity-50"
+            >
+              Discard
+            </button>
+            <button
+              onClick={applyTemplateChanges}
+              disabled={applyTemplateBatchMutation.isPending}
+              className="px-3 py-1.5 text-xs font-medium bg-brand-600 hover:bg-brand-500 text-white rounded-lg transition-colors disabled:opacity-50"
+            >
+              {applyTemplateBatchMutation.isPending ? 'Applying…' : 'Apply'}
+            </button>
+          </div>
         )}
 
         {/* Week navigation — calendar mode only */}
@@ -675,6 +818,10 @@ export function SchedulePage() {
           </>
         )}
       </div>
+
+      {mode === 'template' && templateSaveStatus && (
+        <SaveStatus status={templateSaveStatus} onDismiss={() => setTemplateSaveStatus(null)} />
+      )}
 
       {/* ── Run-template panel ── */}
       {mode === 'template' && showApplyPanel && (
@@ -818,7 +965,7 @@ export function SchedulePage() {
                   return (
                     <DayColumn
                       key={i}
-                      entries={templateEntries.filter((e) => e.day_of_week === dayOfWeek)}
+                      entries={effectiveTemplateEntries.filter((e) => e.day_of_week === dayOfWeek)}
                       showMap={showMap}
                       clockMap={clockMap}
                       isToday={checkToday(day)}
@@ -889,17 +1036,17 @@ export function SchedulePage() {
           x={newSlot.x}
           y={newSlot.y}
           error={scheduleError}
-          isPending={createMutation.isPending}
           onClose={dismiss}
           onSave={(showId, clockId, timeStart, timeEnd) => {
             setScheduleError(null);
-            createMutation.mutate({
+            stageTemplateCreate({
               day_of_week: newSlot.dayOfWeek,
               time_start: timeStart,
               time_end: timeEnd,
               show_id: showId,
               clock_id: clockId,
             });
+            dismiss();
           }}
         />
       )}
@@ -913,9 +1060,9 @@ export function SchedulePage() {
           x={editSlot.x}
           y={editSlot.y}
           onClose={dismiss}
-          onRemove={() => { deleteMutation.mutate(editSlot.entry.id); dismiss(); }}
+          onRemove={() => { stageTemplateDelete(editSlot.entry.id); dismiss(); }}
           onChange={(showId, clockId) => {
-            updateMutation.mutate({ id: editSlot.entry.id, patch: { show_id: showId, clock_id: clockId } });
+            stageTemplateUpdate(editSlot.entry.id, { show_id: showId, clock_id: clockId });
             dismiss();
           }}
         />
