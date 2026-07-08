@@ -286,18 +286,7 @@ export class SupervisorProcess {
       this.isPaused = row.paused ?? false;
 
       if (this.activePlanId != null) {
-        // Reset any 'playing' items to 'pending' — across a restart we have no
-        // idea what LiquidSoap was actually playing. Leaving them as 'playing'
-        // causes computePlanPlayhead to read their stale play_history.started_at
-        // (hours old), producing a massive negative drift that triggers a
-        // runaway loop on every tick.
-        await this.db
-          .update(planItemsTable)
-          .set({ status: 'pending' })
-          .where(and(
-            eq(planItemsTable.plan_id, this.activePlanId),
-            eq(planItemsTable.status, 'playing'),
-          ));
+        await this.reconstructOrResetPlayingItem(this.activePlanId, row.current_play_history_id ?? null, row.last_heartbeat_at ?? null);
 
         const items = await this.db
           .select({ status: planItemsTable.status, planned_duration_seconds: planItemsTable.planned_duration_seconds })
@@ -318,6 +307,63 @@ export class SupervisorProcess {
     } catch (err) {
       this.logger?.error({ err, process: 'supervisor', event: 'HYDRATE_FAILED' }, 'supervisor: failed to hydrate state from DB');
     }
+  }
+
+  // Restart continuation (Decision 59). Across a restart we previously had no
+  // idea what LiquidSoap was actually playing, so every 'playing' plan_item
+  // got blind-reset to 'pending' — even one that was legitimately mid-air,
+  // which then got pushed and re-played from the top once the queue feeder
+  // caught up. Reconstruct instead, using the persisted current_play_history_id
+  // pointer, bounded against the last heartbeat the dead process wrote so a
+  // stale/implausible pointer still falls back to the old reset behavior.
+  private async reconstructOrResetPlayingItem(
+    activePlanId: number,
+    currentPlayHistoryId: number | null,
+    lastHeartbeatAt: number | null,
+  ): Promise<void> {
+    const playingItems = await this.db
+      .select({ id: planItemsTable.id, play_history_id: planItemsTable.play_history_id, planned_duration_seconds: planItemsTable.planned_duration_seconds })
+      .from(planItemsTable)
+      .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')));
+
+    if (
+      playingItems.length === 1 &&
+      currentPlayHistoryId != null &&
+      playingItems[0].play_history_id === currentPlayHistoryId &&
+      lastHeartbeatAt != null
+    ) {
+      const [ph] = await this.db
+        .select({ started_at: playHistoryTable.started_at })
+        .from(playHistoryTable)
+        .where(eq(playHistoryTable.id, currentPlayHistoryId));
+      const startedAtMs = ph?.started_at ? new Date(ph.started_at).getTime() : null;
+      // Plausible only if the item actually started before the process died —
+      // otherwise this is exactly the stale-pointer scenario the old blind
+      // reset was built to guard against.
+      if (startedAtMs != null && startedAtMs <= lastHeartbeatAt) {
+        const expectedEndMs = startedAtMs + (playingItems[0].planned_duration_seconds ?? 0) * 1_000;
+        if (expectedEndMs <= Date.now()) {
+          // Aired to completion during the downtime — close it out rather
+          // than leaving it 'playing' (which would look never-started) or
+          // resetting it to 'pending' (which would re-push and replay it).
+          await this.db.update(planItemsTable).set({ status: 'played' }).where(eq(planItemsTable.id, playingItems[0].id));
+          await this.db.update(playHistoryTable).set({ ended_at: new Date(expectedEndMs) }).where(eq(playHistoryTable.id, currentPlayHistoryId));
+          await this.setCurrentPlayHistoryId(null);
+        } else {
+          // Still legitimately playing — leave status='playing' as-is.
+          // computePlanPlayhead already reads play_history.started_at for
+          // 'playing' items, so normal playhead/drift math continues unchanged.
+          this.currentPlayHistoryId = currentPlayHistoryId;
+        }
+        return;
+      }
+    }
+
+    // No trustworthy reconstruction — fall back to the original behavior.
+    await this.db
+      .update(planItemsTable)
+      .set({ status: 'pending' })
+      .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')));
   }
 
   // ─── Clock loop ─────────────────────────────────────────────────────────────
@@ -851,10 +897,10 @@ export class SupervisorProcess {
       } catch (err) {
         this.logger?.error({ err, process: 'supervisor', event: 'PLAY_HISTORY_STAMP_FAILED', play_history_id: currentPhid }, 'supervisor: failed to stamp/close play_history');
       }
-      this.currentPlayHistoryId = currentPhid;
+      await this.setCurrentPlayHistoryId(currentPhid);
     } else {
       const closed = await closeMostRecentOpenRow(this.db, onAirMs).catch(() => null);
-      this.currentPlayHistoryId = null;
+      await this.setCurrentPlayHistoryId(null);
       if (closed != null) {
         await this.db.update(planItemsTable)
           .set({ status: 'played' })
@@ -1616,6 +1662,16 @@ export class SupervisorProcess {
   private async updateHeartbeat(nowMs: number): Promise<void> {
     await this.db.update(supervisorStateTable)
       .set({ last_heartbeat_at: nowMs })
+      .where(eq(supervisorStateTable.id, 1));
+  }
+
+  // Mirrors the in-memory "what's playing right now" pointer to supervisor_state
+  // so a restart can reconstruct it (Decision 59) instead of blind-resetting
+  // every 'playing' plan_item to 'pending' in hydrateFromDb.
+  private async setCurrentPlayHistoryId(id: number | null): Promise<void> {
+    this.currentPlayHistoryId = id;
+    await this.db.update(supervisorStateTable)
+      .set({ current_play_history_id: id })
       .where(eq(supervisorStateTable.id, 1));
   }
 }

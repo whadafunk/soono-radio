@@ -1226,6 +1226,10 @@ export const supervisorState = sqliteTable('supervisor_state', {
   intentional_offset_seconds: real('intentional_offset_seconds').notNull().default(0),
   planned_overshoot_seconds: real('planned_overshoot_seconds').notNull().default(0),
   boundary_drift_seconds: real('boundary_drift_seconds'),
+  // What's playing right now, mirrored from the in-memory pointer whenever it
+  // changes (handleTrackStarted) so a restart can reconstruct instead of
+  // blind-resetting 'playing' plan_items to 'pending'. Decision 59.
+  current_play_history_id: integer('current_play_history_id').references(() => playHistory.id, { onDelete: 'set null' }),
 });
 
 export type SupervisorStateRow = typeof supervisorState.$inferSelect;
