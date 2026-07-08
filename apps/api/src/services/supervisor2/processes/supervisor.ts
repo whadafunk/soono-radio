@@ -669,6 +669,14 @@ export class SupervisorProcess {
     return row != null;
   }
 
+  private async sumPendingSeconds(planId: number): Promise<number> {
+    const items = await this.db
+      .select({ planned_duration_seconds: planItemsTable.planned_duration_seconds })
+      .from(planItemsTable)
+      .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
+    return items.reduce((sum, it) => sum + (it.planned_duration_seconds ?? 0), 0);
+  }
+
   // ─── Hard-start gate ─────────────────────────────────────────────────────────
   //
   // Checked every tick. Only active when next segment has hard start_policy.
@@ -1239,6 +1247,14 @@ export class SupervisorProcess {
       if (this.finalizationRequestedForPlanId !== best.id) {
         this.finalizationRequestedForPlanId = best.id;
         const requestId = randomUUID();
+        // adjusted_target_seconds must reflect what's actually planned, not a
+        // placeholder — finalizePlan's reassembly trigger now also fires on
+        // |pendingContent - adjustedTarget|, so a literal 0 here reads as "no
+        // content wanted at all" and wipes the plan. Confirmed live
+        // 2026-07-04: a real 757s draft got reassembled down to 0 items this
+        // way. Passing the plan's own current content as the target tells
+        // both trigger conditions "no gap, just finalize as-is."
+        const currentContentSeconds = await this.sumPendingSeconds(best.id);
         this.logger?.info({
           process: 'supervisor', event: 'PLAN_FINALIZE_REQUESTED',
           plan_id: best.id, request_id: requestId, reconcile: true,
@@ -1248,7 +1264,7 @@ export class SupervisorProcess {
           request_id: requestId,
           plan_id: best.id,
           now_ms: nowMs,
-          adjusted_target_seconds: 0,
+          adjusted_target_seconds: currentContentSeconds,
           drift_delta_seconds: 0,
           current_drift_seconds: 0,
         });
@@ -1358,6 +1374,11 @@ export class SupervisorProcess {
       this.coldStartFinalizeSent = true;
       this.finalizationRequestedForPlanId = msg.plan_id;
       const requestId = randomUUID();
+      // See the matching comment in reconcileOccurrence: adjusted_target_seconds
+      // must reflect the plan's actual content, not a 0 placeholder, now that
+      // finalizePlan's reassembly trigger also fires on the content-vs-target
+      // gap — a literal 0 would wipe a real cold-start draft's content.
+      const currentContentSeconds = await this.sumPendingSeconds(msg.plan_id);
       this.logger?.info({
         process: 'supervisor', event: 'PLAN_FINALIZE_REQUESTED',
         plan_id: msg.plan_id, request_id: requestId, cold_start: true,
@@ -1367,7 +1388,7 @@ export class SupervisorProcess {
         request_id: requestId,
         plan_id: msg.plan_id,
         now_ms: Date.now(),
-        adjusted_target_seconds: 0,
+        adjusted_target_seconds: currentContentSeconds,
         drift_delta_seconds: 0,
         current_drift_seconds: 0,
       });
