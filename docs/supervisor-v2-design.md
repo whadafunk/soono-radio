@@ -1726,6 +1726,134 @@ The supervisor logs `PLAN_ACTIVATED` with `planned_overshoot_seconds` and `bound
 
 ---
 
+## Resilience under live schedule changes and restarts
+
+Prompted by a live incident (2026-07-04): editing a scheduled clock's segments (a playlist-only change) cascade-deleted the active plan and produced ~7 minutes of dead air, because `PUT /clocks/:id/segments` deletes and recreates every segment row on the clock regardless of what actually changed, and `plans.segment_id → clock_segments.id` is `ON DELETE CASCADE`. Recovering it surfaced a second, independent gap: the tick loop's per-segment cache is time-based only and has no way to notice a schedule mutation invalidated what it's tracking. This section documents the resulting design for making schedule mutations, restarts, and recovery actions safe by construction rather than by luck.
+
+### Decision 52 — Segment identity is stable; segments are never implicitly deleted or reissued
+
+**Status: decided — 2026-07-08**
+
+`clock_segments.id` is not just a row key — it's the identity that every hourly occurrence of that segment pins to for as long as the clock is scheduled (`plans.segment_id`, `stop_set_estimates.segment_id`, `play_history.clock_segment_id`, `supervisor_state.current_segment_id`, and `resolution_identity`, Decision 58). `PUT /clocks/:id/segments` currently treats every save as delete-all-and-recreate-all, so even a pure content edit (e.g. changing which playlist feeds a segment) reissues fresh ids for every segment on the clock — which cascades into deleting the live plan for whichever segment happens to be currently airing.
+
+**New rule:** a segment is only ever removed by an explicit, per-segment operator delete action — never inferred from the save payload being shorter than what's stored. The segment structure lock (count/order/type/duration frozen while the clock is scheduled — already enforced server-side in `routes/clocks.ts`) is unaffected; this decision is about how the edits that *are* allowed (content/source changes) get persisted.
+
+**Implementation implication:** `PUT /clocks/:id/segments` moves from delete+recreate to a per-row upsert matched by id — `UPDATE` existing rows in place (preserving `id`), `INSERT` only for genuinely new segments, and `DELETE` only ever driven by an explicit `DELETE /clocks/:id/segments/:segmentId` call. Deleting a segment that's currently live (has an active plan) is still destructive by nature — that's an accepted, operator-intentional consequence of an explicit delete, not something to design around.
+
+---
+
+### Decision 53 — Default clock: mandatory station-wide fallback, resolved as a fourth priority tier
+
+**Status: decided — 2026-07-08**
+
+`resolveCurrentSegment` (`clockResolver.ts`) resolves in priority order: calendar entry → template clock entry → template entry → (today) `null`, which means silence whenever nothing covers the current moment. A prior attempt at a fallback chain (`shows.extension_policy`, `supervisor_config.silence_gap_tolerance_s`) was abandoned mid-way and left as dead schema fields.
+
+**New rule:** add a single station-wide `default_clock_id` (on `station_settings`, the existing global singleton row). When no calendar entry, template clock entry, or template entry covers the current moment, resolve against the default clock as a fourth tier — using the *same* `resolveSegmentWithinClock` helper the other three tiers already use. This means the default clock resets to its first segment at the top of every wall-clock hour and loops within the hour exactly like any other clock, with no new "when did the gap start" bookkeeping required.
+
+**Explicitly out of scope:** no further fallback beneath the default clock (no default playlist, no "any song in the library"). The supervisor requires a default clock to be configured; that configuration is a startup precondition, not something to design a fallback-of-a-fallback for.
+
+**Escaping fallback requires no special-case logic.** Because `resolveCurrentSegment` re-evaluates the entire priority cascade from scratch on every call, "am I still in fallback" is never a flag that needs setting or clearing — it's just whichever tier wins on the next resolution. A template run that fills a gap is picked up the moment reconcile runs again (Decision 54): the cascade finds a `template` match before it ever reaches tier four, and `resolution_identity`'s `source_type` naturally flips from `default` to `template`.
+
+---
+
+### Decision 54 — Reconcile is triggered automatically by schedule-affecting mutations
+
+**Status: decided — 2026-07-08**
+
+`reconcile()` already exists and is cheap, idempotent, and safe to call repeatedly (re-derives truth from the DB each time; see Decision 57 for how it decides whether to disturb what's already running). Today it only runs at process startup and via the manual `align-to-wall-clock` operator action (Decision 56). The live incident happened because nothing told it to run when a clock's segments changed out from under it.
+
+**New rule:** emit `RECONCILE_REQUESTED` automatically from every mutation that can change *what* resolves for the current moment:
+- Clock segment save/delete (Decision 52)
+- Calendar entry create/update/delete, applied in batch (Decision 55)
+- Template entry create/update/delete, applied in batch (Decision 55)
+- Template run, once after the whole batch commits — not once per row
+- A show's `default_clock_id` reassignment (changes which clock a template/calendar row without an explicit `clock_id` resolves to)
+
+**Explicitly excluded — do not trigger reconcile:** playlist assignment, media library content, rotation config, sweeper config, campaign/interval config, rundown content. These affect *what a plan is built from*, not *which segment resolves* — per Decision 23 (already decided), they're picked up automatically by the next `PLAN_DRAFT_REQUESTED` because content processes (confirmed for `MusicProcess`) query the DB live on every request, with no caching layer. No supervisor notification needed for this category; this decision reaffirms Decision 23 rather than superseding it.
+
+**UI note:** surface a passive hint near content-editing screens ("changes apply to the next plan; use Reconcile Clock to pick them up immediately") rather than triggering reconcile for a category that doesn't need it.
+
+---
+
+### Decision 55 — Calendar/template edits are staged and applied as a batch
+
+**Status: decided — 2026-07-08**
+
+Calendar and template entries have no save boundary today — `PATCH /calendar-entries/:id` and `PATCH /template-entries/:id` (and the corresponding inserts/deletes) each take effect immediately, one row at a time. Reconciling after every single row edit during a multi-step editing session would be correct but noisy — and for the bulk template-run path (`schedule.ts`, delete + batched insert of calendar entries for a date range), reconciling per-row would mean dozens of redundant reconcile passes mid-batch.
+
+**New rule:** calendar/template editing sessions are staged and committed via an explicit Apply action, which commits the batch in one transaction and fires exactly one `RECONCILE_REQUESTED` afterward. Template run already performs its materialization as a batch operation — it gets the same treatment: one reconcile call after the batch commits, not one per row.
+
+**Why this is safe to be relatively relaxed about:** per Decision 57, reconcile only disturbs anything if the active plan's `resolution_identity` no longer matches a fresh resolve. Most calendar/template edits don't touch the *currently airing* occurrence, so the vast majority of Apply-triggered reconciles will simply confirm nothing needs to change.
+
+**Confirmed unaffected by this decision:** single-row `PATCH` operations on `calendar_entries`/`template_entries` already preserve row id (verified in `routes/schedule.ts`) — this decision is about *when* reconcile fires relative to a batch of edits, not about how those edits are persisted.
+
+---
+
+### Decision 56 — Two recovery actions: Reconcile (safe) and Align to Clock (forceful, forward-only)
+
+**Status: decided — 2026-07-08**
+
+The existing `POST /supervisor/v2/align-to-wall-clock` endpoint just emits `RECONCILE_REQUESTED` — it's already `reconcile()`, not a distinct forceful mechanism. That's fine for the "something might be stale, double check" case, but there's a genuinely different, more destructive action operators need: "I know the active plan is wrong or unwanted, throw it away and rebuild from wall clock right now."
+
+**New rule — two distinct actions:**
+- **Reconcile** (rename the existing endpoint's UI label from "align to wall clock"): safe, non-disruptive, respects the trust criteria in Decision 57. Suitable to fire automatically (Decision 54) and to expose as a low-stakes manual button.
+- **Align to Clock**: explicitly invalidates the current active plan first (transitions its `plans.status` away from `active` — see the data-hygiene note below), then runs reconcile, which is thereby forced into a full wall-clock rebuild regardless of what the trust check would otherwise have concluded.
+
+**Align to Clock is forward-only.** If the plan is currently *behind* wall clock, forcing it forward means skipping whatever content sits between the plan's position and true wall-clock-now — that's an accepted, deliberate trade-off for an explicit operator action (accepting some content won't air, in exchange for being back in sync). But if the plan is currently *ahead* of wall clock (see Decision 57 — this is a legitimate, self-inflicted state, e.g. from heavy operator skipping), Align to Clock must **not** force a backward jump: whatever aired while ahead is already logically consumed (items marked played/skipped, pacing counters advanced), and reactivating an earlier segment's plan would immediately recreate a behind-schedule condition, achieving nothing. When wall-clock resolution would place the station at or behind where the active plan already is, Align to Clock is a no-op.
+
+**Identified but deferred — a third action, "Reset to Fallback":** for the specific case of "the plan is far ahead and the operator wants to stop it without rewinding," dropping into the default-clock fallback (Decision 53) until wall-clock naturally catches up to where calendar/template resolution continues is a plausible clean answer — no rewind, no waiting out arbitrary ahead-content. Not designed in detail; revisit as its own decision when needed.
+
+**Data-hygiene note surfaced while designing this:** `activatePlanById` currently never transitions the *previous* active plan's status away from `'active'` on handover — it just moves the pointer. This hasn't caused incorrect behavior (`reconcileOccurrence` breaks ties by highest plan id), but Align to Clock's "invalidate" step will be the first code to explicitly retire a plan, which is a good opportunity to also close this gap generally (e.g. transition the previous plan to `completed` at every handover, not just at Align to Clock time).
+
+---
+
+### Decision 57 — Active-plan trust criteria for reconcile
+
+**Status: decided — 2026-07-08**
+
+`reconcile()` already uses a hybrid, not a blind "always align to wall clock": if `activePlanId` refers to a plan that is `status='active'` and belongs to the same `clock_instance_started_at` as a fresh resolve, it's trusted completely — reconcile won't touch it regardless of which segment wall-clock resolution alone would pick. This exists specifically because an earlier, always-align version of reconcile forced activation back to the wall-clock-resolved segment and undid a correct organic early handoff (confirmed live 2026-05-2X/06-XX regression, documented in the existing code comment) — this is not a hypothetical risk, it's a bug that shipped and got reverted once already. Always-aligning is rejected as a simplification for that reason.
+
+**Gap found while reviewing this:** the trust check only compares plan id and clock instance — it does not check whether the trusted plan has any content left. An exhausted-but-still-`'active'`-status plan (e.g. reconcile runs in the brief window after the last item finished but before `handleExhaustedPlan` catches up on the next tick) is currently trusted and left untouched, meaning reconcile can silently do nothing during a genuine gap.
+
+**Refined trust criteria — a plan is trusted (left alone) only if all of:**
+1. `status='active'` and same `clock_instance_started_at` (existing check, unchanged)
+2. The calendar/template slot that produced it still resolves to the same `resolution_identity` (Decision 58)
+3. It has at least one `pending`/`playing` item left (new)
+4. Remaining runway is worth preserving — reuse `RUNWAY_WORTH_IT_THRESHOLD_S` (300s) symmetrically with how `reconcileNext` already gates early cutover for the *next* segment (new)
+
+**Explicitly not a disqualifying condition: being behind wall clock.** A plan behind schedule should be trusted exactly the same as one that's ahead — soft reconcile must never invalidate a behind plan and skip forward to catch up, because that discards whatever content sits in the skipped segments (ad inventory, promos, anything with pacing commitments). Catching up from behind is the job of the existing drift-recovery machinery (gradual, one segment at a time via the normal exhausted-plan handoff), not something reconcile should short-circuit. Skipping ahead to close a gap is reserved for the explicit Align to Clock action (Decision 56), where the operator is knowingly accepting that trade-off.
+
+**Explicitly not a disqualifying condition: being ahead of wall clock**, for the same reason organic early handoff is protected today — being ahead because of a validated, legitimate handoff (or heavy operator skipping) is a real, accepted state, not an error to correct.
+
+---
+
+### Decision 58 — `resolution_identity` is sufficient to detect a reconfigured schedule slot
+
+**Status: decided — 2026-07-08**
+
+No new synthetic version/uniqueness stamp is needed. `computeResolutionIdentity` (`source_type:source_id:segment_id:clock_instance_started_at`) already changes exactly when something structurally meaningful happens — a different calendar/template row wins resolution priority, or the resolved segment changes — **provided** the rows it's built from don't reissue identity for edits that aren't structurally meaningful:
+
+- Individual `calendar_entries`/`template_entries` edits already satisfy this — confirmed they're `PATCH`-by-id in `routes/schedule.ts`, not delete+recreate.
+- `clock_segments` did not satisfy this before Decision 52; it does once segment saves preserve row id for content-only edits.
+- The bulk template-run materialization path legitimately reissues fresh `calendar_entries` ids for the affected date range — correct, since a template run genuinely replaces the schedule for that period rather than editing it in place. This is exactly the case Decision 55 already covers with a single post-batch reconcile.
+
+---
+
+### Decision 59 — Plan continuation across a restart: persist the current play-history pointer, reconstruct instead of blind-resetting
+
+**Status: decided — 2026-07-08**
+
+`handleTrackStarted` durably stamps `play_history.started_at` for every track that starts, linked back via `plan_items.play_history_id` — "what played and exactly when" is already captured permanently. What is *not* persisted is `this.currentPlayHistoryId`, the in-memory pointer to "what's playing right now" — there's no corresponding column on `supervisor_state`. Because of that, `hydrateFromDb()` has no durable, authoritative pointer to recover on restart, and defensively resets any `plan_items.status='playing'` row straight to `'pending'` — a documented, deliberate choice made after an earlier bug where trusting a stale `started_at` produced "a massive negative drift that triggers a runaway loop on every tick." That reset is also the likely mechanism behind observed duplicate-play symptoms after a restart (multiple `play_history` rows logged for the same `plan_item_id` during a boot-time retry storm, 2026-07-04) — resetting to `pending` means whatever was already legitimately airing gets pushed and played again.
+
+**New approach:**
+1. Persist `current_play_history_id` on `supervisor_state`, written in the same place `this.currentPlayHistoryId` is set today (`handleTrackStarted`).
+2. On restart, `hydrateFromDb` reconstructs instead of blind-resetting: read the pointed-to item's `started_at`, and bound trust in it against the last recorded heartbeat before the process died (this bounds how long the actual outage plausibly was, guarding against the original stale-data failure mode that motivated the reset).
+   - If plausible and the item's expected end time has already passed by now → mark it `played` (assume it aired to completion during the downtime — the safer default, avoids a duplicate re-push).
+   - If plausible and not yet elapsed → treat it as still legitimately `playing`; normal playhead math continues unchanged.
+   - If the timestamp looks implausible (protects the original bug this reset was built to prevent) → fall back to today's reset-to-`pending` behavior.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
