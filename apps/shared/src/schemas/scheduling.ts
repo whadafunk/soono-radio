@@ -136,6 +136,10 @@ export const ClockSegmentSchema = z.object({
 export type ClockSegment = z.infer<typeof ClockSegmentSchema>;
 
 export const ClockSegmentCreateSchema = z.object({
+  // Present for an existing segment being edited (positive, matches a real row);
+  // absent or a client-side negative temp id for a not-yet-persisted segment.
+  // Drives PUT /clocks/:id/segments' upsert-by-id — see Decision 52.
+  id: z.number().int().optional(),
   name: z.string().min(1, 'Name is required'),
   type: z.enum(CLOCK_SEGMENT_TYPES),
   duration_seconds: z.number().int().positive('Duration must be at least 1 second'),

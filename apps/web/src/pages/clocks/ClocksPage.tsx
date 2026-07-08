@@ -52,6 +52,7 @@ import {
   updateClock,
   deleteClock,
   replaceClockSegments,
+  deleteClockSegment,
   fetchPlaylists,
   fetchRotations,
   fetchSupervisorConfig,
@@ -423,10 +424,23 @@ export function ClocksPage() {
     setExpandedId(newSeg.id);
   };
 
+  const deleteSegMutation = useMutation({
+    mutationFn: (segmentId: number) => deleteClockSegment(draftClock!.id, segmentId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['clocks'] });
+      queryClient.invalidateQueries({ queryKey: ['clock-segments', selectedId] });
+    },
+    onError: (e) => showSaveStatus('error', (e as Error).message),
+  });
+
+  // Deleting an already-persisted segment is immediate and explicit (Decision
+  // 52) — it is never inferred later from the segment being absent on Save.
+  // A not-yet-saved segment (negative temp id) only ever existed locally.
   const deleteSeg = (id: number) => {
     setDraftSegs((prev) => prev.filter((s) => s.id !== id));
     if (expandedId === id) setExpandedId(null);
     setSegsDirty(true);
+    if (id > 0 && draftClock) deleteSegMutation.mutate(id);
   };
 
   const reorderSegs = (oldIndex: number, newIndex: number) => {

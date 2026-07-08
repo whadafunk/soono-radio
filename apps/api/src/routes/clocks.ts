@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, asc, sql, inArray } from 'drizzle-orm';
+import { eq, and, asc, sql, inArray } from 'drizzle-orm';
 import { z } from 'zod';
 import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@soono/shared';
 import { db } from '../db/index.js';
@@ -13,6 +13,19 @@ const usedExpr = sql<number>`(
     (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${clocks.id}) +
     (SELECT COUNT(*) FROM ${calendarEntries} WHERE ${calendarEntries.clock_id} = ${clocks.id})
 )`;
+
+// A clock's segment count/order/type/duration is frozen once it's actually
+// scheduled (calendar/template) — show assignment alone doesn't lock it.
+async function getClockUsageCount(id: number): Promise<number> {
+  const [row] = await db.select({
+    usageCount: sql<number>`(
+      (SELECT COUNT(*) FROM ${calendarEntries}      WHERE ${calendarEntries.clock_id}      = ${id}) +
+      (SELECT COUNT(*) FROM ${templateEntries}      WHERE ${templateEntries.clock_id}      = ${id}) +
+      (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${id})
+    )`,
+  }).from(clocks).where(eq(clocks.id, id));
+  return row?.usageCount ?? 0;
+}
 
 export async function clockRoutes(fastify: FastifyInstance) {
   fastify.get('/clocks', async (_req, reply) => {
@@ -193,29 +206,28 @@ export async function clockRoutes(fastify: FastifyInstance) {
 
     const parsed = z.array(ClockSegmentCreateSchema).safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const incoming = parsed.data;
+
+    const existing = await db.select().from(clockSegments)
+      .where(eq(clockSegments.clock_id, id)).orderBy(asc(clockSegments.sort_order));
 
     // Structure lock: when a clock is actually scheduled (calendar / template),
     // its segment count, order, types, and durations are frozen — only internal
     // config changes are allowed.  Show assignment alone does NOT lock structure;
     // it is a design-time hint, not a scheduling commitment.
-    const [lockRow] = await db.select({
-      usageCount: sql<number>`(
-        (SELECT COUNT(*) FROM ${calendarEntries}      WHERE ${calendarEntries.clock_id}      = ${id}) +
-        (SELECT COUNT(*) FROM ${templateEntries}      WHERE ${templateEntries.clock_id}      = ${id}) +
-        (SELECT COUNT(*) FROM ${templateClockEntries} WHERE ${templateClockEntries.clock_id} = ${id})
-      )`,
-    }).from(clocks).where(eq(clocks.id, id));
-
-    if (lockRow.usageCount > 0) {
-      const existing = await db.select().from(clockSegments)
-        .where(eq(clockSegments.clock_id, id)).orderBy(asc(clockSegments.sort_order));
-      const incoming = parsed.data;
+    const usageCount = await getClockUsageCount(id);
+    if (usageCount > 0) {
       if (existing.length !== incoming.length) {
         return reply.status(409).send({
           error: 'Clock structure is locked — cannot add or remove segments while the clock is scheduled.',
         });
       }
       for (let i = 0; i < existing.length; i++) {
+        if (incoming[i].id !== existing[i].id) {
+          return reply.status(409).send({
+            error: `Clock structure is locked — segment ${i + 1} cannot be reordered while the clock is scheduled.`,
+          });
+        }
         if (existing[i].type !== incoming[i].type || existing[i].duration_seconds !== incoming[i].duration_seconds) {
           return reply.status(409).send({
             error: `Clock structure is locked — segment ${i + 1} type or duration cannot change while the clock is scheduled.`,
@@ -228,7 +240,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .select({ assignedCount: sql<number>`COUNT(*)` })
       .from(shows).where(eq(shows.default_clock_id, id));
     if (assignedCount === 0) {
-      const showModeOffenders = parsed.data
+      const showModeOffenders = incoming
         .map((s, i) => ({ s, i }))
         .filter(({ s }) =>
           s.type === 'music' &&
@@ -242,44 +254,45 @@ export async function clockRoutes(fastify: FastifyInstance) {
       }
     }
 
-    // Null out play_history references before deleting — FK lacks ON DELETE SET NULL in actual DDL
-    const segIds = await db.select({ id: clockSegments.id }).from(clockSegments).where(eq(clockSegments.clock_id, id));
-    if (segIds.length > 0) {
-      await db.update(playHistory)
-        .set({ clock_segment_id: null })
-        .where(inArray(playHistory.clock_segment_id, segIds.map((r) => r.id)));
-    }
-    await db.delete(clockSegments).where(eq(clockSegments.clock_id, id));
-    if (parsed.data.length > 0) {
-      await db.insert(clockSegments).values(
-        parsed.data.map((s, i) => ({
-          clock_id: id,
-          sort_order: i,
-          name: s.name,
-          type: s.type,
-          duration_seconds: s.duration_seconds,
-          sources: s.sources ?? [],
-          start_clip_playlist_id: s.start_clip_playlist_id ?? null,
-          end_clip_playlist_id: s.end_clip_playlist_id ?? null,
-          bed_playlist_id: s.bed_playlist_id ?? null,
-          interstitial_jingles_enabled: s.interstitial_jingles_enabled ?? false,
-          jingle_every_n_tracks: s.jingle_every_n_tracks ?? null,
-          interstitial_station_id_enabled: s.interstitial_station_id_enabled ?? false,
-          station_id_every_n_tracks: s.station_id_every_n_tracks ?? null,
-          start_policy: s.start_policy ?? { type: 'flexible', late_seconds: null, early_seconds: 0 },
-          can_skip: s.can_skip ?? false,
-          can_fill: s.can_fill ?? false,
-          can_reschedule: s.can_reschedule ?? false,
-          catching_up_order: s.catching_up_order ?? [],
-          coasting_order: s.coasting_order ?? [],
-          accept_live: s.accept_live ?? true,
-          accept_sweepers: s.accept_sweepers ?? [],
-          sweeper_config: s.sweeper_config ?? null,
-          silence_threshold_seconds: s.silence_threshold_seconds ?? null,
-          rotation_type: s.rotation_type ?? null,
-          fallback_playlist_id: s.fallback_playlist_id ?? null,
-        })),
-      );
+    // Per-row upsert matched by id (Decision 52) — never delete-and-recreate.
+    // clock_segments.id is a stable identity pinned by plans.segment_id (ON
+    // DELETE CASCADE), so reissuing ids on a content-only edit would nuke a
+    // live plan. A segment is only ever removed via the explicit
+    // DELETE /clocks/:id/segments/:segmentId route below.
+    const existingById = new Map(existing.map((s) => [s.id, s]));
+    for (let i = 0; i < incoming.length; i++) {
+      const s = incoming[i];
+      const values = {
+        sort_order: i,
+        name: s.name,
+        type: s.type,
+        duration_seconds: s.duration_seconds,
+        sources: s.sources ?? [],
+        start_clip_playlist_id: s.start_clip_playlist_id ?? null,
+        end_clip_playlist_id: s.end_clip_playlist_id ?? null,
+        bed_playlist_id: s.bed_playlist_id ?? null,
+        interstitial_jingles_enabled: s.interstitial_jingles_enabled ?? false,
+        jingle_every_n_tracks: s.jingle_every_n_tracks ?? null,
+        interstitial_station_id_enabled: s.interstitial_station_id_enabled ?? false,
+        station_id_every_n_tracks: s.station_id_every_n_tracks ?? null,
+        start_policy: s.start_policy ?? { type: 'flexible', late_seconds: null, early_seconds: 0 },
+        can_skip: s.can_skip ?? false,
+        can_fill: s.can_fill ?? false,
+        can_reschedule: s.can_reschedule ?? false,
+        catching_up_order: s.catching_up_order ?? [],
+        coasting_order: s.coasting_order ?? [],
+        accept_live: s.accept_live ?? true,
+        accept_sweepers: s.accept_sweepers ?? [],
+        sweeper_config: s.sweeper_config ?? null,
+        silence_threshold_seconds: s.silence_threshold_seconds ?? null,
+        rotation_type: s.rotation_type ?? null,
+        fallback_playlist_id: s.fallback_playlist_id ?? null,
+      };
+      if (s.id != null && existingById.has(s.id)) {
+        await db.update(clockSegments).set(values).where(eq(clockSegments.id, s.id));
+      } else {
+        await db.insert(clockSegments).values({ clock_id: id, ...values });
+      }
     }
 
     const rows = await db.select().from(clockSegments)
@@ -287,5 +300,25 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .orderBy(asc(clockSegments.sort_order));
     invalidateInventory();
     return reply.send(rows);
+  });
+
+  fastify.delete<{ Params: { id: string; segmentId: string } }>('/clocks/:id/segments/:segmentId', async (request, reply) => {
+    const id = Number(request.params.id);
+    const segmentId = Number(request.params.segmentId);
+
+    const [segment] = await db.select().from(clockSegments)
+      .where(and(eq(clockSegments.id, segmentId), eq(clockSegments.clock_id, id)));
+    if (!segment) return reply.status(404).send({ error: 'Segment not found' });
+
+    const usageCount = await getClockUsageCount(id);
+    if (usageCount > 0) {
+      return reply.status(409).send({
+        error: 'Clock structure is locked — cannot remove segments while the clock is scheduled.',
+      });
+    }
+
+    await db.delete(clockSegments).where(eq(clockSegments.id, segmentId));
+    invalidateInventory();
+    return reply.status(204).send();
   });
 }

@@ -1131,6 +1131,10 @@ export function deleteClock(id: number): Promise<void> {
   return del(`/clocks/${id}`);
 }
 
+export function deleteClockSegment(clockId: number, segmentId: number): Promise<void> {
+  return del(`/clocks/${clockId}/segments/${segmentId}`);
+}
+
 // ─── Rotations ────────────────────────────────────────────────────────────────
 
 export function fetchRotations(): Promise<Rotation[]> {
