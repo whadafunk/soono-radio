@@ -66,12 +66,7 @@ import { SaveStatus } from '../../components/SaveStatus';
 
 function startBadge(policy: StartPolicy): { label: string; cls: string } {
   if (policy.type === 'hard') return { label: 'fixed', cls: 'bg-red-900/20 text-red-400' };
-  const lateOn  = policy.late_seconds  !== 0;
-  const earlyOn = policy.early_seconds !== 0;
-  if (lateOn && earlyOn) return { label: 'flexible',   cls: 'bg-green-900/20 text-green-400' };
-  if (lateOn)            return { label: 'flexi-late',  cls: 'bg-amber-900/20 text-amber-400' };
-  if (earlyOn)           return { label: 'flexi-early', cls: 'bg-blue-900/20 text-blue-400' };
-  return { label: 'fixed', cls: 'bg-red-900/20 text-red-400' };
+  return { label: 'flexible', cls: 'bg-green-900/20 text-green-400' };
 }
 
 const JOIN_POLICY_LABELS: Record<JoinPolicy, { label: string; desc: string }> = {
