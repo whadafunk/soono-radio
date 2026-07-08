@@ -1744,7 +1744,7 @@ Prompted by a live incident (2026-07-04): editing a scheduled clock's segments (
 
 ### Decision 53 — Default clock: mandatory station-wide fallback, resolved as a fourth priority tier
 
-**Status: decided — 2026-07-08**
+**Status: implemented — 2026-07-08 (not yet deployed).** `station_settings.default_clock_id` added (nullable, `ON DELETE set null`, migration `0055`), a "Fallback" section with a default-clock dropdown added to the Scheduling settings page (with a warning banner when unset), and `resolveCurrentSegment` (`clockResolver.ts`) now tries it as tier 4 via the existing `resolveSegmentWithinClock` helper — `source_type: 'default'`, `source_id` = the clock id itself. `RESOLVED_SCHEDULE_SOURCES`/`ScheduledStateSchema` in `apps/shared/src/schemas/supervisor.ts` already had a `'fallback'` literal from the abandoned prior attempt mentioned below, but it's dead code (no route or UI reads it) — left untouched rather than wired up, since it belongs to a different, superseded design. Verified against the local dev DB: the real ~3-minute daily gap in this station's template schedule (23:57–00:00, uncovered by any `template_entries` row) resolves to `null` with no default clock configured, and correctly resolves to the configured default clock's first-matching segment once one is set, without disturbing tiers 1–3.
 
 `resolveCurrentSegment` (`clockResolver.ts`) resolves in priority order: calendar entry → template clock entry → template entry → (today) `null`, which means silence whenever nothing covers the current moment. A prior attempt at a fallback chain (`shows.extension_policy`, `supervisor_config.silence_gap_tolerance_s`) was abandoned mid-way and left as dead schema fields.
 

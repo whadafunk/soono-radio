@@ -9,7 +9,8 @@
 //   2. Template clock entry for (day_of_week, hour) — per-hour override
 //   3. Template entry whose (day_of_week, time_start..time_end) covers now,
 //      using its clock_id (or show.default_clock_id when no clock_id is set)
-//   4. null — silence
+//   4. station_settings.default_clock_id — station-wide fallback (Decision 53)
+//   5. null — no default clock configured (startup misconfiguration)
 //
 // Within the resolved clock, segments are laid out in sort_order order
 // starting at the top of the resolved hour. Each segment occupies the next
@@ -22,6 +23,7 @@ import {
   calendarEntries as calendarEntriesTable,
   clockSegments as clockSegmentsTable,
   shows as showsTable,
+  stationSettings as stationSettingsTable,
   templateClockEntries as templateClockEntriesTable,
   templateEntries as templateEntriesTable,
   type ClockSegment,
@@ -46,7 +48,7 @@ export interface ResolvedSegment {
   // Which row actually produced this resolution — lets a plan later detect
   // that the schedule changed underneath it even when clock_id/segment/hour
   // happen to resolve identically (see computeResolutionIdentity below).
-  source_type: 'calendar' | 'template_clock' | 'template';
+  source_type: 'calendar' | 'template_clock' | 'template' | 'default';
   source_id: number;
 }
 
@@ -141,6 +143,19 @@ export async function resolveCurrentSegment(
     }
   }
 
+  // (4) Station-wide default clock — last-resort fallback so a moment never
+  // resolves to silence just because nothing was explicitly scheduled for it.
+  // No fallback beneath this tier: an unset/empty default clock is a startup
+  // misconfiguration, not something to design a fallback-of-a-fallback for.
+  const [settings] = await db
+    .select({ default_clock_id: stationSettingsTable.default_clock_id })
+    .from(stationSettingsTable)
+    .where(eq(stationSettingsTable.id, 1));
+  if (settings?.default_clock_id != null) {
+    const resolved = await resolveSegmentWithinClock(db, settings.default_clock_id, nowMs, null, null, 'default', settings.default_clock_id);
+    if (resolved) return resolved;
+  }
+
   return null;
 }
 
@@ -197,7 +212,7 @@ async function resolveSegmentWithinClock(
   nowMs: number,
   showId: number | null,
   showName: string | null,
-  sourceType: 'calendar' | 'template_clock' | 'template',
+  sourceType: 'calendar' | 'template_clock' | 'template' | 'default',
   sourceId: number,
 ): Promise<ResolvedSegment | null> {
   const segments = await db

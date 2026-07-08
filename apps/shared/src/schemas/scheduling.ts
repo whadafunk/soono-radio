@@ -930,5 +930,12 @@ export type CampaignPacingDetail = z.infer<typeof CampaignPacingDetailSchema>;
 
 export const StationSettingsSchema = z.object({
   promo_margin: z.number().min(0).max(0.5),
+  // Station-wide fallback clock, resolved when no calendar/template entry
+  // covers the current moment. Nullable only until configured — the
+  // supervisor treats an unset default clock as a startup misconfiguration.
+  default_clock_id: z.number().int().nullable(),
 });
 export type StationSettings = z.infer<typeof StationSettingsSchema>;
+
+export const StationSettingsPatchSchema = StationSettingsSchema.partial();
+export type StationSettingsPatch = z.infer<typeof StationSettingsPatchSchema>;

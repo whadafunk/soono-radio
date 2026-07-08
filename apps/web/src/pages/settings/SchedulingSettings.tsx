@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, AlertCircle, Loader } from 'lucide-react';
-import { fetchStationSettings, updateStationSettings } from '../../api';
+import { fetchStationSettings, updateStationSettings, fetchClocks } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
 
 export function SchedulingSettings() {
@@ -13,6 +13,7 @@ export function SchedulingSettings() {
     queryKey: ['station-settings'],
     queryFn: fetchStationSettings,
   });
+  const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
 
   useEffect(() => {
     if (data) setLocalPct(Math.round(data.promo_margin * 100));
@@ -93,6 +94,37 @@ export function SchedulingSettings() {
           <p className="text-zinc-500 text-xs mt-1">
             {localPct}% of stop-set time is reserved — campaigns compete for the remaining {100 - localPct}%.
           </p>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Fallback</p>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
+            Default clock
+            <HelpTooltip text="Plays whenever no calendar entry, template clock, or template covers the current moment — the last-resort fallback so the station never resolves to silence. Required for reliable playback." />
+          </label>
+          <select
+            value={data.default_clock_id ?? ''}
+            onChange={(e) =>
+              mutation.mutate({
+                default_clock_id: e.target.value === '' ? null : Number(e.target.value),
+              })
+            }
+            className="w-64 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+          >
+            <option value="">None selected</option>
+            {clocks.map((c) => (
+              <option key={c.id} value={c.id}>{c.name}</option>
+            ))}
+          </select>
+          {data.default_clock_id == null && (
+            <p className="flex items-center gap-1.5 text-amber-400 text-xs mt-2">
+              <AlertCircle className="w-3.5 h-3.5 flex-shrink-0" />
+              No default clock configured — the station can go silent if a moment falls outside every scheduled entry.
+            </p>
+          )}
         </div>
       </div>
     </div>

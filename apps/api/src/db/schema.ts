@@ -1077,8 +1077,13 @@ export type RundownPlaybackCursor = typeof rundownPlaybackCursors.$inferSelect;
 // ─── Station Settings ─────────────────────────────────────────────────────────
 
 export const stationSettings = sqliteTable('station_settings', {
-  id:           integer('id').primaryKey().default(1),
-  promo_margin: real('promo_margin').notNull().default(0.10),
+  id:                integer('id').primaryKey().default(1),
+  promo_margin:      real('promo_margin').notNull().default(0.10),
+  // Station-wide fallback clock, resolved as the 4th (last) tier in
+  // resolveCurrentSegment when no calendar/template_clock/template entry
+  // covers the current moment. Configuring it is a startup precondition —
+  // there is no fallback beneath it. Decision 53.
+  default_clock_id: integer('default_clock_id').references(() => clocks.id, { onDelete: 'set null' }),
 });
 
 export type StationSettings = typeof stationSettings.$inferSelect;
