@@ -7,11 +7,21 @@ import {
   CalendarEntryPatchSchema,
   TemplateClockEntryUpsertSchema,
   ApplyTemplateSchema,
+  TemplateEntryBatchRequestSchema,
+  CalendarEntryBatchRequestSchema,
 } from '@soono/shared';
 import { db } from '../db/index.js';
 import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments, clocks } from '../db/schema.js';
 import { invalidateInventory } from '../services/spotBudget.js';
 import { requestReconcile } from '../services/supervisor2/bus.js';
+
+// A batch op failing mid-transaction throws this to identify which op/row
+// caused the rollback, instead of a generic 500 or a bare array index.
+class BatchOpError extends Error {
+  constructor(public readonly opIndex: number, public readonly rowId: number | null, message: string) {
+    super(message);
+  }
+}
 
 // ─── Clock scheduling validation ──────────────────────────────────────────────
 
@@ -195,6 +205,101 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     return reply.status(204).send();
   });
 
+  // Staged-editing batch commit (Decision 55): one transaction, one reconcile
+  // call, for a whole editing session's worth of create/update/delete ops
+  // instead of one round-trip (and one reconcile) per edit. template_entries
+  // has no side-effect tables to migrate, so this is a straightforward
+  // sequential apply — see /calendar-entries/batch below for the harder case.
+  fastify.post<{ Body: unknown }>('/template-entries/batch', async (request, reply) => {
+    const parsed = TemplateEntryBatchRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const ops = parsed.data.ops;
+
+    // Each row must be targeted by at most one op — the staged frontend
+    // squashes repeat edits to the same row into a single pending op before
+    // ever building a batch, so this should never trip for the real client;
+    // guard it anyway rather than silently doing the wrong thing.
+    const dupCheck = new Set<number>();
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      const target = op.kind === 'create' ? op.tempId : op.id;
+      if (dupCheck.has(target)) {
+        return reply.status(400).send({ error: `op ${i}: duplicate target id/tempId ${target} — each row must be touched by at most one op per batch`, op_index: i });
+      }
+      dupCheck.add(target);
+    }
+
+    // Pre-validate what doesn't depend on other ops in the batch, so a bad
+    // row 400s the whole batch with no partial writes.
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      if (op.kind === 'create') {
+        if (!isValidTimeWindow(op.data.time_start, op.data.time_end)) {
+          return reply.status(400).send({ error: `op ${i} (create): time_end (${op.data.time_end}) must not be before time_start (${op.data.time_start})`, op_index: i });
+        }
+        if (op.data.clock_id != null) {
+          const err = await validateClockForScheduling(op.data.clock_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (create): ${err}`, op_index: i });
+        }
+        if (op.data.show_id != null) {
+          const err = await validateShowForScheduling(op.data.show_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (create): ${err}`, op_index: i });
+        }
+      } else if (op.kind === 'update') {
+        if (op.patch.clock_id != null) {
+          const err = await validateClockForScheduling(op.patch.clock_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (update): ${err}`, op_index: i });
+        }
+        if (op.patch.show_id != null) {
+          const err = await validateShowForScheduling(op.patch.show_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (update): ${err}`, op_index: i });
+        }
+        // Time-window merge-check needs "current" row state, which for a
+        // tempId-referenced row only exists once its create op has run
+        // inside the transaction below — deferred there.
+      }
+    }
+
+    const idMap = new Map<number, number>(); // tempId -> real id, for the response only
+
+    try {
+      await db.transaction(async (tx) => {
+        for (let i = 0; i < ops.length; i++) {
+          const op = ops[i];
+          if (op.kind === 'create') {
+            const [entry] = await tx.insert(templateEntries).values({
+              day_of_week: op.data.day_of_week,
+              time_start: op.data.time_start,
+              time_end: op.data.time_end,
+              show_id: op.data.show_id ?? null,
+              clock_id: op.data.clock_id ?? null,
+            }).returning();
+            idMap.set(op.tempId, entry.id);
+          } else if (op.kind === 'update') {
+            const [current] = await tx.select().from(templateEntries).where(eq(templateEntries.id, op.id));
+            if (!current) throw new BatchOpError(i, op.id, 'Template entry not found');
+            const newStart = op.patch.time_start ?? current.time_start;
+            const newEnd = op.patch.time_end ?? current.time_end;
+            if (!isValidTimeWindow(newStart, newEnd)) {
+              throw new BatchOpError(i, op.id, `time_end (${newEnd}) must not be before time_start (${newStart})`);
+            }
+            await tx.update(templateEntries).set(op.patch).where(eq(templateEntries.id, op.id));
+          } else {
+            await tx.delete(templateEntries).where(eq(templateEntries.id, op.id));
+          }
+        }
+      });
+    } catch (err) {
+      if (err instanceof BatchOpError) {
+        return reply.status(400).send({ error: err.message, op_index: err.opIndex, id: err.rowId });
+      }
+      throw err;
+    }
+
+    requestReconcile('template_batch_apply');
+    return reply.send({ ok: true, id_map: Object.fromEntries(idMap) });
+  });
+
   // ─── Calendar Entries ──────────────────────────────────────────────────────
 
   fastify.get<{ Querystring: { week_start?: string } }>('/calendar-entries', async (request, reply) => {
@@ -375,6 +480,167 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     invalidateInventory();
     requestReconcile('calendar_entry_change');
     return reply.status(204).send();
+  });
+
+  // Staged-editing batch commit (Decision 55) — same shape as
+  // /template-entries/batch, but calendar_entries carries real side effects
+  // (rundown content keyed by (date, time_start, clock_id)) that the
+  // individual PATCH/DELETE routes already migrate. Sequential per-op
+  // replay composes correctly for repeat edits to the SAME row (each op
+  // re-fetches "current" fresh), but naively replaying "clear rundown at
+  // destination, then migrate rundown from source" per op breaks on a
+  // position CYCLE within one batch — e.g. row A moves to row B's current
+  // slot while row B moves elsewhere: op A's "clear destination" step would
+  // delete row B's still-live rundown content before op B gets a chance to
+  // migrate it. Fixed with a two-pass move: evacuate every position-changing
+  // row's rundown content to a transaction-local sentinel slot BEFORE any
+  // calendar_entries rows are updated, then in a second pass clear whatever
+  // is genuinely at each destination (now guaranteed to only be non-batch
+  // content, since every batch-internal source was already evacuated) and
+  // move sentinel -> real destination. Sentinel values never escape this
+  // transaction.
+  fastify.post<{ Body: unknown }>('/calendar-entries/batch', async (request, reply) => {
+    const parsed = CalendarEntryBatchRequestSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    const ops = parsed.data.ops;
+
+    // Each row must be targeted by at most one op — the two-pass rundown
+    // migration below assumes it; the staged frontend squashes repeat edits
+    // to the same row into a single pending op before building a batch.
+    const dupCheck = new Set<number>();
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      const target = op.kind === 'create' ? op.tempId : op.id;
+      if (dupCheck.has(target)) {
+        return reply.status(400).send({ error: `op ${i}: duplicate target id/tempId ${target} — each row must be touched by at most one op per batch`, op_index: i });
+      }
+      dupCheck.add(target);
+    }
+
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      if (op.kind === 'create') {
+        if (!isValidTimeWindow(op.data.time_start, op.data.time_end)) {
+          return reply.status(400).send({ error: `op ${i} (create): time_end (${op.data.time_end}) must not be before time_start (${op.data.time_start})`, op_index: i });
+        }
+        if (op.data.clock_id != null) {
+          const err = await validateClockForScheduling(op.data.clock_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (create): ${err}`, op_index: i });
+        }
+        if (op.data.show_id != null) {
+          const err = await validateShowForScheduling(op.data.show_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (create): ${err}`, op_index: i });
+        }
+      } else if (op.kind === 'update') {
+        if (op.patch.clock_id != null) {
+          const err = await validateClockForScheduling(op.patch.clock_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (update): ${err}`, op_index: i });
+        }
+        if (op.patch.show_id != null) {
+          const err = await validateShowForScheduling(op.patch.show_id);
+          if (err) return reply.status(409).send({ error: `op ${i} (update): ${err}`, op_index: i });
+        }
+      }
+    }
+
+    const idMap = new Map<number, number>(); // tempId -> real id, for the response only
+    const sentinelDate = (opIndex: number) => `__batch_staging_${opIndex}__`;
+
+    type Move = { opIndex: number; realId: number; clockId: number; oldDate: string; oldTime: string; newDate: string; newTime: string };
+
+    try {
+      await db.transaction(async (tx) => {
+        // Pass 0: resolve every position-changing update's effective clockId
+        // (own clock_id, else the show's default_clock_id — same resolution
+        // the individual PATCH route uses) and evacuate its rundown content
+        // to a sentinel slot, before any calendar_entries row is touched.
+        const moves: Move[] = [];
+        for (let i = 0; i < ops.length; i++) {
+          const op = ops[i];
+          if (op.kind !== 'update') continue;
+          const [current] = await tx.select().from(calendarEntries).where(eq(calendarEntries.id, op.id));
+          if (!current) throw new BatchOpError(i, op.id, 'Calendar entry not found');
+          const newDate = op.patch.date ?? current.date;
+          const newTimeStart = op.patch.time_start ?? current.time_start;
+          const newTimeEnd = op.patch.time_end ?? current.time_end;
+          if (!isValidTimeWindow(newTimeStart, newTimeEnd)) {
+            throw new BatchOpError(i, op.id, `time_end (${newTimeEnd}) must not be before time_start (${newTimeStart})`);
+          }
+          const positionChanged = newDate !== current.date || newTimeStart !== current.time_start;
+          if (!positionChanged) continue;
+
+          let clockId = current.clock_id;
+          if (clockId === null && current.show_id !== null) {
+            const [show] = await tx.select({ default_clock_id: shows.default_clock_id }).from(shows).where(eq(shows.id, current.show_id));
+            clockId = show?.default_clock_id ?? null;
+          }
+          if (clockId === null) continue;
+
+          moves.push({ opIndex: i, realId: op.id, clockId, oldDate: current.date, oldTime: current.time_start, newDate, newTime: newTimeStart });
+
+          const sDate = sentinelDate(i);
+          await tx.update(rundownAssignments).set({ date: sDate, time_start: '00' }).where(and(eq(rundownAssignments.date, current.date), eq(rundownAssignments.time_start, current.time_start), eq(rundownAssignments.clock_id, clockId)));
+          await tx.update(rundownDurationOverrides).set({ date: sDate, time_start: '00' }).where(and(eq(rundownDurationOverrides.date, current.date), eq(rundownDurationOverrides.time_start, current.time_start), eq(rundownDurationOverrides.clock_id, clockId)));
+          await tx.update(rundownShowContent).set({ date: sDate, time_start: '00' }).where(and(eq(rundownShowContent.date, current.date), eq(rundownShowContent.time_start, current.time_start), eq(rundownShowContent.clock_id, clockId)));
+        }
+
+        // Pass 1: apply every op's actual calendar_entries write.
+        for (let i = 0; i < ops.length; i++) {
+          const op = ops[i];
+          if (op.kind === 'create') {
+            const [entry] = await tx.insert(calendarEntries).values({
+              date: op.data.date,
+              time_start: op.data.time_start,
+              time_end: op.data.time_end,
+              show_id: op.data.show_id ?? null,
+              clock_id: op.data.clock_id ?? null,
+              is_override: op.data.is_override ?? false,
+            }).returning();
+            idMap.set(op.tempId, entry.id);
+          } else if (op.kind === 'update') {
+            await tx.update(calendarEntries).set(op.patch).where(eq(calendarEntries.id, op.id));
+          } else {
+            const [entry] = await tx.select().from(calendarEntries).where(eq(calendarEntries.id, op.id));
+            if (entry) {
+              let clockId = entry.clock_id;
+              if (clockId === null && entry.show_id !== null) {
+                const [show] = await tx.select({ default_clock_id: shows.default_clock_id }).from(shows).where(eq(shows.id, entry.show_id));
+                clockId = show?.default_clock_id ?? null;
+              }
+              if (clockId !== null) {
+                await tx.delete(rundownAssignments).where(and(eq(rundownAssignments.date, entry.date), eq(rundownAssignments.time_start, entry.time_start), eq(rundownAssignments.clock_id, clockId)));
+                await tx.delete(rundownDurationOverrides).where(and(eq(rundownDurationOverrides.date, entry.date), eq(rundownDurationOverrides.time_start, entry.time_start), eq(rundownDurationOverrides.clock_id, clockId)));
+                await tx.delete(rundownShowContent).where(and(eq(rundownShowContent.date, entry.date), eq(rundownShowContent.time_start, entry.time_start), eq(rundownShowContent.clock_id, clockId)));
+              }
+            }
+            await tx.delete(calendarEntries).where(eq(calendarEntries.id, op.id));
+          }
+        }
+
+        // Pass 2: clear whatever is genuinely at each move's destination
+        // (only ever non-batch content at this point — every batch-internal
+        // source was evacuated in Pass 0), then land the sentinel content.
+        for (const mv of moves) {
+          await tx.delete(rundownAssignments).where(and(eq(rundownAssignments.date, mv.newDate), eq(rundownAssignments.time_start, mv.newTime), eq(rundownAssignments.clock_id, mv.clockId)));
+          await tx.delete(rundownDurationOverrides).where(and(eq(rundownDurationOverrides.date, mv.newDate), eq(rundownDurationOverrides.time_start, mv.newTime), eq(rundownDurationOverrides.clock_id, mv.clockId)));
+          await tx.delete(rundownShowContent).where(and(eq(rundownShowContent.date, mv.newDate), eq(rundownShowContent.time_start, mv.newTime), eq(rundownShowContent.clock_id, mv.clockId)));
+
+          const sDate = sentinelDate(mv.opIndex);
+          await tx.update(rundownAssignments).set({ date: mv.newDate, time_start: mv.newTime }).where(and(eq(rundownAssignments.date, sDate), eq(rundownAssignments.time_start, '00'), eq(rundownAssignments.clock_id, mv.clockId)));
+          await tx.update(rundownDurationOverrides).set({ date: mv.newDate, time_start: mv.newTime }).where(and(eq(rundownDurationOverrides.date, sDate), eq(rundownDurationOverrides.time_start, '00'), eq(rundownDurationOverrides.clock_id, mv.clockId)));
+          await tx.update(rundownShowContent).set({ date: mv.newDate, time_start: mv.newTime }).where(and(eq(rundownShowContent.date, sDate), eq(rundownShowContent.time_start, '00'), eq(rundownShowContent.clock_id, mv.clockId)));
+        }
+      });
+    } catch (err) {
+      if (err instanceof BatchOpError) {
+        return reply.status(400).send({ error: err.message, op_index: err.opIndex, id: err.rowId });
+      }
+      throw err;
+    }
+
+    invalidateInventory();
+    requestReconcile('calendar_batch_apply');
+    return reply.send({ ok: true, id_map: Object.fromEntries(idMap) });
   });
 
   // ─── Template Clock Entries ────────────────────────────────────────────────

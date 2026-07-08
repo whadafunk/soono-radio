@@ -779,6 +779,48 @@ export const CalendarEntryPatchSchema = z.object({
 });
 export type CalendarEntryPatch = z.infer<typeof CalendarEntryPatchSchema>;
 
+// ============ TEMPLATE / CALENDAR ENTRY BATCH APPLY (Decision 55) ============
+//
+// A staged editing session (SchedulePage.tsx) accumulates these locally and
+// posts them as one batch on "Apply" — one DB transaction, one reconcile
+// call, instead of one round-trip (and one reconcile, per Decision 54) per
+// edit. The client squashes pending edits per row (mirroring the clock-
+// segment negative-temp-id convention from Decision 52 for `create`'s id),
+// so every row is represented by at most one op — `update`/`delete` always
+// target a real, already-persisted row; they never need to reference a
+// same-batch `create`'s temp id.
+
+export const TemplateEntryBatchOpSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('create'), tempId: z.number().int().negative(), data: TemplateEntryCreateSchema }),
+  z.object({ kind: z.literal('update'), id: z.number().int().positive(), patch: TemplateEntryPatchSchema }),
+  z.object({ kind: z.literal('delete'), id: z.number().int().positive() }),
+]);
+export type TemplateEntryBatchOp = z.infer<typeof TemplateEntryBatchOpSchema>;
+
+export const TemplateEntryBatchRequestSchema = z.object({
+  ops: z.array(TemplateEntryBatchOpSchema).min(1),
+});
+export type TemplateEntryBatchRequest = z.infer<typeof TemplateEntryBatchRequestSchema>;
+
+export const CalendarEntryBatchOpSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('create'), tempId: z.number().int().negative(), data: CalendarEntryCreateSchema }),
+  z.object({ kind: z.literal('update'), id: z.number().int().positive(), patch: CalendarEntryPatchSchema }),
+  z.object({ kind: z.literal('delete'), id: z.number().int().positive() }),
+]);
+export type CalendarEntryBatchOp = z.infer<typeof CalendarEntryBatchOpSchema>;
+
+export const CalendarEntryBatchRequestSchema = z.object({
+  ops: z.array(CalendarEntryBatchOpSchema).min(1),
+});
+export type CalendarEntryBatchRequest = z.infer<typeof CalendarEntryBatchRequestSchema>;
+
+// tempId keys are serialized as strings (JSON object keys are always strings).
+export const EntryBatchResponseSchema = z.object({
+  ok: z.boolean(),
+  id_map: z.record(z.string(), z.number()),
+});
+export type EntryBatchResponse = z.infer<typeof EntryBatchResponseSchema>;
+
 // ============ TEMPLATE CLOCK ENTRIES ============
 
 export const TemplateClockEntrySchema = z.object({
