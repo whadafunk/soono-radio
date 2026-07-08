@@ -5,6 +5,7 @@ import { ClockCreateSchema, ClockPatchSchema, ClockSegmentCreateSchema } from '@
 import { db } from '../db/index.js';
 import { clocks, clockSegments, calendarEntries, templateEntries, templateClockEntries, shows, playHistory } from '../db/schema.js';
 import { invalidateInventory } from '../services/spotBudget.js';
+import { requestReconcile } from '../services/supervisor2/bus.js';
 
 // slot_count = all template weekly entries + per-hour grid slots + individual calendar overrides
 const usedExpr = sql<number>`(
@@ -299,6 +300,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
       .where(eq(clockSegments.clock_id, id))
       .orderBy(asc(clockSegments.sort_order));
     invalidateInventory();
+    requestReconcile('clock_segment_save');
     return reply.send(rows);
   });
 
@@ -319,6 +321,7 @@ export async function clockRoutes(fastify: FastifyInstance) {
 
     await db.delete(clockSegments).where(eq(clockSegments.id, segmentId));
     invalidateInventory();
+    requestReconcile('clock_segment_delete');
     return reply.status(204).send();
   });
 }

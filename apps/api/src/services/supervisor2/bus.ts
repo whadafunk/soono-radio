@@ -1,4 +1,5 @@
 import { EventEmitter } from 'events';
+import { randomUUID } from 'crypto';
 import type {
   BrandingCandidatePool,
   MusicCandidatePool,
@@ -180,13 +181,16 @@ export type BusMessage =
     }
   | {
       // Route → Supervisor: run the heavier reconcile() pass immediately
-      // instead of waiting for the next start/restart. Today only emitted by
-      // the align-to-wall-clock control route (modeled on the existing
-      // PUSH_NEXT_REQUESTED pattern — resume() emits a bus nudge alongside
-      // its DB write; this is the same idea for a heavier operation).
+      // instead of waiting for the next start/restart. Emitted by the
+      // align-to-wall-clock control route and by every schedule-affecting
+      // mutation (Decision 54) — clock segment save/delete, calendar/template
+      // entry CRUD, template run, show default-clock reassignment. Free-form
+      // string like PUSH_NEXT_REQUESTED.reason below, not a closed union, so
+      // a new call site never needs a type change here.
       type: 'RECONCILE_REQUESTED';
       request_id: string;
       now_ms: number;
+      trigger: string;
     }
   // ─── Phase 4: Live takeover ─────────────────────────────────────────────────
   //
@@ -234,3 +238,10 @@ export const bus = {
     };
   },
 };
+
+// Convenience for route handlers that just need to nudge the Supervisor's
+// reconcile() pass after a schedule-affecting mutation (Decision 54) — one
+// less bus.emit({...}) shape to get wrong at each of the many call sites.
+export function requestReconcile(trigger: string): void {
+  bus.emit({ type: 'RECONCILE_REQUESTED', request_id: randomUUID(), now_ms: Date.now(), trigger });
+}

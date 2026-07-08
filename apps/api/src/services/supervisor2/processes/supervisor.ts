@@ -207,12 +207,16 @@ export class SupervisorProcess {
         this.silenceAlertFired = false;
       }),
     );
-    // Operator-triggered reconcile (e.g. align-to-wall-clock). Routes can't
-    // hold a direct reference to this process (see supervisorControl.ts), so
-    // this is the only way in — same pattern as PUSH_NEXT_REQUESTED.
+    // Reconcile requested from a route — either the operator's explicit
+    // align-to-wall-clock action, or a schedule-affecting mutation
+    // auto-triggering it (Decision 54: clock segment save/delete,
+    // calendar/template CRUD, template run, show default-clock reassignment).
+    // Routes can't hold a direct reference to this process (see
+    // supervisorControl.ts), so this is the only way in — same pattern as
+    // PUSH_NEXT_REQUESTED.
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'RECONCILE_REQUESTED' }>('RECONCILE_REQUESTED', (msg) => {
-        void this.reconcile(msg.now_ms, 'operator').catch((err) => {
+        void this.reconcile(msg.now_ms, msg.trigger).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'RECONCILE_REQUESTED' }, 'supervisor: RECONCILE_REQUESTED handler failed');
         });
       }),
@@ -1089,7 +1093,7 @@ export class SupervisorProcess {
   // finds different state either way) and on an explicit operator action
   // (align-to-wall-clock). Ordinary segment-to-segment handoffs keep using
   // the existing tick()/isNewSegment/D44 machinery untouched.
-  private async reconcile(nowMs: number, trigger: 'startup' | 'operator'): Promise<void> {
+  private async reconcile(nowMs: number, trigger: string): Promise<void> {
     const resolved = await resolveCurrentSegment(nowMs, this.db);
     if (!resolved) {
       this.logger?.warn({

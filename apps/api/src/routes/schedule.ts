@@ -11,6 +11,7 @@ import {
 import { db } from '../db/index.js';
 import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments, clocks } from '../db/schema.js';
 import { invalidateInventory } from '../services/spotBudget.js';
+import { requestReconcile } from '../services/supervisor2/bus.js';
 
 // ─── Clock scheduling validation ──────────────────────────────────────────────
 
@@ -153,6 +154,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       show_id: parsed.data.show_id ?? null,
       clock_id: parsed.data.clock_id ?? null,
     }).returning();
+    requestReconcile('template_entry_change');
     return reply.status(201).send(entry);
   });
 
@@ -182,12 +184,14 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       .where(eq(templateEntries.id, id))
       .returning();
     if (!updated) return reply.status(404).send({ error: 'Template entry not found' });
+    requestReconcile('template_entry_change');
     return reply.send(updated);
   });
 
   fastify.delete<{ Params: { id: string } }>('/template-entries/:id', async (request, reply) => {
     const id = Number(request.params.id);
     await db.delete(templateEntries).where(eq(templateEntries.id, id));
+    requestReconcile('template_entry_change');
     return reply.status(204).send();
   });
 
@@ -232,6 +236,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       is_override: parsed.data.is_override ?? false,
     }).returning();
     invalidateInventory();
+    requestReconcile('calendar_entry_change');
     return reply.status(201).send(entry);
   });
 
@@ -320,6 +325,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     });
 
     invalidateInventory();
+    requestReconcile('calendar_entry_change');
     return reply.send(updated);
   });
 
@@ -355,6 +361,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       await tx.delete(calendarEntries).where(eq(calendarEntries.id, id));
     });
     invalidateInventory();
+    requestReconcile('calendar_entry_change');
     return reply.status(204).send();
   });
 
@@ -366,6 +373,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       await tx.delete(calendarEntries);
     });
     invalidateInventory();
+    requestReconcile('calendar_entry_change');
     return reply.status(204).send();
   });
 
@@ -395,6 +403,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
         .set({ clock_id: parsed.data.clock_id })
         .where(eq(templateClockEntries.id, existing[0].id))
         .returning();
+      requestReconcile('template_clock_entry_change');
       return reply.send(updated);
     }
     const [created] = await db.insert(templateClockEntries).values({
@@ -402,12 +411,14 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
       hour: parsed.data.hour,
       clock_id: parsed.data.clock_id,
     }).returning();
+    requestReconcile('template_clock_entry_change');
     return reply.status(201).send(created);
   });
 
   fastify.delete<{ Params: { id: string } }>('/template-clock-entries/:id', async (request, reply) => {
     const id = Number(request.params.id);
     await db.delete(templateClockEntries).where(eq(templateClockEntries.id, id));
+    requestReconcile('template_clock_entry_change');
     return reply.status(204).send();
   });
 
@@ -504,6 +515,10 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
         await db.insert(calendarEntries).values(toInsert.slice(i, i + 200));
       }
     }
+
+    // One reconcile for the whole batch (Decision 55), not one per row —
+    // and only if the batch actually changed anything.
+    if (toInsert.length > 0 || deleted > 0) requestReconcile('template_run');
 
     return reply.send({ created: toInsert.length, skipped, deleted });
   });

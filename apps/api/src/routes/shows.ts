@@ -8,6 +8,7 @@ import {
 } from '@soono/shared';
 import { db } from '../db/index.js';
 import { shows, showPlaylists, playlists, templateEntries, calendarEntries, templateClockEntries, campaigns, customers } from '../db/schema.js';
+import { requestReconcile } from '../services/supervisor2/bus.js';
 
 async function validateClockForShowAssignment(clockId: number): Promise<string | null> {
   const [te] = await db.select({ id: templateEntries.id })
@@ -80,6 +81,9 @@ export async function showRoutes(fastify: FastifyInstance) {
       .where(eq(shows.id, id))
       .returning();
     if (!updated) return reply.status(404).send({ error: 'Show not found' });
+    // Changes which clock a template/calendar row without its own clock_id
+    // resolves to via resolveClockContext's show.default_clock_id fallback.
+    if ('default_clock_id' in parsed.data) requestReconcile('show_default_clock_change');
     return reply.send(updated);
   });
 

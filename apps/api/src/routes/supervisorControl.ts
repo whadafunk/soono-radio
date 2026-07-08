@@ -49,6 +49,7 @@ export async function supervisorControlRoutes(fastify: FastifyInstance) {
       type: 'RECONCILE_REQUESTED',
       request_id: randomUUID(),
       now_ms: Date.now(),
+      trigger: 'operator',
     });
     return reply.send({ ok: true });
   });
