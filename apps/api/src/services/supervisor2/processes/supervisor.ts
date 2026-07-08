@@ -715,6 +715,18 @@ export class SupervisorProcess {
     return row != null;
   }
 
+  // Unlike hasPendingItems, also counts a currently-playing item — a plan
+  // mid-way through its last item (no 'pending' rows left) still has content
+  // left and shouldn't be treated as exhausted by the reconcile trust check.
+  private async hasPendingOrPlayingItems(planId: number): Promise<boolean> {
+    const [row] = await this.db
+      .select({ id: planItemsTable.id })
+      .from(planItemsTable)
+      .where(and(eq(planItemsTable.plan_id, planId), inArray(planItemsTable.status, ['pending', 'playing'])))
+      .limit(1);
+    return row != null;
+  }
+
   private async sumPendingSeconds(planId: number): Promise<number> {
     const items = await this.db
       .select({ planned_duration_seconds: planItemsTable.planned_duration_seconds })
@@ -1102,7 +1114,7 @@ export class SupervisorProcess {
     // plan that was actually right. Once something is truly active we let
     // it ride rather than yanking it back (same philosophy as not
     // interrupting in-progress content on a live schedule edit).
-    const trustedEndMs = await this.activePlanSegmentEndMs(resolved.clockInstanceStartedAt);
+    const trustedEndMs = await this.activePlanSegmentEndMs(resolved, nowMs);
     if (trustedEndMs != null) {
       this.currentSegmentEndMs = trustedEndMs;
       await this.reconcileNext(trustedEndMs, nowMs);
@@ -1161,31 +1173,56 @@ export class SupervisorProcess {
     });
   }
 
-  // Returns the active plan's own segmentEndMs if it's a genuinely active
-  // plan belonging to the given clock instance — i.e. it's trustworthy on
-  // its own terms and doesn't need reconciling against wall-clock
-  // resolution. Returns null if there's no active plan, or it belongs to a
-  // different clock instance (stale from an earlier hour). Reconstructs the
-  // segment's end time from the clock's own segment list (same cursor walk
-  // resolveSegmentWithinClock uses) rather than re-running the full
-  // calendar/template resolution chain — we already know which clock
-  // instance and which structural segment.
-  private async activePlanSegmentEndMs(clockInstanceStartedAt: number): Promise<number | null> {
+  // Returns the active plan's own segmentEndMs if it's a genuinely trusted
+  // plan for `resolved` — i.e. it doesn't need reconciling against wall-clock
+  // resolution — or null if it should be treated as untrustworthy (Decision
+  // 57). Reconstructs the segment's end time from the clock's own segment
+  // list (same cursor walk resolveSegmentWithinClock uses) rather than
+  // re-running the full calendar/template resolution chain — we already know
+  // which clock instance and which structural segment.
+  //
+  // Trusted only if ALL of:
+  //   1. status='active' and same clock_instance_started_at as a fresh
+  //      resolve (original check).
+  //   2. The schedule slot that produced it still resolves to the same
+  //      resolution_identity (Decision 58) — a schedule edit since drafting
+  //      can point the same clock instance at a structurally different
+  //      segment even though the clock_instance timestamp still matches.
+  //   3. It has at least one 'pending'/'playing' item left — an
+  //      exhausted-but-still-'active' plan (the brief window before
+  //      handleExhaustedPlan catches up) must not be silently trusted.
+  //   4. Remaining runway is worth preserving (RUNWAY_WORTH_IT_THRESHOLD_S),
+  //      symmetric with the gate reconcileNext already applies to the *next*
+  //      segment's early cutover.
+  // Deliberately NOT disqualifying: being behind or ahead of wall clock —
+  // soft reconcile must never skip content to catch up (that's the drift
+  // -recovery machinery's job) or undo a legitimate early handoff.
+  private async activePlanSegmentEndMs(resolved: ResolvedSegment, nowMs: number): Promise<number | null> {
     if (this.activePlanId == null) return null;
     const [plan] = await this.db
       .select({
         status: plansTable.status,
         clock_instance_started_at: plansTable.clock_instance_started_at,
+        resolution_identity: plansTable.resolution_identity,
         segment_id: clockSegmentsTable.id,
         clock_id: clockSegmentsTable.clock_id,
       })
       .from(plansTable)
       .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
       .where(eq(plansTable.id, this.activePlanId));
-    if (!plan || plan.status !== 'active' || plan.clock_instance_started_at !== clockInstanceStartedAt) {
+    if (!plan || plan.status !== 'active' || plan.clock_instance_started_at !== resolved.clockInstanceStartedAt) {
       return null;
     }
-    return this.segmentEndMsWithinClock(plan.clock_id, plan.segment_id, clockInstanceStartedAt);
+    if (plan.resolution_identity !== computeResolutionIdentity(resolved)) {
+      return null;
+    }
+    if (!(await this.hasPendingOrPlayingItems(this.activePlanId))) {
+      return null;
+    }
+    if ((await this.computeEstimatedRemaining(nowMs)) < RUNWAY_WORTH_IT_THRESHOLD_S) {
+      return null;
+    }
+    return this.segmentEndMsWithinClock(plan.clock_id, plan.segment_id, resolved.clockInstanceStartedAt);
   }
 
   // Same reconstruction as activePlanSegmentEndMs, but for the plan that just

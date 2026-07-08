@@ -1809,7 +1809,7 @@ The existing `POST /supervisor/v2/align-to-wall-clock` endpoint just emits `RECO
 
 ### Decision 57 — Active-plan trust criteria for reconcile
 
-**Status: decided — 2026-07-08**
+**Status: implemented — 2026-07-08 (not yet deployed).** `activePlanSegmentEndMs` (`supervisor.ts`) now takes the freshly-resolved `ResolvedSegment` and `nowMs` instead of just a timestamp, and checks all 4 criteria before trusting the active plan: status+clock-instance (unchanged), `resolution_identity` match against a fresh `computeResolutionIdentity(resolved)` (Decision 58), at least one `pending`/`playing` item via a new `hasPendingOrPlayingItems` helper (distinct from the existing `pending`-only `hasPendingItems`), and remaining runway ≥ `RUNWAY_WORTH_IT_THRESHOLD_S` via the existing `computeEstimatedRemaining`. Being behind or ahead of wall clock remains explicitly non-disqualifying — untouched. Verified with 6 isolated scratch-plan scenarios directly against the local dev DB (all-criteria-pass, identity-mismatch, exhausted, low-runway, no-active-plan, stale-clock-instance) — each produced the designed trust/no-trust outcome.
 
 `reconcile()` already uses a hybrid, not a blind "always align to wall clock": if `activePlanId` refers to a plan that is `status='active'` and belongs to the same `clock_instance_started_at` as a fresh resolve, it's trusted completely — reconcile won't touch it regardless of which segment wall-clock resolution alone would pick. This exists specifically because an earlier, always-align version of reconcile forced activation back to the wall-clock-resolved segment and undid a correct organic early handoff (confirmed live 2026-05-2X/06-XX regression, documented in the existing code comment) — this is not a hypothetical risk, it's a bug that shipped and got reverted once already. Always-aligning is rejected as a simplification for that reason.
 
@@ -1829,7 +1829,7 @@ The existing `POST /supervisor/v2/align-to-wall-clock` endpoint just emits `RECO
 
 ### Decision 58 — `resolution_identity` is sufficient to detect a reconfigured schedule slot
 
-**Status: decided — 2026-07-08**
+**Status: verified, no code change needed — 2026-07-08.** Confirmed by reading every `plans` INSERT path (`insertPlanRow` in `planner.ts`, the only place a `plans` row is created): cold start, the normal proactive next-segment draft, and every reconcile-driven draft all stamp `resolution_identity: computeResolutionIdentity(resolved)` via `PLAN_DRAFT_REQUESTED`. The one path that doesn't create a fresh row (`PLAN_REPLAN_REQUESTED`) correctly doesn't touch it either, since it mutates an existing plan rather than drafting a new occurrence. This premise is what makes Decision 57's new identity check meaningful without any further schema or write-path changes.
 
 No new synthetic version/uniqueness stamp is needed. `computeResolutionIdentity` (`source_type:source_id:segment_id:clock_instance_started_at`) already changes exactly when something structurally meaningful happens — a different calendar/template row wins resolution priority, or the resolved segment changes — **provided** the rows it's built from don't reissue identity for edits that aren't structurally meaningful:
 
