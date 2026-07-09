@@ -57,6 +57,7 @@ import {
   fetchRotations,
   fetchSupervisorConfig,
   fetchShowPlaylists,
+  fetchStationSettings,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
 import { HelpTooltip, BadgeTooltip } from '../../components/HelpTooltip';
@@ -293,6 +294,7 @@ export function ClocksPage() {
   const { data: allPlaylists = [] } = useQuery({ queryKey: ['playlists'], queryFn: fetchPlaylists });
   const { data: allRotations = [] } = useQuery({ queryKey: ['rotations'], queryFn: fetchRotations });
   const { data: supervisorConfig } = useQuery({ queryKey: ['supervisor-config'], queryFn: fetchSupervisorConfig });
+  const { data: stationSettings } = useQuery({ queryKey: ['station-settings'], queryFn: fetchStationSettings });
 
   const musicRotations = allRotations.filter((r) => (r.kind ?? 'music') === 'music');
   const sweeperRotations = allRotations.filter((r) => r.kind === 'sweeper');
@@ -543,6 +545,13 @@ export function ClocksPage() {
                       <span className={`text-[10px] px-1 py-0.5 rounded whitespace-nowrap ${clock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
                         {clock.slot_count > 0 ? 'Scheduled' : 'Unscheduled'}
                       </span>
+                      {stationSettings?.default_clock_id === clock.id && (
+                        <BadgeTooltip text="Station-wide fallback clock (Settings → Scheduling). Plays on repeat as a last resort when nothing else resolves for the current time.">
+                          <span className="text-[10px] px-1 py-0.5 rounded whitespace-nowrap bg-sky-900/30 text-sky-300">
+                            Fallback
+                          </span>
+                        </BadgeTooltip>
+                      )}
                     </div>
                   </button>
                   {confirmingDelete ? (
@@ -618,6 +627,13 @@ export function ClocksPage() {
                       {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
                     </span>
                   </BadgeTooltip>
+                  {stationSettings?.default_clock_id === draftClock.id && (
+                    <BadgeTooltip text="Station-wide fallback clock (Settings → Scheduling). Plays on repeat as a last resort when nothing else resolves for the current time.">
+                      <span className="flex-shrink-0 text-xs px-2 py-0.5 rounded bg-sky-900/30 text-sky-300">
+                        Fallback
+                      </span>
+                    </BadgeTooltip>
+                  )}
                   <SaveStatus status={saveStatus} onDismiss={() => setSaveStatus(null)} />
                   <ClockActions dirty={dirty} isPending={saveMutation.isPending} confirmDelete={confirmDelete} slotCount={draftClock.slot_count}
                     assignedShows={draftClock.assigned_shows}
@@ -727,11 +743,20 @@ export function ClocksPage() {
 
                     {/* Right: used by shows (~1/3) */}
                     <div className="flex-[1] min-w-0 px-5 py-4 space-y-3">
-                      <BadgeTooltip text={draftClock.slot_count > 0 ? `Active in ${draftClock.slot_count} schedule slot${draftClock.slot_count !== 1 ? 's' : ''}. Visit the Schedule page to view placement.` : 'Not placed on any schedule template or calendar entry. It won\'t air until assigned to a time slot.'}>
-                        <span className={`inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
-                          {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
-                        </span>
-                      </BadgeTooltip>
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <BadgeTooltip text={draftClock.slot_count > 0 ? `Active in ${draftClock.slot_count} schedule slot${draftClock.slot_count !== 1 ? 's' : ''}. Visit the Schedule page to view placement.` : 'Not placed on any schedule template or calendar entry. It won\'t air until assigned to a time slot.'}>
+                          <span className={`inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded ${draftClock.slot_count > 0 ? 'bg-amber-900/30 text-amber-300' : 'bg-zinc-800 text-zinc-500'}`}>
+                            {draftClock.slot_count > 0 ? `Scheduled (${draftClock.slot_count})` : 'Unscheduled'}
+                          </span>
+                        </BadgeTooltip>
+                        {stationSettings?.default_clock_id === draftClock.id && (
+                          <BadgeTooltip text="Station-wide fallback clock (Settings → Scheduling). Plays on repeat as a last resort when nothing else resolves for the current time.">
+                            <span className="inline-flex whitespace-nowrap text-xs px-2 py-0.5 rounded bg-sky-900/30 text-sky-300">
+                              Fallback
+                            </span>
+                          </BadgeTooltip>
+                        )}
+                      </div>
                       <div>
                         <p className="text-xs font-medium text-zinc-400 mb-2">Assigned by</p>
                         {draftClock.assigned_shows.length === 0 ? (
