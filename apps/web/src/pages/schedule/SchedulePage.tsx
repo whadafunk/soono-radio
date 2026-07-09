@@ -3,10 +3,10 @@ import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate, Link } from 'react-router-dom';
 import { ChevronLeft, ChevronRight, X, Trash2, RotateCcw, Clock, Pencil, Mic, AlertTriangle, Eye, CassetteTape, CalendarRange, HelpCircle } from 'lucide-react';
-import { Show, ShowColor, TemplateEntry, TemplateEntryCreate, TemplateEntryPatch, TemplateEntryBatchOp, CalendarEntry, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@soono/shared';
+import { Show, ShowColor, TemplateEntry, TemplateEntryCreate, TemplateEntryPatch, TemplateEntryBatchOp, CalendarEntry, CalendarEntryCreate, CalendarEntryPatch, CalendarEntryBatchOp, Clock as ClockType, ClockSegmentSummary, BroadcastInterval, BroadcastIntervalPatch, BroadcastIntervalSlot, BroadcastIntervalSlotPatch } from '@soono/shared';
 import {
   fetchShows, fetchTemplateEntries, batchTemplateEntries,
-  fetchCalendarEntries, createCalendarEntry, updateCalendarEntry, deleteCalendarEntry,
+  fetchCalendarEntries, batchCalendarEntries,
   fetchClocks,
   fetchIntervals, createInterval, updateInterval, deleteInterval,
   fetchIntervalSlots, createIntervalSlot, updateIntervalSlot, deleteIntervalSlot,
@@ -294,6 +294,47 @@ function applyTemplatePendingOps(rows: TemplateEntry[], ops: Map<number, Templat
   return result;
 }
 
+type CalendarPendingOp =
+  | { kind: 'create'; tempId: number; data: CalendarEntryCreate }
+  | { kind: 'update'; id: number; patch: CalendarEntryPatch }
+  | { kind: 'delete'; id: number };
+
+function mergeCalendarCreateData(data: CalendarEntryCreate, patch: CalendarEntryPatch): CalendarEntryCreate {
+  return {
+    date:        patch.date        ?? data.date,
+    time_start:  patch.time_start  ?? data.time_start,
+    time_end:    patch.time_end    ?? data.time_end,
+    show_id:  patch.show_id  !== undefined ? patch.show_id  : (data.show_id  ?? null),
+    clock_id: patch.clock_id !== undefined ? patch.clock_id : (data.clock_id ?? null),
+    is_override: patch.is_override ?? data.is_override,
+  };
+}
+
+/** Calendar analogue of applyTemplatePendingOps — see that function for the merge rules. */
+function applyCalendarPendingOps(rows: CalendarEntry[], ops: Map<number, CalendarPendingOp>): CalendarEntry[] {
+  if (ops.size === 0) return rows;
+  const result: CalendarEntry[] = [];
+  for (const row of rows) {
+    const op = ops.get(row.id);
+    if (!op || op.kind === 'create') { result.push(row); continue; }
+    if (op.kind === 'update') result.push({ ...row, ...op.patch });
+    // 'delete' → row is dropped
+  }
+  for (const op of ops.values()) {
+    if (op.kind !== 'create') continue;
+    result.push({
+      id: op.tempId,
+      date: op.data.date,
+      time_start: op.data.time_start,
+      time_end: op.data.time_end,
+      show_id: op.data.show_id ?? null,
+      clock_id: op.data.clock_id ?? null,
+      is_override: op.data.is_override,
+    });
+  }
+  return result;
+}
+
 // ─── Rundown content helpers ──────────────────────────────────────────────────
 
 type ContentEntry = { id: number; playlist_id: number | null; playlist_name: string | null };
@@ -372,14 +413,23 @@ export function SchedulePage() {
     enabled:  mode === 'calendar',
   });
 
+  // Staged calendar edits (Decision 55) — squash-map of not-yet-applied ops,
+  // merged with the server rows for rendering/drag/overlap purposes.
+  const [pendingCalendarOps, setPendingCalendarOps] = useState<Map<number, CalendarPendingOp>>(() => new Map());
+  const effectiveCalendarEntries = useMemo(
+    () => applyCalendarPendingOps(calendarEntries, pendingCalendarOps),
+    [calendarEntries, pendingCalendarOps],
+  );
+  const [calendarSaveStatus, setCalendarSaveStatus] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
+
   const calEntryByDate = useMemo(() => {
     const map = new Map<string, CalendarEntry[]>();
-    for (const entry of calendarEntries) {
+    for (const entry of effectiveCalendarEntries) {
       const list = map.get(entry.date) ?? [];
       map.set(entry.date, [...list, entry]);
     }
     return map;
-  }, [calendarEntries]);
+  }, [effectiveCalendarEntries]);
 
   const { data: slotContentRows = [] } = useQuery({
     queryKey: ['rundown-slot-content', weekStartISO],
@@ -455,20 +505,67 @@ export function SchedulePage() {
     setTemplateSaveStatus(null);
   };
 
-  // Calendar mutations
+  // Calendar staged editing (Decision 55)
   const invalidateCal = () => qc.invalidateQueries({ queryKey: ['calendar-entries'] });
-  const calCreateMutation = useMutation({
-    mutationFn: createCalendarEntry,
-    onSuccess: () => { invalidateCal(); dismiss(); },
-    onError: (err) => setScheduleError(extractApiError(err)),
+
+  const stageCalendarCreate = (data: CalendarEntryCreate) => {
+    const tempId = newTempId();
+    setPendingCalendarOps((prev) => {
+      const next = new Map(prev);
+      next.set(tempId, { kind: 'create', tempId, data });
+      return next;
+    });
+  };
+
+  const stageCalendarUpdate = (id: number, patch: CalendarEntryPatch) => {
+    setPendingCalendarOps((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(id);
+      if (existing?.kind === 'create') {
+        next.set(id, { kind: 'create', tempId: existing.tempId, data: mergeCalendarCreateData(existing.data, patch) });
+      } else if (existing?.kind === 'update') {
+        next.set(id, { kind: 'update', id, patch: { ...existing.patch, ...patch } });
+      } else {
+        next.set(id, { kind: 'update', id, patch });
+      }
+      return next;
+    });
+  };
+
+  const stageCalendarDelete = (id: number) => {
+    setPendingCalendarOps((prev) => {
+      const next = new Map(prev);
+      const existing = next.get(id);
+      if (existing?.kind === 'create') {
+        next.delete(id); // never persisted — just drop the pending create
+      } else {
+        next.set(id, { kind: 'delete', id });
+      }
+      return next;
+    });
+  };
+
+  const applyCalendarBatchMutation = useMutation({
+    mutationFn: (ops: CalendarEntryBatchOp[]) => batchCalendarEntries(ops),
+    onSuccess: () => {
+      setPendingCalendarOps(new Map());
+      invalidateCal();
+      invalidateContent();
+      setCalendarSaveStatus({ type: 'success', message: 'Calendar changes applied' });
+      setTimeout(() => setCalendarSaveStatus(null), 3000);
+    },
+    onError: (err) => setCalendarSaveStatus({ type: 'error', message: extractApiError(err) }),
   });
-  const calUpdateMutation = useMutation({
-    mutationFn: ({ id, patch }: { id: number; patch: Parameters<typeof updateCalendarEntry>[1] }) =>
-      updateCalendarEntry(id, patch),
-    onSuccess: () => { invalidateCal(); invalidateContent(); },
-    onError: (err) => setScheduleError(extractApiError(err)),
-  });
-  const calDeleteMutation = useMutation({ mutationFn: deleteCalendarEntry, onSuccess: invalidateCal });
+
+  const applyCalendarChanges = () => {
+    if (pendingCalendarOps.size === 0) return;
+    applyCalendarBatchMutation.mutate(Array.from(pendingCalendarOps.values()));
+  };
+
+  const discardCalendarChanges = () => {
+    setPendingCalendarOps(new Map());
+    setCalendarSaveStatus(null);
+  };
 
   // Rundown content mutations
   const invalidateContent = () => qc.invalidateQueries({ queryKey: ['rundown-slot-content'] });
@@ -482,7 +579,12 @@ export function SchedulePage() {
   const [applyResult, setApplyResult] = useState<{ created: number; skipped: number; deleted: number } | null>(null);
   const clearCalendarMutation = useMutation({
     mutationFn: clearCalendar,
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['calendar-entries'] }),
+    onSuccess: () => {
+      // Any staged ops referenced now-cleared rows — drop them rather than
+      // leave a merged view pointing at deleted/mismatched ids.
+      setPendingCalendarOps(new Map());
+      qc.invalidateQueries({ queryKey: ['calendar-entries'] });
+    },
   });
   const [confirmClear, setConfirmClear] = useState(false);
   const clearConfirmTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -642,17 +744,17 @@ export function SchedulePage() {
           stageTemplateCreate({ day_of_week: tDay, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null });
         } else {
           const e = drag.entry as TemplateEntry | CalendarEntry;
-          calCreateMutation.mutate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
+          stageCalendarCreate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
         }
       } else if (drag.entryKind === 'template') {
         const e = drag.entry as TemplateEntry;
         stageTemplateUpdate(e.id, { time_start: newStart, time_end: newEnd, day_of_week: tDay });
       } else if (drag.entryKind === 'calendar') {
         const e = drag.entry as CalendarEntry;
-        calUpdateMutation.mutate({ id: e.id, patch: { time_start: newStart, time_end: newEnd, date: tDate, is_override: true } });
+        stageCalendarUpdate(e.id, { time_start: newStart, time_end: newEnd, date: tDate, is_override: true });
       } else {
         const e = drag.entry as TemplateEntry;
-        calCreateMutation.mutate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
+        stageCalendarCreate({ date: tDate!, time_start: newStart, time_end: newEnd, show_id: e.show_id ?? null, clock_id: e.clock_id ?? null, is_override: true });
       }
     };
 
@@ -671,11 +773,11 @@ export function SchedulePage() {
   }, []);
 
   useEffect(() => {
-    if (pendingTemplateOps.size === 0) return;
+    if (pendingTemplateOps.size === 0 && pendingCalendarOps.size === 0) return;
     const handler = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
     window.addEventListener('beforeunload', handler);
     return () => window.removeEventListener('beforeunload', handler);
-  }, [pendingTemplateOps]);
+  }, [pendingTemplateOps, pendingCalendarOps]);
 
   const [scheduleError, setScheduleError] = useState<string | null>(null);
 
@@ -687,8 +789,18 @@ export function SchedulePage() {
     setScheduleError(null);
   };
 
-  const goBack    = () => { const d = new Date(baseDate); d.setDate(d.getDate() - 7); setBaseDate(d); };
-  const goForward = () => { const d = new Date(baseDate); d.setDate(d.getDate() + 7); setBaseDate(d); };
+  // Changing weeks swaps out the calendar rows pendingCalendarOps is keyed
+  // against — guard it the same way the mode-switch buttons guard leaving
+  // calendar mode entirely.
+  const confirmDiscardCalendar = (): boolean => {
+    if (pendingCalendarOps.size === 0) return true;
+    if (!window.confirm('You have unsaved calendar changes. Changing weeks will discard them. Continue?')) return false;
+    setPendingCalendarOps(new Map());
+    return true;
+  };
+
+  const goBack    = () => { if (!confirmDiscardCalendar()) return; const d = new Date(baseDate); d.setDate(d.getDate() - 7); setBaseDate(d); };
+  const goForward = () => { if (!confirmDiscardCalendar()) return; const d = new Date(baseDate); d.setDate(d.getDate() + 7); setBaseDate(d); };
 
   return (
     <div className="flex flex-col gap-4 pb-10" onClick={dismiss}>
@@ -706,6 +818,9 @@ export function SchedulePage() {
                 if (mode === 'template' && m !== 'template' && pendingTemplateOps.size > 0) {
                   if (!window.confirm('You have unsaved template changes. Switching views will discard them. Continue?')) return;
                   setPendingTemplateOps(new Map());
+                } else if (mode === 'calendar' && m !== 'calendar' && pendingCalendarOps.size > 0) {
+                  if (!window.confirm('You have unsaved calendar changes. Switching views will discard them. Continue?')) return;
+                  setPendingCalendarOps(new Map());
                 }
                 setMode(m);
                 dismiss();
@@ -789,7 +904,7 @@ export function SchedulePage() {
               </button>
             </div>
             <button
-              onClick={(e) => { e.stopPropagation(); setBaseDate(new Date()); }}
+              onClick={(e) => { e.stopPropagation(); if (!confirmDiscardCalendar()) return; setBaseDate(new Date()); }}
               className="px-3 py-1 text-xs font-medium text-zinc-400 hover:text-zinc-100 border border-zinc-700 hover:border-zinc-500 rounded-md transition-colors"
             >
               Today
@@ -815,12 +930,38 @@ export function SchedulePage() {
             >
               {confirmClear ? 'Click again to clear' : 'Clear calendar'}
             </button>
+
+            {/* Staged calendar edits — Apply/Discard (Decision 55) */}
+            {pendingCalendarOps.size > 0 && (
+              <div className="flex items-center gap-2 ml-auto" onClick={(e) => e.stopPropagation()}>
+                <span className="text-xs text-amber-400">
+                  {pendingCalendarOps.size} pending change{pendingCalendarOps.size !== 1 ? 's' : ''}
+                </span>
+                <button
+                  onClick={discardCalendarChanges}
+                  disabled={applyCalendarBatchMutation.isPending}
+                  className="px-3 py-1.5 text-xs font-medium text-zinc-400 hover:text-zinc-200 border border-zinc-700 rounded-lg transition-colors disabled:opacity-50"
+                >
+                  Discard
+                </button>
+                <button
+                  onClick={applyCalendarChanges}
+                  disabled={applyCalendarBatchMutation.isPending}
+                  className="px-3 py-1.5 text-xs font-medium bg-brand-600 hover:bg-brand-500 text-white rounded-lg transition-colors disabled:opacity-50"
+                >
+                  {applyCalendarBatchMutation.isPending ? 'Applying…' : 'Apply'}
+                </button>
+              </div>
+            )}
           </>
         )}
       </div>
 
       {mode === 'template' && templateSaveStatus && (
         <SaveStatus status={templateSaveStatus} onDismiss={() => setTemplateSaveStatus(null)} />
+      )}
+      {mode === 'calendar' && calendarSaveStatus && (
+        <SaveStatus status={calendarSaveStatus} onDismiss={() => setCalendarSaveStatus(null)} />
       )}
 
       {/* ── Run-template panel ── */}
@@ -1081,11 +1222,10 @@ export function SchedulePage() {
           x={calNewSlot.x}
           y={calNewSlot.y}
           error={scheduleError}
-          isPending={calCreateMutation.isPending}
           onClose={dismiss}
           onSave={(date, showId, clockId, timeStart, timeEnd, isOverride) => {
             setScheduleError(null);
-            calCreateMutation.mutate({
+            stageCalendarCreate({
               date,
               time_start: timeStart,
               time_end: timeEnd,
@@ -1093,6 +1233,7 @@ export function SchedulePage() {
               clock_id: clockId,
               is_override: isOverride,
             });
+            dismiss();
           }}
         />
       )}
@@ -1114,12 +1255,12 @@ export function SchedulePage() {
             x={calEditSlot.x}
             y={calEditSlot.y}
             onClose={dismiss}
-            onRemove={() => { calDeleteMutation.mutate(calEditSlot.entry.id); dismiss(); }}
+            onRemove={() => { stageCalendarDelete(calEditSlot.entry.id); dismiss(); }}
             onRestore={calEditSlot.entry.is_override
-              ? () => { calDeleteMutation.mutate(calEditSlot.entry.id); dismiss(); }
+              ? () => { stageCalendarDelete(calEditSlot.entry.id); dismiss(); }
               : undefined}
             onChange={(showId, clockId) => {
-              calUpdateMutation.mutate({ id: calEditSlot.entry.id, patch: { show_id: showId, clock_id: clockId } });
+              stageCalendarUpdate(calEditSlot.entry.id, { show_id: showId, clock_id: clockId });
               dismiss();
             }}
           />

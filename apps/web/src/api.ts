@@ -752,8 +752,7 @@ import {
   TemplateEntryBatchOp,
   EntryBatchResponse,
   CalendarEntry,
-  CalendarEntryCreate,
-  CalendarEntryPatch,
+  CalendarEntryBatchOp,
   TemplateClockEntry,
   TemplateClockEntryUpsert,
   CampaignMedia,
@@ -1170,16 +1169,8 @@ export function fetchCalendarEntries(weekStart?: string): Promise<CalendarEntry[
   return apiFetch(`/calendar-entries${qs}`);
 }
 
-export function createCalendarEntry(data: CalendarEntryCreate): Promise<CalendarEntry> {
-  return post('/calendar-entries', data);
-}
-
-export function updateCalendarEntry(id: number, patch_: CalendarEntryPatch): Promise<CalendarEntry> {
-  return patch(`/calendar-entries/${id}`, patch_);
-}
-
-export function deleteCalendarEntry(id: number): Promise<void> {
-  return del(`/calendar-entries/${id}`);
+export function batchCalendarEntries(ops: CalendarEntryBatchOp[]): Promise<EntryBatchResponse> {
+  return post('/calendar-entries/batch', { ops });
 }
 
 // ─── Template Clock Entries ───────────────────────────────────────────────────
