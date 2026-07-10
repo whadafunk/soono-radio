@@ -2,6 +2,7 @@ import { FastifyInstance } from 'fastify';
 import { IcecastConfigSchema } from '@soono/shared';
 import { readIcecastConfig, writeIcecastConfig } from '../services/icecastConfig.js';
 import { fetchAllMountStats, fetchIcecastStats, killIcecastSource } from '../services/icecastStats.js';
+import { getPeakState, resetPeakState } from '../services/icecastPeakTracker.js';
 import { restartContainer } from '../services/dockerControl.js';
 import { generateRadioLiq, readLiquidsoapConfig } from '../services/liquidsoapConfig.js';
 
@@ -62,7 +63,14 @@ export async function icecastRoutes(fastify: FastifyInstance) {
 
   fastify.get<{ Reply: any }>('/icecast/stats', async (request, reply) => {
     const stats = await fetchAllMountStats();
-    return reply.send(stats);
+    const peak = getPeakState();
+    return reply.send({ ...stats, peak_listener: peak.peak_listener, peak_since: peak.since });
+  });
+
+  fastify.post<{ Reply: any }>('/icecast/stats/peak/reset', async (_request, reply) => {
+    const { listener } = await fetchAllMountStats();
+    const peak = await resetPeakState(listener);
+    return reply.send({ peak_listener: peak.peak_listener, peak_since: peak.since });
   });
 
   fastify.get<{ Querystring: { mount?: string }; Reply: any }>(

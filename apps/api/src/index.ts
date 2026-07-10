@@ -36,6 +36,7 @@ import { ensureDirs } from './services/ingest/paths.js';
 import { loadIntegrationsConfig } from './services/integrations/config.js';
 import { generateRadioLiq, readLiquidsoapConfig, readRadioLiq } from './services/liquidsoapConfig.js';
 import { ensureIcecastConfig } from './services/icecastConfig.js';
+import { startPeakTracker } from './services/icecastPeakTracker.js';
 import { bus } from './services/supervisor2/bus.js';
 import { createSupervisorLogger } from './services/supervisor2/supervisorLogger.js';
 import { MusicProcess } from './services/supervisor2/processes/music.js';
@@ -152,6 +153,7 @@ const start = async () => {
       fastify.log.info('Generated LiquidSoap script');
     }
     await ensureDirs();
+    await startPeakTracker();
     const recovered = await recoverInterruptedJobs();
     if (recovered > 0) {
       fastify.log.info({ recovered }, 'Marked interrupted ingest jobs as failed');

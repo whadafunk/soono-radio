@@ -22,4 +22,5 @@ data/radio.db
 data/radio.db-*
 data/incoming/
 data/supervisor-config.json
+data/icecast-peak.json
 media/

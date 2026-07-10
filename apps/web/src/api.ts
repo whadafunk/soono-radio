@@ -38,6 +38,7 @@ const API_BASE = '/api';
 export interface IcecastStats {
   listener: number;
   peak_listener: number;
+  peak_since: string | null;
   bitrate: number;
   uptime: number;
   mount?: string;
@@ -68,6 +69,12 @@ export async function updateIcecastConfig(config: IcecastConfig): Promise<void> 
 export async function fetchIcecastStats(): Promise<IcecastStats> {
   const res = await fetch(`${API_BASE}/icecast/stats`);
   if (!res.ok) throw new Error(`Failed to fetch Icecast stats: ${res.statusText}`);
+  return res.json();
+}
+
+export async function resetPeakListeners(): Promise<{ peak_listener: number; peak_since: string }> {
+  const res = await fetch(`${API_BASE}/icecast/stats/peak/reset`, { method: 'POST' });
+  if (!res.ok) throw new Error(`Failed to reset peak listeners: ${res.statusText}`);
   return res.json();
 }
 

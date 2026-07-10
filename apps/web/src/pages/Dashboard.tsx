@@ -1,9 +1,11 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Activity, AlertTriangle, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, PauseCircle, PlayCircle, Clock, Headphones, Square, Volume2, TrendingUp, Wifi } from 'lucide-react';
+import { Activity, AlertTriangle, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, PauseCircle, PlayCircle, Clock, Headphones, Square, Volume2, TrendingUp, Wifi, RotateCcw } from 'lucide-react';
 import {
   fetchIcecastStats,
   fetchIcecastConfig,
   restartIcecast,
+  restartLiquidsoap,
+  resetPeakListeners,
   kickIcecastSource,
   fetchSupervisorV2Status,
   fetchLiquidsoapStatus,
@@ -20,6 +22,7 @@ import { fmtMmSs, fmtDriftSign, fmtRelativeTime, CONTENT_TYPE_META, ContentTypeC
 
 export function Dashboard() {
   const [restartToast, setRestartToast] = useState<string | null>(null);
+  const qc = useQueryClient();
 
   const { data: stats, isLoading: statsLoading, error: statsError } = useQuery({
     queryKey: ['icecast-stats'],
@@ -44,7 +47,7 @@ export function Dashboard() {
     refetchInterval: 3000,
   });
 
-  const restartMutation = useMutation({
+  const restartIcecastM = useMutation({
     mutationFn: restartIcecast,
     onSuccess: (data) => {
       setRestartToast(`✓ Streaming Engine restarted successfully! Uptime: ${data.uptime}s`);
@@ -53,6 +56,38 @@ export function Dashboard() {
     onError: (err) => {
       setRestartToast(`✗ Error: ${(err as Error).message}`);
       setTimeout(() => setRestartToast(null), 5000);
+    },
+  });
+
+  const restartLiquidsoapM = useMutation({
+    mutationFn: restartLiquidsoap,
+    onSuccess: () => {
+      setRestartToast('✓ Mix Engine restarted successfully!');
+      setTimeout(() => setRestartToast(null), 5000);
+    },
+    onError: (err) => {
+      setRestartToast(`✗ Error: ${(err as Error).message}`);
+      setTimeout(() => setRestartToast(null), 5000);
+    },
+  });
+
+  const restartSupervisorM = useMutation({
+    mutationFn: postSupervisorAlignToClock,
+    onSuccess: () => {
+      setRestartToast('✓ Supervisor realigned to wall clock.');
+      setTimeout(() => setRestartToast(null), 5000);
+      qc.invalidateQueries({ queryKey: ['supervisor-v2-status'] });
+    },
+    onError: (err) => {
+      setRestartToast(`✗ Error: ${(err as Error).message}`);
+      setTimeout(() => setRestartToast(null), 5000);
+    },
+  });
+
+  const resetPeakM = useMutation({
+    mutationFn: resetPeakListeners,
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ['icecast-stats'] });
     },
   });
 
@@ -113,24 +148,6 @@ export function Dashboard() {
             {isOnline ? '✓ Streaming Engine is running' : '✗ Streaming Engine is not responding'}
           </p>
         </div>
-        <button
-          onClick={() => restartMutation.mutate()}
-          disabled={restartMutation.isPending}
-          title="Restart Streaming Engine"
-          className="flex items-center gap-2 px-4 py-2 bg-amber-600 hover:bg-amber-700 text-white font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-        >
-          {restartMutation.isPending ? (
-            <>
-              <Loader className="w-4 h-4 animate-spin" />
-              Restarting...
-            </>
-          ) : (
-            <>
-              <Power className="w-4 h-4" />
-              Restart Streaming
-            </>
-          )}
-        </button>
       </div>
 
       {restartToast && (
@@ -148,24 +165,34 @@ export function Dashboard() {
             detail="Icecast"
             ok={isOnline ?? null}
             state={isOnline ? 'ONLINE' : 'OFFLINE'}
+            onRestart={() => restartIcecastM.mutate()}
+            restarting={restartIcecastM.isPending}
           />
           <HealthPill
             label="Mix Engine"
             detail="LiquidSoap"
             ok={lsStatus?.reachable ?? null}
             state={lsStatus?.reachable ? (lsStatus.on_air === 'live' ? 'LIVE' : 'AUTOMATION') : 'OFFLINE'}
+            onRestart={() => restartLiquidsoapM.mutate()}
+            restarting={restartLiquidsoapM.isPending}
           />
           <HealthPill
             label="Supervisor"
             detail={fmtRelativeTime(v2Status?.last_heartbeat_at ?? null)}
             ok={supervisorHb.label === 'ok' ? true : supervisorHb.label === 'offline' ? false : null}
             state={supervisorHb.label.toUpperCase()}
+            onRestart={() => {
+              if (confirm('Align to Clock discards the active plan and rebuilds it from the wall clock. Content already queued but not yet aired will be dropped. Continue?')) {
+                restartSupervisorM.mutate();
+              }
+            }}
+            restarting={restartSupervisorM.isPending}
           />
         </div>
       </section>
 
       {/* Now Playing */}
-      <NowPlayingCard status={v2Status} listenerCount={stats?.listener ?? 0} />
+      <NowPlayingCard status={v2Status} />
 
       {/* Monitor Player */}
       {config && <MonitorPlayer config={config} />}
@@ -212,9 +239,23 @@ export function Dashboard() {
                 <p className="text-2xl font-bold text-white mt-2">
                   {statsLoading ? '—' : stats?.peak_listener ?? 0}
                 </p>
-                <p className="text-xs text-zinc-500 mt-1">since Icecast started</p>
+                <p className="text-xs text-zinc-500 mt-1">
+                  since {fmtRelativeTime(stats?.peak_since ? new Date(stats.peak_since).getTime() : null)}
+                </p>
               </div>
-              <TrendingUp className="w-8 h-8 text-violet-500" />
+              <div className="flex flex-col items-center gap-1.5">
+                <TrendingUp className="w-8 h-8 text-violet-500" />
+                <button
+                  type="button"
+                  onClick={() => resetPeakM.mutate()}
+                  disabled={resetPeakM.isPending}
+                  title="Reset peak listener count"
+                  className="flex items-center gap-1 text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors disabled:opacity-40"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  reset
+                </button>
+              </div>
             </div>
           </div>
 
@@ -247,7 +288,7 @@ export function Dashboard() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-zinc-400 text-sm font-medium">Uptime</p>
+                <p className="text-zinc-400 text-sm font-medium">Uptime (Icecast)</p>
                 <p className="text-2xl font-bold text-white mt-2">
                   {statsLoading ? '—' : formatUptime(stats?.uptime ?? 0)}
                 </p>
@@ -370,33 +411,42 @@ function HealthPill({
   detail,
   ok,
   state,
+  onRestart,
+  restarting,
 }: {
   label: string;
   detail: string;
   ok: boolean | null;
   state: string;
+  onRestart?: () => void;
+  restarting?: boolean;
 }) {
   const dotCls = ok === null ? 'bg-zinc-600' : ok ? 'bg-green-500' : 'bg-red-500';
   const textCls = ok === null ? 'text-zinc-400' : ok ? 'text-green-400' : 'text-red-400';
   return (
     <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 flex items-center gap-3">
       <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dotCls}`} />
-      <div className="min-w-0">
+      <div className="min-w-0 flex-1">
         <p className="text-zinc-400 text-xs font-medium">{label}</p>
         <p className={`text-sm font-bold ${textCls}`}>{state}</p>
         <p className="text-[10px] text-zinc-500">{detail}</p>
       </div>
+      {onRestart && (
+        <button
+          type="button"
+          onClick={onRestart}
+          disabled={restarting}
+          title={`Restart ${label}`}
+          className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded transition-colors disabled:opacity-40 flex-shrink-0"
+        >
+          {restarting ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Power className="w-3.5 h-3.5" />}
+        </button>
+      )}
     </div>
   );
 }
 
-function NowPlayingCard({
-  status,
-  listenerCount,
-}: {
-  status: SupervisorV2Status | undefined;
-  listenerCount: number;
-}) {
+function NowPlayingCard({ status }: { status: SupervisorV2Status | undefined }) {
   if (!status || status.active_plan_id == null) {
     return (
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
@@ -408,15 +458,11 @@ function NowPlayingCard({
             No active plan — the Supervisor is idle or between segments.
           </p>
         </div>
-        <div className="text-right text-xs text-zinc-500">
-          <div>listeners: {listenerCount}</div>
-        </div>
       </section>
     );
   }
 
   const playing = status.plan_items.find((i) => i.status === 'playing');
-  const segment = status.current_segment;
 
   if (!playing) {
     return (
@@ -426,9 +472,6 @@ function NowPlayingCard({
           <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
           <p className="text-xl font-bold text-zinc-500 mt-1">● TRANSITIONING</p>
         </div>
-        <div className="text-right text-xs text-zinc-500">
-          <div>listeners: {listenerCount}</div>
-        </div>
       </section>
     );
   }
@@ -437,8 +480,18 @@ function NowPlayingCard({
   const meta = CONTENT_TYPE_META[playing.content_type];
   const Icon = meta?.Icon ?? Music2;
   const display = playing.media_title ?? '(untitled)';
-  const segTotal = segment ? segment.elapsed_seconds + segment.remaining_seconds : 0;
-  const progress = segTotal > 0 && segment ? Math.min(1, segment.elapsed_seconds / segTotal) : 0;
+
+  // Clip-level progress: how far into THIS item we are, distinct from Now
+  // Running's segment-level progress. Cumulative offset = sum of planned
+  // durations of items before this one; plan_consumed_seconds (actual
+  // consumed time, not wall clock) minus that offset = elapsed within the clip.
+  let cursor = 0;
+  for (const item of status.plan_items) {
+    if (item.status === 'playing') break;
+    cursor += item.planned_duration_seconds ?? 0;
+  }
+  const clipTotal = playing.planned_duration_seconds ?? 0;
+  const clipElapsed = Math.max(0, Math.min(clipTotal, status.plan_consumed_seconds - cursor));
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
@@ -456,23 +509,20 @@ function NowPlayingCard({
             </span>
           </div>
           <p className="text-2xl font-bold text-white mt-1 truncate">{display}</p>
-          {segment && (
+          {clipTotal > 0 && (
             <div className="mt-3">
-              <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
-                <span>{segment.name}</span>
-                <span className="font-mono">{fmtMmSs(segment.elapsed_seconds)} / {fmtMmSs(segTotal)}</span>
-              </div>
               <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                 <div
                   className={`h-full ${sourceLive ? 'bg-red-500' : 'bg-brand-500'} transition-all`}
-                  style={{ width: `${progress * 100}%` }}
+                  style={{ width: `${(clipElapsed / clipTotal) * 100}%` }}
                 />
+              </div>
+              <div className="flex items-center justify-between text-xs text-zinc-500 mt-1 font-mono">
+                <span>{fmtMmSs(clipElapsed)}</span>
+                <span>{fmtMmSs(clipTotal)}</span>
               </div>
             </div>
           )}
-        </div>
-        <div className="text-right text-xs text-zinc-500 space-y-1 flex-shrink-0">
-          <div>listeners: <span className="text-zinc-300 font-mono">{listenerCount}</span></div>
         </div>
       </div>
     </section>
