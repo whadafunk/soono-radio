@@ -19,6 +19,7 @@ import { MountPointsSection } from './icecast-sections/MountPointsSection';
 import { LimitsSection } from './icecast-sections/LimitsSection';
 import { RelaySection } from './icecast-sections/RelaySection';
 import { LoggingSection } from './icecast-sections/LoggingSection';
+import { getIcecastBaseUrl } from '../../lib/icecastUrl';
 
 function collectErrorPaths(obj: Record<string, unknown>, prefix = ''): string[] {
   const paths: string[] = [];
@@ -31,12 +32,6 @@ function collectErrorPaths(obj: Record<string, unknown>, prefix = ''): string[] 
     }
   }
   return paths;
-}
-
-function getIcecastBaseUrl(config: IcecastConfig): string {
-  const nonSslSocket = config.network.listen_sockets.find((s) => !s.ssl);
-  const port = nonSslSocket?.port ?? config.network.listen_sockets[0]?.port ?? 8000;
-  return `http://${config.server.hostname}:${port}`;
 }
 
 export function IcecastSettings() {

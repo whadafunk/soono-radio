@@ -1,22 +1,22 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Activity, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, Pause, Play, RotateCw, Lock, Unlock, Headphones, Square, Volume2 } from 'lucide-react';
+import { Activity, AlertTriangle, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, PauseCircle, PlayCircle, Clock, Headphones, Square, Volume2, TrendingUp, Wifi } from 'lucide-react';
 import {
   fetchIcecastStats,
   fetchIcecastConfig,
   restartIcecast,
   kickIcecastSource,
-  fetchSupervisorStatus,
-  fetchNowPlaying,
-  fetchRecentPlays,
+  fetchSupervisorV2Status,
+  fetchLiquidsoapStatus,
   fetchSimulate,
-  supervisorPause,
-  supervisorResume,
-  supervisorResync,
-  supervisorHold,
-  supervisorReleaseHold,
+  postSupervisorPause,
+  postSupervisorResume,
+  postSupervisorAlignToWallClock,
+  postSupervisorAlignToClock,
 } from '../api';
-import type { SupervisorStatus } from '@soono/shared';
+import type { SupervisorV2Status } from '@soono/shared';
 import { useEffect, useRef, useState } from 'react';
+import { getIcecastBaseUrl } from '../lib/icecastUrl';
+import { fmtMmSs, fmtDriftSign, fmtRelativeTime, CONTENT_TYPE_META, ContentTypeCell, heartbeatStatus } from '../lib/supervisorV2Ui';
 
 export function Dashboard() {
   const [restartToast, setRestartToast] = useState<string | null>(null);
@@ -32,22 +32,16 @@ export function Dashboard() {
     queryFn: fetchIcecastConfig,
   });
 
-  const { data: supStatus } = useQuery({
-    queryKey: ['supervisor-status'],
-    queryFn: fetchSupervisorStatus,
+  const { data: v2Status } = useQuery({
+    queryKey: ['supervisor-v2-status'],
+    queryFn: fetchSupervisorV2Status,
     refetchInterval: 3000,
   });
 
-  const { data: nowPlaying } = useQuery({
-    queryKey: ['supervisor-now-playing'],
-    queryFn: fetchNowPlaying,
+  const { data: lsStatus } = useQuery({
+    queryKey: ['liquidsoap-status'],
+    queryFn: fetchLiquidsoapStatus,
     refetchInterval: 3000,
-  });
-
-  const { data: recentPlays = [] } = useQuery({
-    queryKey: ['supervisor-recent-plays'],
-    queryFn: () => fetchRecentPlays(10),
-    refetchInterval: 5000,
   });
 
   const restartMutation = useMutation({
@@ -101,7 +95,14 @@ export function Dashboard() {
     return `${seconds}s`;
   };
 
+  const formatBandwidth = (totalKbps: number): string => {
+    if (totalKbps >= 1000) return `${(totalKbps / 1000).toFixed(1)} Mbps`;
+    return `${totalKbps} kbps`;
+  };
+
   const isOnline = !statsError && stats && stats.listener >= 0;
+  const icecastBaseUrl = config ? getIcecastBaseUrl(config) : 'https://localhost:8000';
+  const supervisorHb = heartbeatStatus(v2Status?.last_heartbeat_at ?? null);
 
   return (
     <div className="space-y-6">
@@ -138,25 +139,44 @@ export function Dashboard() {
         </div>
       )}
 
+      {/* Component Health */}
+      <section>
+        <h2 className="text-lg font-semibold text-white mb-4">Component Health</h2>
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+          <HealthPill
+            label="Streaming Engine"
+            detail="Icecast"
+            ok={isOnline ?? null}
+            state={isOnline ? 'ONLINE' : 'OFFLINE'}
+          />
+          <HealthPill
+            label="Mix Engine"
+            detail="LiquidSoap"
+            ok={lsStatus?.reachable ?? null}
+            state={lsStatus?.reachable ? (lsStatus.on_air === 'live' ? 'LIVE' : 'AUTOMATION') : 'OFFLINE'}
+          />
+          <HealthPill
+            label="Supervisor"
+            detail={fmtRelativeTime(v2Status?.last_heartbeat_at ?? null)}
+            ok={supervisorHb.label === 'ok' ? true : supervisorHb.label === 'offline' ? false : null}
+            state={supervisorHb.label.toUpperCase()}
+          />
+        </div>
+      </section>
+
       {/* Now Playing */}
-      <NowPlayingCard
-        nowPlaying={nowPlaying ?? null}
-        queueDepth={supStatus?.queue_depth ?? 0}
-        listenerCount={stats?.listener ?? 0}
-        reachable={supStatus?.reachable ?? false}
-        onAirSource={supStatus?.on_air_source ?? 'none'}
-      />
+      <NowPlayingCard status={v2Status} listenerCount={stats?.listener ?? 0} />
 
       {/* Monitor Player */}
       {config && <MonitorPlayer config={config} />}
 
       {/* Now Running — schedule resolver + supervisor controls */}
-      {supStatus && <NowRunningCard status={supStatus} />}
+      {v2Status && <NowRunningCard status={v2Status} />}
 
       {/* Live Stream Stats */}
       <section>
         <h2 className="text-lg font-semibold text-white mb-4">Live Stream</h2>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
             <div className="flex items-center justify-between">
               <div>
@@ -188,13 +208,39 @@ export function Dashboard() {
           <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
             <div className="flex items-center justify-between">
               <div>
+                <p className="text-zinc-400 text-sm font-medium">Peak Listeners</p>
+                <p className="text-2xl font-bold text-white mt-2">
+                  {statsLoading ? '—' : stats?.peak_listener ?? 0}
+                </p>
+                <p className="text-xs text-zinc-500 mt-1">since Icecast started</p>
+              </div>
+              <TrendingUp className="w-8 h-8 text-violet-500" />
+            </div>
+          </div>
+
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+            <div className="flex items-center justify-between">
+              <div>
                 <p className="text-zinc-400 text-sm font-medium">Bitrate</p>
                 <p className="text-2xl font-bold text-white mt-2">
                   {statsLoading ? '—' : stats?.bitrate ?? 0}
                 </p>
-                <p className="text-xs text-zinc-500 mt-1">kbps</p>
+                <p className="text-xs text-zinc-500 mt-1">kbps per listener</p>
               </div>
               <Gauge className="w-8 h-8 text-amber-500" />
+            </div>
+          </div>
+
+          <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-zinc-400 text-sm font-medium">Bandwidth</p>
+                <p className="text-2xl font-bold text-white mt-2">
+                  {statsLoading ? '—' : formatBandwidth((stats?.bitrate ?? 0) * (stats?.listener ?? 0))}
+                </p>
+                <p className="text-xs text-zinc-500 mt-1">outbound, all listeners</p>
+              </div>
+              <Wifi className="w-8 h-8 text-sky-500" />
             </div>
           </div>
 
@@ -226,7 +272,7 @@ export function Dashboard() {
           </div>
 
           <a
-            href={`http://${config?.server.hostname || 'localhost'}:${config?.network.listen_sockets?.[0]?.port || 8000}/admin/`}
+            href={`${icecastBaseUrl}/admin/`}
             target="_blank"
             rel="noopener noreferrer"
             className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 hover:border-brand-600 transition-colors cursor-pointer"
@@ -236,6 +282,19 @@ export function Dashboard() {
               {config?.server.hostname || 'localhost'}:{config?.network.listen_sockets?.[0]?.port || 8000}/admin
             </p>
             <p className="text-xs text-zinc-500 mt-2">{config?.server.location || 'no location'}</p>
+          </a>
+
+          <a
+            href={`${icecastBaseUrl}/status.xsl`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 hover:border-brand-600 transition-colors cursor-pointer"
+          >
+            <p className="text-zinc-400 text-sm font-medium">Server (Status)</p>
+            <p className="text-sm text-brand-400 mt-2 font-mono underline">
+              {config?.server.hostname || 'localhost'}:{config?.network.listen_sockets?.[0]?.port || 8000}/status.xsl
+            </p>
+            <p className="text-xs text-zinc-500 mt-2">Public stream status page</p>
           </a>
         </div>
       </section>
@@ -287,7 +346,7 @@ export function Dashboard() {
 
       <NextUpSection />
 
-      <RecentPlaysSection plays={recentPlays} />
+      <RecentPlaysSection plays={v2Status?.recent_plays ?? []} />
 
       {/* Info Box */}
       {isOnline && !statsLoading && (
@@ -304,44 +363,41 @@ export function Dashboard() {
   );
 }
 
-import type { IcecastConfig, NowPlaying, RecentPlay } from '@soono/shared';
+import type { IcecastConfig, SupervisorV2RecentPlay } from '@soono/shared';
+
+function HealthPill({
+  label,
+  detail,
+  ok,
+  state,
+}: {
+  label: string;
+  detail: string;
+  ok: boolean | null;
+  state: string;
+}) {
+  const dotCls = ok === null ? 'bg-zinc-600' : ok ? 'bg-green-500' : 'bg-red-500';
+  const textCls = ok === null ? 'text-zinc-400' : ok ? 'text-green-400' : 'text-red-400';
+  return (
+    <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 flex items-center gap-3">
+      <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${dotCls}`} />
+      <div className="min-w-0">
+        <p className="text-zinc-400 text-xs font-medium">{label}</p>
+        <p className={`text-sm font-bold ${textCls}`}>{state}</p>
+        <p className="text-[10px] text-zinc-500">{detail}</p>
+      </div>
+    </div>
+  );
+}
 
 function NowPlayingCard({
-  nowPlaying,
-  queueDepth,
+  status,
   listenerCount,
-  reachable,
-  onAirSource,
 }: {
-  nowPlaying: NowPlaying;
-  queueDepth: number;
+  status: SupervisorV2Status | undefined;
   listenerCount: number;
-  reachable: boolean;
-  onAirSource: 'live' | 'auto' | 'none';
 }) {
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const t = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(t);
-  }, []);
-
-  if (!reachable) {
-    return (
-      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
-        <Mic className="w-10 h-10 text-zinc-700" />
-        <div>
-          <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
-          <p className="text-xl font-bold text-zinc-500 mt-1">● MIX ENGINE OFFLINE</p>
-          <p className="text-xs text-zinc-600 mt-1">
-            Start the Mix Engine to begin broadcasting:{' '}
-            <code className="bg-zinc-950 px-1.5 py-0.5 rounded">./start-liquidsoap.sh</code>
-          </p>
-        </div>
-      </section>
-    );
-  }
-
-  if (!nowPlaying) {
+  if (!status || status.active_plan_id == null) {
     return (
       <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
         <Mic className="w-10 h-10 text-zinc-700" />
@@ -349,31 +405,45 @@ function NowPlayingCard({
           <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
           <p className="text-xl font-bold text-zinc-500 mt-1">● SILENCE</p>
           <p className="text-xs text-zinc-600 mt-1">
-            Nothing in the queue. The Supervisor is waiting for an eligible track (separation cooldown or empty library).
+            No active plan — the Supervisor is idle or between segments.
           </p>
         </div>
         <div className="text-right text-xs text-zinc-500">
-          <div>queue: {queueDepth}</div>
           <div>listeners: {listenerCount}</div>
         </div>
       </section>
     );
   }
 
-  const elapsedSeconds = Math.max(
-    0,
-    Math.floor((now - new Date(nowPlaying.started_at).getTime()) / 1000),
-  );
-  const totalSeconds = nowPlaying.duration_seconds ?? 0;
-  const progress = totalSeconds > 0 ? Math.min(1, elapsedSeconds / totalSeconds) : 0;
-  const sourceLive = onAirSource === 'live' || nowPlaying.source === 'live';
-  const display = nowPlaying.title || nowPlaying.original_filename || '(unknown)';
-  const artist = nowPlaying.artist;
+  const playing = status.plan_items.find((i) => i.status === 'playing');
+  const segment = status.current_segment;
+
+  if (!playing) {
+    return (
+      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
+        <Mic className="w-10 h-10 text-zinc-700" />
+        <div className="flex-1">
+          <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
+          <p className="text-xl font-bold text-zinc-500 mt-1">● TRANSITIONING</p>
+        </div>
+        <div className="text-right text-xs text-zinc-500">
+          <div>listeners: {listenerCount}</div>
+        </div>
+      </section>
+    );
+  }
+
+  const sourceLive = status.live_takeover_active;
+  const meta = CONTENT_TYPE_META[playing.content_type];
+  const Icon = meta?.Icon ?? Music2;
+  const display = playing.media_title ?? '(untitled)';
+  const segTotal = segment ? segment.elapsed_seconds + segment.remaining_seconds : 0;
+  const progress = segTotal > 0 && segment ? Math.min(1, segment.elapsed_seconds / segTotal) : 0;
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
       <div className="flex items-start gap-4">
-        <Music2 className={`w-10 h-10 flex-shrink-0 ${sourceLive ? 'text-red-500' : 'text-green-500'}`} />
+        <Icon className={`w-10 h-10 flex-shrink-0 ${sourceLive ? 'text-red-500' : (meta?.color ?? 'text-green-500')}`} />
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
             <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
@@ -386,63 +456,60 @@ function NowPlayingCard({
             </span>
           </div>
           <p className="text-2xl font-bold text-white mt-1 truncate">{display}</p>
-          {artist && <p className="text-sm text-zinc-400 truncate">{artist}</p>}
-          {totalSeconds > 0 && (
+          {segment && (
             <div className="mt-3">
+              <div className="flex items-center justify-between text-xs text-zinc-500 mb-1">
+                <span>{segment.name}</span>
+                <span className="font-mono">{fmtMmSs(segment.elapsed_seconds)} / {fmtMmSs(segTotal)}</span>
+              </div>
               <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                 <div
                   className={`h-full ${sourceLive ? 'bg-red-500' : 'bg-brand-500'} transition-all`}
                   style={{ width: `${progress * 100}%` }}
                 />
               </div>
-              <div className="flex items-center justify-between text-xs text-zinc-500 mt-1 font-mono">
-                <span>{formatMmSs(elapsedSeconds)}</span>
-                <span>{formatMmSs(totalSeconds)}</span>
-              </div>
             </div>
           )}
         </div>
         <div className="text-right text-xs text-zinc-500 space-y-1 flex-shrink-0">
-          <div>queue: <span className="text-zinc-300 font-mono">{queueDepth}</span></div>
           <div>listeners: <span className="text-zinc-300 font-mono">{listenerCount}</span></div>
-          {nowPlaying.live_listener_count !== null && (
-            <div className="text-zinc-600">at start: {nowPlaying.live_listener_count}</div>
-          )}
         </div>
       </div>
     </section>
   );
 }
 
-function NowRunningCard({ status }: { status: SupervisorStatus }) {
+function NowRunningCard({ status }: { status: SupervisorV2Status }) {
   const qc = useQueryClient();
   const [pendingError, setPendingError] = useState<string | null>(null);
 
   const onMutate = (label: string) => ({
-    onSuccess: () => qc.invalidateQueries({ queryKey: ['supervisor-status'] }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
     onError: (e: Error) => setPendingError(`${label}: ${e.message}`),
   });
 
-  const pauseM = useMutation({ mutationFn: supervisorPause, ...onMutate('Pause') });
-  const resumeM = useMutation({ mutationFn: supervisorResume, ...onMutate('Resume') });
-  const resyncM = useMutation({ mutationFn: supervisorResync, ...onMutate('Resync') });
-  const holdM = useMutation({ mutationFn: supervisorHold, ...onMutate('Hold') });
-  const releaseM = useMutation({ mutationFn: supervisorReleaseHold, ...onMutate('Release hold') });
-  const pending =
-    pauseM.isPending ||
-    resumeM.isPending ||
-    resyncM.isPending ||
-    holdM.isPending ||
-    releaseM.isPending;
+  const pauseM = useMutation({ mutationFn: postSupervisorPause, ...onMutate('Pause') });
+  const resumeM = useMutation({ mutationFn: postSupervisorResume, ...onMutate('Resume') });
+  const reconcileM = useMutation({ mutationFn: postSupervisorAlignToWallClock, ...onMutate('Reconcile') });
+  const alignM = useMutation({ mutationFn: postSupervisorAlignToClock, ...onMutate('Align to Clock') });
+  const pending = pauseM.isPending || resumeM.isPending || reconcileM.isPending || alignM.isPending;
 
-  const scheduled = status.scheduled;
+  const segment = status.current_segment;
+  const nextPlan = status.next_plan;
   const paused = status.paused;
-  const held = status.held != null;
+  const liveTakeover = status.live_takeover_active;
+  const hasActivePlan = status.active_plan_id != null;
 
-  const progressPct = scheduled
-    ? (scheduled.segment_elapsed_seconds /
-        Math.max(1, scheduled.segment_elapsed_seconds + scheduled.segment_remaining_seconds)) *
-      100
+  const liveDriftSeconds = (() => {
+    const startMs = status.segment_started_at_ms;
+    const consumed = status.plan_consumed_seconds ?? 0;
+    if (startMs == null) return 0;
+    const elapsed = Math.max(0, (Date.now() - startMs) / 1000);
+    return elapsed - consumed;
+  })();
+
+  const progressPct = segment
+    ? (segment.elapsed_seconds / Math.max(1, segment.elapsed_seconds + segment.remaining_seconds)) * 100
     : 0;
 
   return (
@@ -456,58 +523,47 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
                 PAUSED
               </span>
             )}
-            {held && (
-              <span className="text-brand-300 bg-brand-900/30 border border-brand-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
-                HELD
+            {liveTakeover && (
+              <span className="text-red-300 bg-red-900/30 border border-red-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
+                LIVE TAKEOVER
               </span>
             )}
-            {scheduled?.hard_cut_warning && (
-              <span
-                className="text-rose-300 bg-rose-900/30 border border-rose-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]"
-                title="Next segment has a fixed start — the current segment can't be shortened, so an audible cut is coming."
-              >
-                HARD CUT IN ~{formatHms(scheduled.segment_remaining_seconds)}
-              </span>
-            )}
-            {scheduled && scheduled.drift_seconds !== 0 && (
+            {Math.abs(liveDriftSeconds) > 5 && (
               <span
                 className={`px-1.5 py-0.5 rounded font-mono text-[10px] border ${
-                  scheduled.drift_seconds > 5
-                    ? 'text-amber-300 bg-amber-900/30 border-amber-800/50'
-                    : scheduled.drift_seconds < -5
-                      ? 'text-cyan-300 bg-cyan-900/30 border-cyan-800/50'
-                      : 'text-zinc-400 bg-zinc-800/50 border-zinc-700/50'
+                  liveDriftSeconds > 10 || liveDriftSeconds < -10
+                    ? 'text-red-300 bg-red-900/30 border-red-800/50'
+                    : 'text-amber-300 bg-amber-900/30 border-amber-800/50'
                 }`}
                 title={
-                  scheduled.drift_seconds > 0
-                    ? 'Music has played fewer seconds than the segment has elapsed — running behind.'
-                    : 'Music has played more seconds than the segment has elapsed — segment will overrun.'
+                  liveDriftSeconds > 0
+                    ? 'Wall clock is ahead of plan consumption — running behind.'
+                    : 'Plan consumption is ahead of the wall clock — running ahead.'
                 }
               >
-                {scheduled.drift_seconds > 0
-                  ? `+${scheduled.drift_seconds}s BEHIND`
-                  : `${scheduled.drift_seconds}s AHEAD`}
+                {fmtDriftSign(liveDriftSeconds)} {liveDriftSeconds > 0 ? 'BEHIND' : 'AHEAD'}
               </span>
             )}
           </div>
-          {scheduled ? (
+          {segment ? (
             <>
               <h2 className="text-lg font-semibold text-white flex items-center gap-2 flex-wrap">
-                <span>{scheduled.clock_name}</span>
-                <span className="text-zinc-500">·</span>
-                <span className="text-brand-300">{scheduled.segment_name}</span>
-                <span className="text-xs text-zinc-500 font-mono lowercase">
-                  {scheduled.segment_type}
-                </span>
+                <span className="text-xs text-zinc-500 font-mono uppercase">{segment.type}</span>
+                <span className="text-brand-300">{segment.name}</span>
               </h2>
-              {scheduled.show_name && (
+              {segment.show_name && (
                 <p className="text-xs text-zinc-500 mt-1">
-                  Show: <span className="text-zinc-400">{scheduled.show_name}</span>
+                  Show: <span className="text-zinc-400">{segment.show_name}</span>
+                </p>
+              )}
+              {nextPlan && (
+                <p className="text-xs text-zinc-500 mt-1">
+                  Next: <span className="text-zinc-300">{nextPlan.segment_type} · {nextPlan.segment_name}</span>
                 </p>
               )}
               <div className="mt-3 flex items-center gap-3">
                 <span className="text-xs font-mono text-zinc-400 w-12 text-right">
-                  {formatHms(scheduled.segment_elapsed_seconds)}
+                  {fmtMmSs(segment.elapsed_seconds)}
                 </span>
                 <div className="flex-1 h-2 bg-zinc-800 rounded overflow-hidden">
                   <div
@@ -516,7 +572,7 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
                   />
                 </div>
                 <span className="text-xs font-mono text-zinc-500 w-12">
-                  {held ? '—' : formatHms(scheduled.segment_remaining_seconds)}
+                  {fmtMmSs(segment.remaining_seconds)}
                 </span>
               </div>
             </>
@@ -532,56 +588,44 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
               onClick={() => resumeM.mutate()}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-sm transition disabled:opacity-40"
             >
-              <Play className="w-4 h-4" />
+              <PlayCircle className="w-4 h-4" />
               Resume
             </button>
           ) : (
             <button
               type="button"
-              disabled={pending || !status.running}
+              disabled={pending || !hasActivePlan}
               onClick={() => pauseM.mutate()}
               className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-sm transition disabled:opacity-40"
             >
-              <Pause className="w-4 h-4" />
+              <PauseCircle className="w-4 h-4" />
               Pause
             </button>
           )}
           <button
             type="button"
-            disabled={pending || !status.running}
+            disabled={pending || !hasActivePlan || liveTakeover || Math.abs(liveDriftSeconds) < 5}
+            onClick={() => reconcileM.mutate()}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
+            title="Safely re-check the schedule and correct anything stale — never disturbs a plan that's already trustworthy"
+          >
+            <Clock className="w-4 h-4" />
+            Reconcile
+          </button>
+          <button
+            type="button"
+            disabled={pending || !hasActivePlan || liveTakeover}
             onClick={() => {
-              if (confirm('Resync triggers an immediate scheduler tick — push a new pick now. Continue?')) {
-                resyncM.mutate();
+              if (confirm('Align to Clock discards the active plan and rebuilds it from the wall clock. Content already queued but not yet aired will be dropped. Continue?')) {
+                alignM.mutate();
               }
             }}
-            className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
-            title="Trigger an immediate pick. Does not flush LS's existing queue."
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-900/20 text-amber-400 border border-amber-800 rounded text-sm transition hover:bg-amber-900/40 hover:text-amber-300 disabled:opacity-40"
+            title="Forcefully discard the active plan and rebuild from wall clock. Forward-only — a no-op if the plan is already at or ahead of the clock."
           >
-            <RotateCw className="w-4 h-4" />
-            Resync
+            <AlertTriangle className="w-4 h-4" />
+            Align to Clock
           </button>
-          {held ? (
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => releaseM.mutate()}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
-            >
-              <Unlock className="w-4 h-4" />
-              Release hold
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={pending || !scheduled || !status.running}
-              onClick={() => holdM.mutate()}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition disabled:opacity-40"
-              title="Pin the current segment — schedule resolver stops advancing"
-            >
-              <Lock className="w-4 h-4" />
-              Hold
-            </button>
-          )}
         </div>
       </div>
       {pendingError && (
@@ -589,13 +633,6 @@ function NowRunningCard({ status }: { status: SupervisorStatus }) {
       )}
     </section>
   );
-}
-
-function formatHms(seconds: number): string {
-  const s = Math.max(0, Math.floor(seconds));
-  const m = Math.floor(s / 60);
-  const r = s % 60;
-  return `${m}:${String(r).padStart(2, '0')}`;
 }
 
 function NextUpSection() {
@@ -655,7 +692,7 @@ function NextUpSection() {
                     {p.clock_name} · {p.segment_name}
                   </td>
                   <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
-                    {p.media ? formatMmSs(p.media.duration_seconds) : '—'}
+                    {p.media ? fmtMmSs(p.media.duration_seconds) : '—'}
                   </td>
                 </tr>
               );
@@ -672,12 +709,9 @@ function formatHourMin(d: Date): string {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
-function RecentPlaysSection({ plays }: { plays: RecentPlay[] }) {
+function RecentPlaysSection({ plays }: { plays: SupervisorV2RecentPlay[] }) {
   if (plays.length === 0) return null;
-  // Drop the very first row if it matches the currently-playing one
-  // (no ended_at) — the Now Playing card already shows that.
-  const visible = plays.filter((p) => p.ended_at !== null).slice(0, 8);
-  if (visible.length === 0) return null;
+  const visible = plays.slice(0, 8);
   return (
     <section>
       <h2 className="text-lg font-semibold text-white mb-3">Recent Plays</h2>
@@ -685,54 +719,33 @@ function RecentPlaysSection({ plays }: { plays: RecentPlay[] }) {
         <table className="w-full text-sm">
           <thead className="bg-zinc-950/50 border-b border-zinc-800">
             <tr>
-              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Time</th>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Type</th>
               <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Track</th>
-              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Source</th>
+              <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Artist</th>
               <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Duration</th>
-              <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">Listeners</th>
+              <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-3 py-2">When</th>
             </tr>
           </thead>
           <tbody>
-            {visible.map((p) => {
-              const playedSeconds =
-                p.ended_at && p.started_at
-                  ? Math.max(0, Math.floor((new Date(p.ended_at).getTime() - new Date(p.started_at).getTime()) / 1000))
-                  : 0;
-              const display = p.title || p.original_filename || (p.source === 'live' ? '(live broadcast)' : '—');
-              return (
-                <tr key={p.id} className="border-t border-zinc-800/60">
-                  <td className="px-3 py-2 text-zinc-400 font-mono text-xs whitespace-nowrap">
-                    {formatTimeAgo(p.started_at)}
-                  </td>
-                  <td className="px-3 py-2 text-zinc-200 truncate max-w-md">
-                    {display}
-                    {p.artist && <span className="text-zinc-500"> — {p.artist}</span>}
-                    {p.aborted && (
-                      <span className="ml-2 text-[10px] text-amber-400 font-mono uppercase">aborted</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`text-xs px-1.5 py-0.5 rounded font-mono ${
-                        p.source === 'live'
-                          ? 'bg-red-900/40 text-red-300'
-                          : p.source === 'manual'
-                            ? 'bg-amber-900/40 text-amber-300'
-                            : 'bg-green-900/40 text-green-300'
-                      }`}
-                    >
-                      {p.source}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
-                    {formatMmSs(playedSeconds)}
-                  </td>
-                  <td className="px-3 py-2 text-right font-mono text-xs text-zinc-500">
-                    {p.live_listener_count ?? '—'}
-                  </td>
-                </tr>
-              );
-            })}
+            {visible.map((p, i) => (
+              <tr key={i} className="border-t border-zinc-800/60">
+                <td className="px-3 py-2">
+                  {p.content_type ? <ContentTypeCell type={p.content_type} /> : <span className="text-zinc-500 text-xs italic">—</span>}
+                </td>
+                <td className="px-3 py-2 text-zinc-200 truncate max-w-md">
+                  {p.title ?? <span className="text-zinc-500 italic">untitled</span>}
+                </td>
+                <td className="px-3 py-2 text-zinc-400 truncate max-w-xs text-xs">
+                  {p.artist ?? <span className="text-zinc-600">—</span>}
+                </td>
+                <td className="px-3 py-2 text-right font-mono text-xs text-zinc-400">
+                  {p.duration_seconds != null ? fmtMmSs(p.duration_seconds) : '—'}
+                </td>
+                <td className="px-3 py-2 text-right text-xs text-zinc-500">
+                  {fmtRelativeTime(p.started_at_ms)}
+                </td>
+              </tr>
+            ))}
           </tbody>
         </table>
       </div>
@@ -747,10 +760,7 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
   const [volume, setVolume] = useState(0.8);
   const audioRef = useRef<HTMLAudioElement>(null);
 
-  const socket = config.network.listen_sockets[0];
-  const port = socket?.port ?? 8000;
-  const proto = socket?.ssl ? 'https' : 'http';
-  const streamUrl = `${proto}://localhost:${port}${config.mount.name}`;
+  const streamUrl = `${getIcecastBaseUrl(config)}${config.mount.name}`;
 
   // Sync volume without restarting stream
   useEffect(() => {
@@ -846,20 +856,4 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
       />
     </section>
   );
-}
-
-function formatMmSs(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function formatTimeAgo(d: Date | string): string {
-  const t = typeof d === 'string' ? new Date(d).getTime() : d.getTime();
-  const ago = Math.floor((Date.now() - t) / 1000);
-  if (ago < 60) return `${ago}s ago`;
-  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
-  if (ago < 86400) return `${Math.floor(ago / 3600)}h ago`;
-  return new Date(t).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
 }

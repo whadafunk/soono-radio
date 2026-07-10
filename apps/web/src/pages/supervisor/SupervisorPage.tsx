@@ -6,12 +6,6 @@ import {
   Circle,
   Clock,
   Mic2,
-  Music2,
-  Megaphone,
-  Radio,
-  FileText,
-  Volume2,
-  Layers,
   Loader,
   SkipForward,
   PauseCircle,
@@ -34,62 +28,14 @@ import {
   postSupervisorAlignToWallClock,
   postSupervisorAlignToClock,
 } from '../../api';
-
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function fmtMmSs(seconds: number): string {
-  if (!Number.isFinite(seconds) || seconds < 0) return '—';
-  const m = Math.floor(seconds / 60);
-  const s = Math.floor(seconds % 60);
-  return `${m}:${s.toString().padStart(2, '0')}`;
-}
-
-function fmtDriftSign(seconds: number): string {
-  if (Math.abs(seconds) < 0.05) return '0.0s';
-  const sign = seconds > 0 ? '+' : '−';
-  return `${sign}${Math.abs(seconds).toFixed(1)}s`;
-}
-
-function fmtRelativeTime(unixMs: number | null): string {
-  if (unixMs === null) return 'never';
-  const ago = Math.floor((Date.now() - unixMs) / 1000);
-  if (ago < 60) return `${ago}s ago`;
-  if (ago < 3600) return `${Math.floor(ago / 60)}m ago`;
-  return `${Math.floor(ago / 3600)}h ago`;
-}
-
-// ─── Content type display ─────────────────────────────────────────────────────
-
-const CONTENT_TYPE_META: Record<
-  string,
-  { label: string; Icon: React.ElementType; color: string; barColor: string }
-> = {
-  music:       { label: 'Music',      Icon: Music2,    color: 'text-brand-400',  barColor: 'bg-brand-500'  },
-  jingle:      { label: 'Jingle',     Icon: Volume2,   color: 'text-cyan-400',    barColor: 'bg-cyan-500'    },
-  branding:    { label: 'Branding',   Icon: Radio,     color: 'text-violet-400',  barColor: 'bg-violet-500'  },
-  station_id:  { label: 'Station ID', Icon: Radio,     color: 'text-violet-400',  barColor: 'bg-violet-500'  },
-  campaign:    { label: 'Campaign',   Icon: Megaphone, color: 'text-amber-400',   barColor: 'bg-amber-500'   },
-  promo:       { label: 'Promo',      Icon: Megaphone, color: 'text-orange-400',  barColor: 'bg-orange-500'  },
-  rundown:     { label: 'Rundown',    Icon: FileText,  color: 'text-teal-400',    barColor: 'bg-teal-500'    },
-  voice_track: { label: 'Voice',      Icon: Mic2,      color: 'text-pink-400',    barColor: 'bg-pink-500'    },
-  filler:      { label: 'Filler',     Icon: Layers,    color: 'text-zinc-400',    barColor: 'bg-zinc-500'    },
-};
-
-function ContentTypeCell({ type }: { type: string }) {
-  const meta = CONTENT_TYPE_META[type] ?? {
-    label: type,
-    Icon: Circle,
-    color: 'text-zinc-400',
-    barColor: 'bg-zinc-500',
-  };
-  const { label, Icon, color } = meta;
-  return (
-    <span className={`inline-flex items-center gap-1 ${color}`}>
-      <Icon className="w-3.5 h-3.5 flex-shrink-0" />
-      <span className="text-xs">{label}</span>
-    </span>
-  );
-}
+import {
+  fmtMmSs,
+  fmtDriftSign,
+  fmtRelativeTime,
+  CONTENT_TYPE_META,
+  ContentTypeCell,
+  heartbeatStatus,
+} from '../../lib/supervisorV2Ui';
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
 
@@ -475,18 +421,7 @@ function DriftPanel({
   const driftColor =
     abs < 5 ? 'text-green-400' : abs < 10 ? 'text-amber-400' : 'text-red-400';
 
-  const heartbeatAgo = lastHeartbeatAt
-    ? Math.floor((Date.now() - lastHeartbeatAt) / 1000)
-    : null;
-
-  const heartbeatStatus =
-    heartbeatAgo === null
-      ? { label: 'offline', cls: 'text-red-400' }
-      : heartbeatAgo < 60
-        ? { label: 'ok', cls: 'text-green-400' }
-        : heartbeatAgo < 300
-          ? { label: 'stale', cls: 'text-amber-400' }
-          : { label: 'offline', cls: 'text-red-400' };
+  const hb = heartbeatStatus(lastHeartbeatAt);
 
   return (
     <section>
@@ -503,10 +438,10 @@ function DriftPanel({
         </div>
         <div className="border-l border-zinc-800 pl-8">
           <p className="text-xs text-zinc-400 mb-1">Last heartbeat</p>
-          <p className={`text-sm font-medium ${heartbeatStatus.cls}`}>
+          <p className={`text-sm font-medium ${hb.cls}`}>
             {fmtRelativeTime(lastHeartbeatAt)}
           </p>
-          <p className={`text-xs mt-1 ${heartbeatStatus.cls}`}>{heartbeatStatus.label}</p>
+          <p className={`text-xs mt-1 ${hb.cls}`}>{hb.label}</p>
         </div>
       </div>
     </section>
@@ -777,20 +712,9 @@ function ProcessHealthPanel({
 }: {
   lastHeartbeatAt: number | null;
 }) {
-  const heartbeatAgo = lastHeartbeatAt
-    ? Math.floor((Date.now() - lastHeartbeatAt) / 1000)
-    : null;
-
   // All processes run in the same server process; if the supervisor heartbeat
-  // is alive, all processes are alive. N/A shown only when heartbeat is absent.
-  function getStatus(_processName: string): { label: string; cls: string } {
-    if (heartbeatAgo === null) {
-      return { label: 'offline', cls: 'text-red-400' };
-    }
-    if (heartbeatAgo < 60) return { label: 'ok', cls: 'text-green-400' };
-    if (heartbeatAgo < 300) return { label: 'stale', cls: 'text-amber-400' };
-    return { label: 'offline', cls: 'text-red-400' };
-  }
+  // is alive, all processes are alive.
+  const status = heartbeatStatus(lastHeartbeatAt);
 
   return (
     <section>
@@ -798,22 +722,12 @@ function ProcessHealthPanel({
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
         <div className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-3">
           {PROCESSES.map((name) => {
-            const status = getStatus(name);
-            const dotCls =
-              status.label === 'ok'
-                ? 'bg-green-500'
-                : status.label === 'stale'
-                  ? 'bg-amber-500'
-                  : status.label === 'offline'
-                    ? 'bg-red-500'
-                    : 'bg-zinc-600';
-
             const heartbeatLabel = fmtRelativeTime(lastHeartbeatAt);
 
             return (
               <div key={name} className="flex flex-col gap-1 p-2 bg-zinc-800/40 rounded">
                 <div className="flex items-center gap-1.5">
-                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${dotCls}`} />
+                  <span className={`w-2 h-2 rounded-full flex-shrink-0 ${status.dotCls}`} />
                   <span className="text-xs font-medium text-zinc-300 truncate">{name}</span>
                 </div>
                 <span className={`text-[10px] font-mono ${status.cls}`}>{status.label}</span>

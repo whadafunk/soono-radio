@@ -10,6 +10,7 @@ async function icecastAuthHeader(): Promise<string> {
 
 interface IcecastStatsResponse {
   listener: number;
+  peak_listener: number;
   bitrate: number;
   uptime: number;
   mount: string;
@@ -28,17 +29,19 @@ export async function fetchIcecastStats(mount: string = '/stream'): Promise<Icec
 
     if (!response.ok) {
       // Icecast not responding or mount doesn't exist yet
-      return { listener: 0, bitrate: 0, uptime: 0, mount };
+      return { listener: 0, peak_listener: 0, bitrate: 0, uptime: 0, mount };
     }
 
     const text = await response.text();
 
-    // Parse XML response looking for <listeners>, <bitrate>, <server_start_time>
+    // Parse XML response looking for <listeners>, <listener_peak>, <bitrate>, <server_start_time>
     const listenerMatch = text.match(/<listeners>(\d+)<\/listeners>/);
+    const peakListenerMatch = text.match(/<listener_peak>(\d+)<\/listener_peak>/);
     const bitrateMatch = text.match(/<bitrate>(\d+)<\/bitrate>/);
     const uptimeMatch = text.match(/<server_start_iso8601>([^<]+)<\/server_start_iso8601>/);
 
     const listener = listenerMatch ? parseInt(listenerMatch[1], 10) : 0;
+    const peak_listener = peakListenerMatch ? parseInt(peakListenerMatch[1], 10) : 0;
     const bitrate = bitrateMatch ? parseInt(bitrateMatch[1], 10) : 0;
 
     let uptime = 0;
@@ -47,11 +50,11 @@ export async function fetchIcecastStats(mount: string = '/stream'): Promise<Icec
       uptime = Math.floor((Date.now() - startTime) / 1000);
     }
 
-    return { listener, bitrate, uptime, mount };
+    return { listener, peak_listener, bitrate, uptime, mount };
   } catch (error) {
     // Icecast unreachable
     console.error('Failed to fetch Icecast stats:', error);
-    return { listener: 0, bitrate: 0, uptime: 0, mount };
+    return { listener: 0, peak_listener: 0, bitrate: 0, uptime: 0, mount };
   }
 }
 
@@ -68,16 +71,18 @@ export async function fetchAllMountStats() {
 
     if (!response.ok) {
       const uptime = await getDockerContainerUptime();
-      return { listener: 0, bitrate: 0, uptime };
+      return { listener: 0, peak_listener: 0, bitrate: 0, uptime };
     }
 
     const text = await response.text();
 
     const listenerMatch = text.match(/<listeners>(\d+)<\/listeners>/);
+    const peakListenerMatch = text.match(/<listener_peak>(\d+)<\/listener_peak>/);
     const bitrateMatch = text.match(/<bitrate>(\d+)<\/bitrate>/);
     const uptimeMatch = text.match(/<server_start_iso8601>([^<]+)<\/server_start_iso8601>/);
 
     const listener = listenerMatch ? parseInt(listenerMatch[1], 10) : 0;
+    const peak_listener = peakListenerMatch ? parseInt(peakListenerMatch[1], 10) : 0;
     const bitrate = bitrateMatch ? parseInt(bitrateMatch[1], 10) : 0;
 
     let uptime = 0;
@@ -86,11 +91,11 @@ export async function fetchAllMountStats() {
       uptime = Math.floor((Date.now() - startTime) / 1000);
     }
 
-    return { listener, bitrate, uptime };
+    return { listener, peak_listener, bitrate, uptime };
   } catch (error) {
     console.error('Failed to fetch global Icecast stats:', error);
     const uptime = await getDockerContainerUptime();
-    return { listener: 0, bitrate: 0, uptime };
+    return { listener: 0, peak_listener: 0, bitrate: 0, uptime };
   }
 }
 

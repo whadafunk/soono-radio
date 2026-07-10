@@ -12,14 +12,8 @@ import {
   MediaPatch,
   MediaCategory,
   TranscodeOptions,
-  SupervisorStatus,
-  SupervisorStatusSchema,
   SupervisorConfig,
   SupervisorConfigSchema,
-  NowPlaying,
-  NowPlayingSchema,
-  RecentPlay,
-  RecentPlaySchema,
   SimulatedPlay,
   User,
   UserCreate,
@@ -43,6 +37,7 @@ const API_BASE = '/api';
 
 export interface IcecastStats {
   listener: number;
+  peak_listener: number;
   bitrate: number;
   uptime: number;
   mount?: string;
@@ -487,19 +482,6 @@ export async function bulkSetFavorite(ids: number[], favorite: boolean): Promise
   }
 }
 
-export async function fetchSupervisorStatus(): Promise<SupervisorStatus> {
-  const res = await fetch(`${API_BASE}/supervisor/status`);
-  if (!res.ok) throw new Error(`Failed to fetch supervisor status: ${res.statusText}`);
-  return SupervisorStatusSchema.parse(await res.json());
-}
-
-export async function fetchNowPlaying(): Promise<NowPlaying> {
-  const res = await fetch(`${API_BASE}/supervisor/now-playing`);
-  if (!res.ok) throw new Error(`Failed to fetch now-playing: ${res.statusText}`);
-  const data = await res.json();
-  return NowPlayingSchema.parse(data);
-}
-
 export async function fetchSupervisorConfig(): Promise<SupervisorConfig> {
   const res = await fetch(`${API_BASE}/supervisor/config`);
   if (!res.ok) throw new Error(`Failed to fetch supervisor config: ${res.statusText}`);
@@ -524,27 +506,6 @@ export async function restartSupervisor(): Promise<void> {
     const data = await res.json().catch(() => ({}));
     throw new Error(data.error || `Failed to restart supervisor: ${res.statusText}`);
   }
-}
-
-async function postControl(path: string): Promise<void> {
-  const res = await fetch(`${API_BASE}/supervisor/${path}`, { method: 'POST' });
-  if (!res.ok) {
-    const data = await res.json().catch(() => ({}));
-    throw new Error(data.error || `Failed: ${res.statusText}`);
-  }
-}
-
-export const supervisorPause = () => postControl('pause');
-export const supervisorResume = () => postControl('resume');
-export const supervisorResync = () => postControl('resync');
-export const supervisorHold = () => postControl('hold');
-export const supervisorReleaseHold = () => postControl('release-hold');
-
-export async function fetchRecentPlays(limit = 20): Promise<RecentPlay[]> {
-  const res = await fetch(`${API_BASE}/supervisor/recent-plays?limit=${limit}`);
-  if (!res.ok) throw new Error(`Failed to fetch recent plays: ${res.statusText}`);
-  const data = await res.json();
-  return data.plays.map((p: unknown) => RecentPlaySchema.parse(p));
 }
 
 export async function fetchSimulate(from: Date, to: Date): Promise<SimulatedPlay[]> {
