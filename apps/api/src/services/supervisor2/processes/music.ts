@@ -271,7 +271,10 @@ export class MusicProcess {
       .where(inArray(mediaTable.id, mediaIds));
     const mediaById = new Map(mediaRows.map((r) => [r.id, r]));
 
-    // Latest started_at per media_id in this playlist.
+    // Latest started_at per media_id in this playlist. Deliberately does not
+    // filter on `aborted` (Decision 63): a track cut short mid-air still
+    // occupied a rotation slot and must stay deprioritized for LRP purposes,
+    // even though it wouldn't count toward Campaign's billing/pacing.
     const lastPlayed = await this.db
       .select({
         media_id: playHistoryTable.media_id,
@@ -416,7 +419,8 @@ export class MusicProcess {
     }
     if (streak < everyN) return null;
 
-    // LRP within the hot-play playlist.
+    // LRP within the hot-play playlist. No `aborted` filter — same reasoning
+    // as the rotation LRP query above (Decision 63).
     const ids = Array.from(hotMediaIds);
     const lastPlayed = await this.db
       .select({
@@ -487,6 +491,10 @@ export class MusicProcess {
     const out: MusicCandidate[] = [];
 
     for (const campaign of campaigns) {
+      // Heavy-rotation daily cap — a Music-domain concept (distinct from
+      // Campaign's ad billing/pacing), so per Decision 63 this counts any
+      // row regardless of `aborted`: a cut-short heavy-rotation play still
+      // occupied a slot and should still count against overplay risk.
       const playsToday = await this.db
         .select({ n: sql<number>`COUNT(*)`.as('n') })
         .from(playHistoryTable)
@@ -520,7 +528,8 @@ export class MusicProcess {
         .from(mediaTable)
         .where(inArray(mediaTable.id, mediaIds));
 
-      // LRP within the campaign's playlist.
+      // LRP within the campaign's playlist. No `aborted` filter — same
+      // reasoning as the rotation LRP query above (Decision 63).
       const lastPlayed = await this.db
         .select({
           media_id: playHistoryTable.media_id,

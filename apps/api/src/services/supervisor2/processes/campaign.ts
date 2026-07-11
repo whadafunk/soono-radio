@@ -31,6 +31,7 @@ import {
   promos as promosTable,
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
+import { campaignCompletedPlayFilter } from '../playHistoryViews.js';
 import type {
   BreakSpaceEstimate,
   CampaignCandidate,
@@ -302,6 +303,7 @@ export class CampaignProcess {
           isNotNull(playHistoryTable.campaign_id),
           inArray(playHistoryTable.campaign_id, campaignIds),
           gte(playHistoryTable.started_at, new Date(sinceMs)),
+          campaignCompletedPlayFilter,
         ),
       )
       .groupBy(playHistoryTable.campaign_id);
@@ -402,6 +404,7 @@ export class CampaignProcess {
         and(
           eq(playHistoryTable.campaign_id, campaignId),
           gte(playHistoryTable.started_at, new Date(sinceMs)),
+          campaignCompletedPlayFilter,
         ),
       );
     void nowMs;
@@ -425,6 +428,7 @@ export class CampaignProcess {
           eq(playHistoryTable.campaign_id, campaignId),
           eq(playHistoryTable.stop_set_position, 1),
           gte(playHistoryTable.started_at, new Date(midnightMsToday)),
+          campaignCompletedPlayFilter,
         ),
       )
       .limit(1);
@@ -500,6 +504,7 @@ export class CampaignProcess {
         and(
           eq(playHistoryTable.promo_id, promoId),
           gte(playHistoryTable.started_at, new Date(sinceMs)),
+          campaignCompletedPlayFilter,
         ),
       );
     void nowMs;

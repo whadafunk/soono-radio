@@ -6,16 +6,34 @@ import { supervisorState, planItems, plans, clockSegments } from '../db/schema.j
 import { HarborClient } from '../services/supervisor2/harborClient.js';
 import { bus } from '../services/supervisor2/bus.js';
 import { resolveCurrentSegment, segmentBoundsWithinClock } from '../services/supervisor2/clockResolver.js';
+import { abortRow } from '../services/supervisor2/playHistoryService.js';
 
 export async function supervisorControlRoutes(fastify: FastifyInstance) {
   fastify.post('/supervisor/v2/skip', async (_request, reply) => {
     try {
+      const nowMs = Date.now();
+      // Capture play_history_id before flipping status — the item is being
+      // cut mid-air, not skipped before it ever played, so its play_history
+      // row needs marking aborted (Decision 63), not just its plan_items
+      // status changed.
+      const playingItems = await db
+        .select({ id: planItems.id, play_history_id: planItems.play_history_id })
+        .from(planItems)
+        .where(eq(planItems.status, 'playing'));
+
       await HarborClient.skip();
       // Mark the currently-playing item as operator_skipped so the plan
       // reflects what actually happened.
       await db.update(planItems)
         .set({ status: 'operator_skipped' })
         .where(eq(planItems.status, 'playing'));
+
+      for (const item of playingItems) {
+        if (item.play_history_id != null) {
+          await abortRow(db, item.play_history_id, nowMs);
+        }
+      }
+
       return reply.send({ ok: true });
     } catch (err) {
       fastify.log.error(err, 'supervisor skip failed');

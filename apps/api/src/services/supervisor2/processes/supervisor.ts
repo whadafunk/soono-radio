@@ -94,6 +94,7 @@ import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
 import { computeResolutionIdentity, resolveActivePlanSegment, resolveCurrentSegment, segmentBoundsWithinClock, type ResolvedSegment } from '../clockResolver.js';
 import {
+  abortRow,
   closeMostRecentOpenRow,
   closeOpenRowsBefore,
   stampStarted,
@@ -875,6 +876,13 @@ export class SupervisorProcess {
           .where(eq(planItemsTable.id, item.id));
 
         if (isPlaying) {
+          // Decision 63: this item was cut mid-air, not just skipped before
+          // ever airing — mark its play_history row aborted so billing/pacing
+          // counters (Campaign) can exclude it, while LRP/rotation queries
+          // (Music, Branding) correctly keep counting it as "just used".
+          if (item.play_history_id != null) {
+            await abortRow(this.db, item.play_history_id, nowMs);
+          }
           try {
             await HarborClient.skip();
           } catch (err) {
@@ -887,7 +895,6 @@ export class SupervisorProcess {
           plan_item_id: item.id, content_type: item.content_type, on_air: isPlaying,
         }, 'supervisor: hard-start trim — item removed');
 
-        void nowMs;
         return; // one item per tick; gate re-evaluates next tick
       }
     }

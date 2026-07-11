@@ -25,6 +25,7 @@ import {
   broadcastIntervals as broadcastIntervalsTable,
   broadcastIntervalSlots as broadcastIntervalSlotsTable,
 } from '../db/schema.js';
+import { campaignCompletedPlayFilter } from './supervisor2/playHistoryViews.js';
 import type {
   Budget,
   BudgetCuts,
@@ -511,6 +512,7 @@ async function computeDemand(
             and(
               isNotNull(playHistoryTable.campaign_id),
               inArray(playHistoryTable.campaign_id, campaignIds),
+              campaignCompletedPlayFilter,
             ),
           )
       : [];
@@ -762,6 +764,7 @@ export async function getCampaignAvailable(
               and(
                 isNotNull(playHistoryTable.campaign_id),
                 inArray(playHistoryTable.campaign_id, partnerIds),
+                campaignCompletedPlayFilter,
               ),
             )
         : [];
@@ -876,6 +879,7 @@ export async function getPacing(campaignId: number): Promise<CampaignPacingDetai
         eq(playHistoryTable.campaign_id, campaignId),
         gte(playHistoryTable.started_at, fullStart),
         lte(playHistoryTable.started_at, fullEnd),
+        campaignCompletedPlayFilter,
       ),
     );
   const actualToDate = playRows.length;

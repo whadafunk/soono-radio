@@ -89,6 +89,24 @@ export async function closeRow(
     .where(eq(playHistoryTable.id, id));
 }
 
+// Marks a row as aborted (cut short before it finished) and closes it — used
+// when the Supervisor forcibly stops a `playing` item (hard-start trim, the
+// manual operator skip) rather than letting it finish naturally (Decision
+// 63). Distinct from closeRow: a naturally-finished play is never aborted,
+// only one that was actively cut. Billing/pacing-cap counters (Campaign) must
+// exclude aborted rows; LRP/rotation queries (Music, Branding, Rundown) must
+// not — a cut-short play still occupied a rotation slot.
+export async function abortRow(
+  db: typeof defaultDb,
+  id: number,
+  endedAtMs: number,
+): Promise<void> {
+  await db
+    .update(playHistoryTable)
+    .set({ ended_at: new Date(endedAtMs), aborted: true })
+    .where(eq(playHistoryTable.id, id));
+}
+
 // Closes every still-open row whose id is strictly less than `currentId`.
 // Catches the case where webhooks were missed and we need to retroactively
 // stamp ended_at on whatever was playing before the current track.

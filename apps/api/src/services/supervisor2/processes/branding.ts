@@ -201,6 +201,10 @@ export class BrandingProcess {
       .where(inArray(mediaTable.id, mediaIds));
     const mediaById = new Map(mediaRows.map((r) => [r.id, r]));
 
+    // Latest started_at per media_id. Deliberately does not filter on
+    // `aborted` (Decision 63): a jingle/station-id/envelope cut short still
+    // occupied a rotation slot and must stay deprioritized for LRP purposes
+    // — only Campaign's billing/pacing counters exclude aborted plays.
     const lastPlayed = await this.db
       .select({
         media_id: playHistoryTable.media_id,
