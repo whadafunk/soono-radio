@@ -1432,7 +1432,7 @@ These are the defaults. Both are configurable in `supervisor_config` as boolean 
 
 ### Decision 44 — Plan transition: when last active item starts playing
 
-**Status: decided — 2026-05-28**
+**Status: decided — 2026-05-28. Superseded 2026-07-11 — see Decision 60 (activation trigger) and Decision 61 (transition/segment-boundary detection).** The queue-ahead-push half of this decision (pushing the next plan's first item when the outgoing plan's last item starts playing) is still correct and unchanged; only the "this is also when the plan becomes active" half was replaced.
 
 The transition from active plan to next plan happens when the **last pending item of the active plan transitions to `status = 'playing'`** — i.e., when LiquidSoap sends the `on_track` webhook confirming that item is now on air.
 
@@ -1851,6 +1851,42 @@ No new synthetic version/uniqueness stamp is needed. `computeResolutionIdentity`
    - If plausible and the item's expected end time has already passed by now → mark it `played` (assume it aired to completion during the downtime — the safer default, avoids a duplicate re-push).
    - If plausible and not yet elapsed → treat it as still legitimately `playing`; normal playhead math continues unchanged.
    - If the timestamp looks implausible (protects the original bug this reset was built to prevent) → fall back to today's reset-to-`pending` behavior.
+
+---
+
+### Decision 60 — Ground-truth plan activation: replace administrative lock-in with confirmed on-air detection
+
+**Status: implemented & deployed 2026-07-11 (commits `fffbd1c`, `6e2285c`, `3b3a9c8`). Supersedes the activation half of Decision 44.**
+
+Decision 44's mechanism conflated two different things: "time to push the next plan's first item into the queue" and "the next plan is now actually active." Promotion (`active_plan_id = next_plan_id`) happened the moment the *outgoing* plan's last item started playing — before the *incoming* plan's own content had genuinely started airing. Since `/supervisor/v2/status`'s `plan_items` is built unconditionally from `active_plan_id`, "Now Playing" could describe a plan that wasn't really on air yet, for the full remaining duration of the outgoing item (seconds to minutes). `supervisorStatus.ts` carried a segment-ID-comparison workaround to compensate, which could itself reference a third, different plan.
+
+**Fix:** split the old single trigger into two independent ones:
+- **Queue-ahead nudge** (unchanged timing — last item of the active plan starts playing): still emits `PUSH_NEXT_REQUESTED`, no longer also activates.
+- **Activation** (new, ground-truth): in `handleTrackStarted`, on every confirmed `LS_TRACK_STARTED`, look up which `plan_id` the just-confirmed `play_history` row's item actually belongs to. If it differs from `active_plan_id`, that plan **is** now active — no prediction against `next_plan_id`'s timing, no assumption about which position in the plan aired first (an item can be dropped before ever airing).
+
+**Bug found live during rollout, fixed same window (`6e2285c`):** `queueFeeder.ts`'s fallback to `next_plan_id` once `active_plan_id` runs dry needed the existing queue-depth cap ("at most 1 playing + 1 pre-queued") extended to span *both* plan ids — it was scoped only to `active_plan_id`. Without the fix, once the active plan ran dry, every ~500ms tick fell into the fallback with no cap and pushed an entire plan's worth of items into LiquidSoap's queue within under a second.
+
+**Also removed:** `supervisorStatus.ts`'s segment-ID-comparison fallback — the actual root of the plan-mismatch bug — no longer needed since `active_plan_id` always means "what's really airing," by construction.
+
+**Verified live:** watched a real transition end-to-end — `PLAN_ACTIVATED` fired exactly when the incoming plan's own first item's real on-air webhook landed, not before.
+
+---
+
+### Decision 61 — Segment/plan transitions are playhead-driven, not wall-clock-driven
+
+**Status: implemented & deployed 2026-07-11 (commit `2ad30f9`). Refines Decision 60; supersedes the transition-detection half of Decision 44.**
+
+Decision 60 fixed *when* a plan activates, but `tick()` separately re-derived "what segment is current" from a fresh `resolveCurrentSegment(Date.now())` every ~500ms — nominal (planned) segment durations walked from the top of the wall-clock hour, with no awareness of what was actually airing — and used that comparison (`isNewSegment`) as the trigger for `SEGMENT_START`/`SEGMENT_SUMMARY` logging **and** for requesting the next segment's draft.
+
+Under real accumulated drift (10+ minutes, observed live 2026-07-11), nominal wall-clock resolution could report a segment two or more slots ahead of the true playhead. The instant `tick()` saw that jump, it requested a draft for the segment *after* the skipped-to one — permanently orphaning whatever plan was already drafted for the segment(s) that got skipped, since nothing ever references that segment again. This produced two orphaned plans live and a 536-second dead-air incident, recovered only by an unrelated, slow fallback (`HARD_START_FILL` replanning the wrong plan rather than recovering the orphaned one).
+
+This is the same bug class already fixed once in a different call site: `handleExhaustedPlan()` carries a 2026-07-03 comment about a near-identical ~115s dead-air incident, fixed by anchoring to "the exhausted plan's own segment... not a fresh wall-clock resolve." `tick()`'s main boundary-detection block never got the same treatment until now.
+
+**Fix:** move all segment/plan transition bookkeeping — `SEGMENT_START`/`SEGMENT_SUMMARY` logging, `currentSegmentId`/`currentSegmentEndMs`/`currentClockInstanceMs`, and the next-draft request — out of `tick()`'s wall-clock poll and into `activatePlanById`, the one place a transition is already ground-truth-confirmed. A new `resolveActivePlanSegment(planId)` helper (the same "trust the plan's own `segment_id`/`clock_instance_started_at`" pattern as the existing `activePlanSegmentEndMs`/`exhaustedActivePlanSegmentEndMs`) reconstructs real bounds from the plan that actually just activated. Every activation path already funnels through `activatePlanById` — ground-truth on-air confirmation (Decision 60), `handleExhaustedPlan`'s forced advance, `reconcileOccurrence`'s `RECONCILE_ACTIVATE`, cold-start's immediate activation — so this fixes all of them at once, and removes a previous redundancy where a forced advance flipped `active_plan_id` immediately but left bookkeeping to whatever the wall-clock poll happened to do on a later tick.
+
+`tick()` no longer computes `isNewSegment` at all. Wall-clock resolution (`getCachedSegment`/`resolveCurrentSegment`) is still used, deliberately, only where there is genuinely no playhead to be relative to (cold start, orphan recovery) or as an explicit re-grounding (`reconcile()`/align-to-wall-clock) — never to decide an ordinary transition. `maybeHandleHardStartGate` was also simplified to key off the tracked `currentSegmentEndMs` instead of a second, independent wall-clock resolve, for the same reason — under drift the two could point at different "next" segments.
+
+**Verified live post-deploy:** watched two consecutive real transitions, one of them crossing an hour-instance boundary (the exact class that orphaned a plan minutes earlier) — both produced `SEGMENT_SUMMARY` → `SEGMENT_START` → `PLAN_ACTIVATED` in the same log batch, with no `PLAN_ADVANCE_FORCED`, under boundary drift of +530s to +1190s.
 
 ---
 
