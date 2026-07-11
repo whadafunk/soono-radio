@@ -50,7 +50,7 @@ import {
   type PlanItemInsert,
   type SupervisorConfig,
 } from '../../../db/schema.js';
-import { resolveCurrentSegment } from '../clockResolver.js';
+import { readStartPolicy, resolveCurrentSegment } from '../clockResolver.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import type {
   BrandingCandidate,
@@ -1844,21 +1844,6 @@ function nextBrandingPick(
     return { ...c, cursor: idx };
   }
   return null;
-}
-
-function readStartPolicy(raw: unknown): { type: 'hard' | 'flexible' } {
-  if (raw && typeof raw === 'object' && 'type' in raw) {
-    const t = (raw as { type: unknown }).type;
-    if (t === 'hard') return { type: 'hard' };
-  }
-  if (typeof raw === 'string') {
-    try {
-      return readStartPolicy(JSON.parse(raw));
-    } catch {
-      // fall through
-    }
-  }
-  return { type: 'flexible' };
 }
 
 function parseDriftEventTypes(raw: unknown): string[] {

@@ -92,7 +92,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
-import { computeResolutionIdentity, resolveActivePlanSegment, resolveCurrentSegment, segmentBoundsWithinClock, type ResolvedSegment } from '../clockResolver.js';
+import { computeResolutionIdentity, readStartPolicy, resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment, segmentBoundsWithinClock, type ResolvedSegment } from '../clockResolver.js';
 import {
   abortRow,
   closeMostRecentOpenRow,
@@ -752,7 +752,10 @@ export class SupervisorProcess {
 
   // ─── Hard-start gate ─────────────────────────────────────────────────────────
   //
-  // Checked every tick. Only active when next segment has hard start_policy.
+  // Checked every tick. Only active when the next HARD segment (Decision 62:
+  // via resolveNextHardSegment, not necessarily the immediate structural
+  // next one — see the comment there and on resolveNextOccurrence) is close
+  // enough to matter.
   // Fill trigger: plan running short → request filler to bridge to hard boundary.
   // Trim trigger: plan running long → skip items near hard boundary.
 
@@ -762,14 +765,22 @@ export class SupervisorProcess {
     // Anchored to the tracked (playhead-sourced) segment end, not a fresh
     // wall-clock resolve — under drift the two can point at different
     // segments, which would make this gate evaluate the wrong "next" one.
-    const next = await resolveCurrentSegment(this.currentSegmentEndMs + 1, this.db);
-    if (!next) return;
-
-    const policy = readStartPolicy(next.segment.start_policy);
-    if (policy.type !== 'hard') return;
+    // Uses the multi-hop resolver rather than a single resolveCurrentSegment
+    // hop: if maybeRequestNextDraft already decided (at activation time) to
+    // skip intervening flexible segments because there wasn't enough real
+    // runway before an upcoming hard segment, this gate must still manage
+    // filling/trimming the active plan against that TRUE boundary — however
+    // many structural hops away — or the active plan could run dry and hand
+    // off to the hard segment's plan early, violating its hard start.
+    const lookahead = await resolveNextHardSegment(this.currentSegmentEndMs + 1, this.db);
+    if (!lookahead) return;
+    const next = lookahead.hard;
 
     const estimatedRemainingSec = await this.computeEstimatedRemaining(nowMs);
-    const timeToHardBoundarySec = (this.currentSegmentEndMs - nowMs) / 1000;
+    // next.segmentStartMs, not this.currentSegmentEndMs: those coincide when
+    // next is genuinely the immediate next segment (contiguous clock
+    // layout), but not once next is several hops away.
+    const timeToHardBoundarySec = (next.segmentStartMs - nowMs) / 1000;
     const gapSec = timeToHardBoundarySec - estimatedRemainingSec;
 
     // Fill trigger: plan is running short, gap exceeds tolerance.
@@ -1245,6 +1256,58 @@ export class SupervisorProcess {
       .where(eq(supervisorStateTable.id, 1));
   }
 
+  // Decides what segment to treat as "the next occurrence" from `afterMs`
+  // (Decision 62) — shared by maybeRequestNextDraft (called once per
+  // activation) and reconcileNext (called from reconcile()). Normally the
+  // plain structural next segment. But if a hard segment lies further
+  // ahead, compares real time remaining before its true start against the
+  // combined nominal duration of the segments in between: if there isn't
+  // enough real runway left to air them at nominal length, skip straight to
+  // the hard segment instead, logging SEGMENT_SKIPPED for each one bypassed.
+  //
+  // This is evaluated once, at the point something is about to be drafted
+  // — not continuously. It only needs today's already-known drift, computed
+  // once; it doesn't need re-checking every tick, because the decision is
+  // naturally re-evaluated fresh at whichever segment activates next (its
+  // own maybeRequestNextDraft call). What DOES need to run every tick is
+  // maybeHandleHardStartGate's fill/trim management of the active plan
+  // against whichever boundary this resolves to, since that's inherently
+  // about real-time-continuous content consumption, not a one-shot decision.
+  private async resolveNextOccurrence(
+    afterMs: number,
+    nowMs: number,
+  ): Promise<ResolvedSegment | null> {
+    const lookahead = await resolveNextHardSegment(afterMs, this.db);
+    if (!lookahead || lookahead.skipped.length === 0) {
+      return resolveCurrentSegment(afterMs, this.db);
+    }
+
+    const nominalRemainingSeconds = lookahead.skipped.reduce(
+      (sum, seg) => sum + seg.segment.duration_seconds,
+      0,
+    );
+    const realRemainingSeconds = (lookahead.hard.segmentStartMs - nowMs) / 1000;
+    if (realRemainingSeconds >= nominalRemainingSeconds) {
+      // Enough real runway (for now) to let the intervening segments air at
+      // nominal length — proceed normally.
+      return resolveCurrentSegment(afterMs, this.db);
+    }
+
+    this.logger?.warn({
+      process: 'supervisor', event: 'HARD_SEGMENT_LOOKAHEAD_TRIGGERED',
+      hard_segment_id: lookahead.hard.segment.id, hard_segment_start_ms: lookahead.hard.segmentStartMs,
+      skipped_segment_ids: lookahead.skipped.map((s) => s.segment.id),
+      nominal_remaining_seconds: nominalRemainingSeconds, real_remaining_seconds: realRemainingSeconds,
+    }, 'supervisor: not enough real runway before upcoming hard segment — skipping intervening segments');
+    for (const seg of lookahead.skipped) {
+      this.logger?.info({
+        process: 'supervisor', event: 'SEGMENT_SKIPPED',
+        segment_id: seg.segment.id, clock_instance_started_at: seg.clockInstanceStartedAt,
+      }, 'supervisor: segment bypassed to reach upcoming hard segment on time');
+    }
+    return lookahead.hard;
+  }
+
   // Runway model: decide whether the segment after `afterMs` is worth
   // proactively planning-only, or worth cutting over to early (see
   // supervisor-runway-threshold-proposal). Ensuring a draft/finalize exists
@@ -1253,7 +1316,7 @@ export class SupervisorProcess {
   // isNewSegment won't re-fire for an already-current segment). Only early
   // ACTIVATION is gated by runway.
   private async reconcileNext(afterMs: number, nowMs: number): Promise<void> {
-    const next = await resolveCurrentSegment(afterMs + 1, this.db);
+    const next = await this.resolveNextOccurrence(afterMs + 1, nowMs);
     if (!next) {
       this.logger?.info({
         process: 'supervisor', event: 'RECONCILE_NO_NEXT_SEGMENT',
@@ -1642,13 +1705,16 @@ export class SupervisorProcess {
     });
   }
 
-  // Requests a draft for the segment that follows `current`.
+  // Requests a draft for the segment that follows `current` — or, per
+  // Decision 62's resolveNextOccurrence, for a further-ahead hard segment
+  // directly if there isn't enough real runway before it to justify
+  // drafting the segments structurally in between.
   // first_pass_target = nominal(N+1) - (boundaryDrift(N) + plannedOvershoot(N))
   //
   // Both terms estimate how much over/under the active plan will run at segment
   // N's boundary, so N+1's plan is pre-corrected before the T-30s second pass.
   private async maybeRequestNextDraft(current: ResolvedSegment, nowMs: number): Promise<void> {
-    const next = await resolveCurrentSegment(current.segmentEndMs + 1, this.db);
+    const next = await this.resolveNextOccurrence(current.segmentEndMs + 1, nowMs);
     if (!next) {
       this.logger?.info({
         process: 'supervisor', event: 'NO_NEXT_SEGMENT',
@@ -1819,17 +1885,3 @@ function parsePhidFromMetadata(meta: Record<string, string>): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-function readStartPolicy(raw: unknown): { type: 'hard' | 'flexible'; early_seconds?: number | null } {
-  if (raw && typeof raw === 'object' && 'type' in raw) {
-    const t = (raw as { type: unknown; early_seconds?: unknown }).type;
-    if (t === 'hard') return { type: 'hard' };
-    if (t === 'flexible') {
-      const es = (raw as { early_seconds?: unknown }).early_seconds;
-      return { type: 'flexible', early_seconds: typeof es === 'number' ? es : null };
-    }
-  }
-  if (typeof raw === 'string') {
-    try { return readStartPolicy(JSON.parse(raw)); } catch { /* fall through */ }
-  }
-  return { type: 'flexible', early_seconds: null };
-}

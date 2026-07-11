@@ -297,6 +297,61 @@ async function resolveShowFromResolutionIdentity(
   return { source_type: sourceType, source_id: sourceId, show_id: showId, show_name: showName };
 }
 
+// Parses a `clock_segments.start_policy` value (stored as JSON text or
+// already-parsed object, depending on caller) into its typed form. The
+// single canonical implementation — previously duplicated between
+// supervisor.ts and planner.ts with slightly different shapes; consolidated
+// here (Decision 62) since the new forward-scanning hard-segment resolver
+// needs it too.
+export function readStartPolicy(raw: unknown): { type: 'hard' | 'flexible'; early_seconds?: number | null } {
+  if (raw && typeof raw === 'object' && 'type' in raw) {
+    const t = (raw as { type: unknown; early_seconds?: unknown }).type;
+    if (t === 'hard') return { type: 'hard' };
+    if (t === 'flexible') {
+      const es = (raw as { early_seconds?: unknown }).early_seconds;
+      return { type: 'flexible', early_seconds: typeof es === 'number' ? es : null };
+    }
+  }
+  if (typeof raw === 'string') {
+    try { return readStartPolicy(JSON.parse(raw)); } catch { /* fall through */ }
+  }
+  return { type: 'flexible', early_seconds: null };
+}
+
+export interface HardSegmentLookahead {
+  hard: ResolvedSegment;
+  // Segments between `afterMs` and `hard`, in schedule order — none of them
+  // have a hard start_policy, or the walk would have stopped there instead.
+  // Empty when `hard` is the immediate next segment (no gap at all).
+  skipped: ResolvedSegment[];
+}
+
+// Walks forward through the resolved schedule, one segment at a time,
+// starting just after `afterMs`, until it finds a segment whose
+// start_policy.type === 'hard' (Decision 62). Distinct from
+// `resolveNextSegment`, which only ever answers "current+1" — this can walk
+// across many segments and hour-instance boundaries. Bounded by
+// `maxSegments` so a schedule with no hard segments at all (or a resolution
+// gap) can't spin forever; returns null if nothing hard is found within the
+// horizon, which callers should treat as "no lookahead hazard right now,"
+// identical to today's behavior with no lookahead at all.
+export async function resolveNextHardSegment(
+  afterMs: number,
+  db: typeof defaultDb = defaultDb,
+  maxSegments = 50,
+): Promise<HardSegmentLookahead | null> {
+  const skipped: ResolvedSegment[] = [];
+  let cursorMs = afterMs;
+  for (let i = 0; i < maxSegments; i++) {
+    const next = await resolveCurrentSegment(cursorMs, db);
+    if (!next) return null;
+    if (readStartPolicy(next.segment.start_policy).type === 'hard') return { hard: next, skipped };
+    skipped.push(next);
+    cursorMs = next.segmentEndMs + 1;
+  }
+  return null;
+}
+
 // ─── Internal helpers ────────────────────────────────────────────────────────
 
 interface ClockContext {
