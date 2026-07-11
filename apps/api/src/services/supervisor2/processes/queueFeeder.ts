@@ -15,7 +15,7 @@
 // the Supervisor. When there is nothing to push the feeder logs QUEUE_STALL
 // and exits; the Supervisor's next tick resolves it.
 
-import { and, asc, count, eq } from 'drizzle-orm';
+import { and, asc, count, eq, inArray } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -126,12 +126,18 @@ export class QueueFeederProcess {
       return;
     }
 
-    if (activePlanId != null) {
-      // Queue-depth cap: at most 1 playing + 1 pre-queued.
+    // Queue-depth cap: at most 1 playing + 1 pre-queued, in the PHYSICAL
+    // LiquidSoap queue — so this must count across active AND next plan
+    // combined, not just whichever one we're about to push from. Otherwise,
+    // once the active plan runs dry, every tick falls into the next-plan
+    // fallback below with no cap at all and drains the whole plan into the
+    // queue in one burst.
+    const planIdsToCap = [activePlanId, nextPlanId].filter((id): id is number => id != null);
+    if (planIdsToCap.length > 0) {
       const [countRow] = await this.db
         .select({ c: count() })
         .from(planItemsTable)
-        .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')));
+        .where(and(inArray(planItemsTable.plan_id, planIdsToCap), eq(planItemsTable.status, 'playing')));
       const playingCount = countRow?.c ?? 0;
       if (playingCount >= 2) {
         this.logger?.debug(
