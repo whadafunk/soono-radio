@@ -2,15 +2,19 @@
 //
 // The supervisor tracks two plans simultaneously (D29):
 //   active_plan  — executing now; Queue Feeder reads from it one item at a time.
-//   next_plan    — being assembled for the following segment; becomes active
-//                  the moment the active plan's last item transitions to 'playing'.
+//   next_plan    — being assembled for the following segment; queued ahead into
+//                  the harbor when the active plan's last item starts playing,
+//                  but only becomes active once its OWN first item actually
+//                  starts airing — active_plan always means "what's really
+//                  playing," never "what's queued up next."
 //
 // State machine per segment N:
 //   Segment N starts (calendar boundary) → maybeRequestNextDraft(N+1)
 //   PLAN_DRAFT_READY for N+1           → nextPlanId set, drift_at_first_pass recorded
 //   T−30s before N ends                → PLAN_FINALIZE_REQUESTED with drift_delta / adjusted_target
 //   PLAN_FINALIZED for next plan        → plan sits in DB until transition fires
-//   Last item of plan N starts playing  → activateNextPlan() → activePlanId = N+1 plan
+//   Last item of plan N starts playing  → PUSH_NEXT_REQUESTED (queue N+1's first item ahead)
+//   First item of plan N+1 starts playing → activateNextPlan() → activePlanId = N+1 plan
 //
 // Cold start (supervisor starts mid-segment, no plan):
 //   Draft current segment with remaining_seconds as target.
@@ -932,18 +936,27 @@ export class SupervisorProcess {
     this.cachedSegment = null;
     this.cachedSegmentValidUntilMs = 0;
 
-    // ── Plan transition (D44) ────────────────────────────────────────────────
-    // When the last pending item of the active plan starts playing, promote
-    // nextPlan → activePlan. The tick then picks up the new segment and
-    // requests a draft for the segment after next.
+    // ── Queue-ahead nudge (D44) ──────────────────────────────────────────────
+    // When the last pending item of the active plan starts playing, push the
+    // next plan's first item into the queue now — don't wait for the next
+    // LS_TRACK_ENDING webhook, which may never arrive if LS falls through to
+    // blank(). This does NOT activate the next plan; see below.
     if (this.activePlanId != null && this.nextPlanId != null && currentPhid != null) {
-      const isTransition = await this.isLastPendingNowPlaying(this.activePlanId, currentPhid);
-      if (isTransition) {
-        await this.activateNextPlan(Date.now());
-        // Notify queue feeder so it starts pushing the newly activated plan
-        // immediately — without this, it would wait for the next LS_TRACK_ENDING
-        // webhook, which may never arrive if LS falls through to blank().
+      const isLastPending = await this.isLastPendingNowPlaying(this.activePlanId, currentPhid);
+      if (isLastPending) {
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'plan_transition' });
+      }
+    }
+
+    // ── Plan activation (D44) ────────────────────────────────────────────────
+    // Promote nextPlan → activePlan only once its own first item actually
+    // starts airing — not administratively ahead of time, while the previous
+    // plan's last item might still be playing for minutes. The tick then
+    // picks up the new segment and requests a draft for the segment after next.
+    if (this.nextPlanId != null && currentPhid != null) {
+      const isFirstOfNext = await this.isFirstEverPlayingItem(this.nextPlanId, currentPhid);
+      if (isFirstOfNext) {
+        await this.activateNextPlan(Date.now());
       }
     }
 
@@ -968,6 +981,31 @@ export class SupervisorProcess {
 
     const hasPending = await this.hasPendingItems(planId);
     return !hasPending;
+  }
+
+  // Returns true when the plan item that just transitioned to 'playing' is the
+  // FIRST item of `planId` to ever reach playing/played — i.e. nothing in this
+  // plan has aired yet, so this is its genuine on-air moment. Doesn't assume
+  // position 0, since an item can be dropped before ever airing.
+  private async isFirstEverPlayingItem(planId: number, phid: number): Promise<boolean> {
+    const [item] = await this.db
+      .select({ id: planItemsTable.id })
+      .from(planItemsTable)
+      .where(and(
+        eq(planItemsTable.plan_id, planId),
+        eq(planItemsTable.play_history_id, phid),
+      ))
+      .limit(1);
+    if (!item) return false;
+
+    const startedItems = await this.db
+      .select({ id: planItemsTable.id })
+      .from(planItemsTable)
+      .where(and(
+        eq(planItemsTable.plan_id, planId),
+        inArray(planItemsTable.status, ['playing', 'played']),
+      ));
+    return startedItems.length <= 1;
   }
 
   // ─── Plan activation (D44, D51) ─────────────────────────────────────────────

@@ -158,40 +158,19 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
       const segmentStartedAtMs = resolvedSegment?.segmentStartMs ?? null;
       const segmentDurationSeconds = resolvedSegment?.segment.duration_seconds ?? null;
 
-      // Compute plan_consumed_seconds and expected_current_item_end_ms.
-      // When D44 has fired the active plan already points to the NEXT segment's plan
-      // while the wall clock is still in the current segment. In that case, computing
-      // consumption from the active plan would yield 0 (nothing from the new plan has
-      // played yet), making live drift spike to hundreds of seconds. Instead, detect
-      // the mismatch and use the most recent plan for the current segment.
+      // Compute plan_consumed_seconds and expected_current_item_end_ms by
+      // walking the active plan's own items. Plan activation now waits for
+      // the incoming plan's first item to actually start airing (D44) —
+      // active_plan_id always means "what's really playing," so there's no
+      // need to detect/compensate for a segment mismatch here anymore.
       let planConsumedSeconds = 0;
       let expectedCurrentItemEndMs: number | null = null;
 
       if (activePlanId !== null) {
-        let planIdForConsumption = activePlanId;
-
-        if (resolvedSegment !== null) {
-          const [activePlanMeta] = await db
-            .select({ segment_id: plans.segment_id })
-            .from(plans)
-            .where(eq(plans.id, activePlanId))
-            .limit(1);
-
-          if (activePlanMeta && activePlanMeta.segment_id !== resolvedSegment.segment.id) {
-            const [currentSegPlan] = await db
-              .select({ id: plans.id })
-              .from(plans)
-              .where(eq(plans.segment_id, resolvedSegment.segment.id))
-              .orderBy(desc(plans.id))
-              .limit(1);
-            if (currentSegPlan) planIdForConsumption = currentSegPlan.id;
-          }
-        }
-
         const allItems = await db
           .select()
           .from(planItems)
-          .where(eq(planItems.plan_id, planIdForConsumption))
+          .where(eq(planItems.plan_id, activePlanId))
           .orderBy(asc(planItems.position));
 
         const terminal = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);

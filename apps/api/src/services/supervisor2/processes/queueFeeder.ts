@@ -8,9 +8,12 @@
 // The pushInFlight guard prevents concurrent pushes when both fire close together.
 //
 // Zero decision logic (D42). The feeder reads the next pending item from the
-// active plan and pushes it. All fallback decisions (gap fill, early fire,
-// plan extension) belong to the Supervisor. When there is nothing to push
-// the feeder logs QUEUE_STALL and exits; the Supervisor's next tick resolves it.
+// active plan and pushes it — falling back to the next (locked-in, not yet
+// activated) plan once the active plan has nothing left, since activation
+// now waits for the next plan's first item to actually start airing (D44).
+// All fallback decisions (gap fill, early fire, plan extension) belong to
+// the Supervisor. When there is nothing to push the feeder logs QUEUE_STALL
+// and exits; the Supervisor's next tick resolves it.
 
 import { and, asc, count, eq } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
@@ -116,27 +119,40 @@ export class QueueFeederProcess {
   private async doPush(source: string): Promise<void> {
     const state = await this.loadSupervisorState();
     const activePlanId = state?.active_plan_id ?? null;
+    const nextPlanId = state?.next_plan_id ?? null;
 
-    if (activePlanId == null) {
+    if (activePlanId == null && nextPlanId == null) {
       this.emitStall('no_active_plan', null, source);
       return;
     }
 
-    // Queue-depth cap: at most 1 playing + 1 pre-queued.
-    const [countRow] = await this.db
-      .select({ c: count() })
-      .from(planItemsTable)
-      .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')));
-    const playingCount = countRow?.c ?? 0;
-    if (playingCount >= 2) {
-      this.logger?.debug(
-        { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'queue_full', playing_count: playingCount, source },
-        'queueFeeder: queue full (2 items in playing state), skipping push',
-      );
-      return;
+    if (activePlanId != null) {
+      // Queue-depth cap: at most 1 playing + 1 pre-queued.
+      const [countRow] = await this.db
+        .select({ c: count() })
+        .from(planItemsTable)
+        .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')));
+      const playingCount = countRow?.c ?? 0;
+      if (playingCount >= 2) {
+        this.logger?.debug(
+          { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'queue_full', playing_count: playingCount, source },
+          'queueFeeder: queue full (2 items in playing state), skipping push',
+        );
+        return;
+      }
     }
 
-    const nextItem = await this.findNextPendingItem(activePlanId);
+    // Prefer the active plan; fall back to the next (locked-in, not yet
+    // activated) plan once the active plan has nothing left to give. This is
+    // what keeps the queue fed across a plan transition now that activation
+    // waits for the next plan's first item to actually start airing (D44) —
+    // the active plan can run dry for a while before that happens.
+    let nextItem = activePlanId != null ? await this.findNextPendingItem(activePlanId) : null;
+    let pushPlanId = activePlanId;
+    if (!nextItem && nextPlanId != null) {
+      nextItem = await this.findNextPendingItem(nextPlanId);
+      pushPlanId = nextPlanId;
+    }
     if (!nextItem) {
       this.emitStall('no_pending_items', activePlanId, source);
       return;
@@ -146,7 +162,7 @@ export class QueueFeederProcess {
     if (this.stallingSince != null) {
       const stalledSeconds = (Date.now() - this.stallingSince) / 1000;
       this.logger?.info(
-        { process: 'queueFeeder', event: 'QUEUE_STALL', stall_phase: 'exit', stalled_seconds: Math.round(stalledSeconds), plan_id: activePlanId, source },
+        { process: 'queueFeeder', event: 'QUEUE_STALL', stall_phase: 'exit', stalled_seconds: Math.round(stalledSeconds), plan_id: pushPlanId, source },
         'queueFeeder: stall resolved — found pending item',
       );
       this.stallingSince = null;
@@ -251,9 +267,12 @@ export class QueueFeederProcess {
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  private async loadSupervisorState(): Promise<{ active_plan_id: number | null } | null> {
+  private async loadSupervisorState(): Promise<{ active_plan_id: number | null; next_plan_id: number | null } | null> {
     const [row] = await this.db
-      .select({ active_plan_id: supervisorStateTable.active_plan_id })
+      .select({
+        active_plan_id: supervisorStateTable.active_plan_id,
+        next_plan_id: supervisorStateTable.next_plan_id,
+      })
       .from(supervisorStateTable)
       .where(eq(supervisorStateTable.id, 1));
     return row ?? null;
