@@ -4,17 +4,21 @@
 //   active_plan  — executing now; Queue Feeder reads from it one item at a time.
 //   next_plan    — being assembled for the following segment; queued ahead into
 //                  the harbor when the active plan's last item starts playing,
-//                  but only becomes active once its OWN first item actually
-//                  starts airing — active_plan always means "what's really
-//                  playing," never "what's queued up next."
+//                  but only becomes active once real content belonging to it
+//                  is confirmed genuinely airing (ground-truth, via
+//                  current_play_history_id — see handleTrackStarted) — never
+//                  administratively ahead of time.
 //
 // State machine per segment N:
 //   Segment N starts (calendar boundary) → maybeRequestNextDraft(N+1)
 //   PLAN_DRAFT_READY for N+1           → nextPlanId set, drift_at_first_pass recorded
+//                                         (deferred instead if nextPlanId already
+//                                         points at a plan with pending content)
 //   T−30s before N ends                → PLAN_FINALIZE_REQUESTED with drift_delta / adjusted_target
 //   PLAN_FINALIZED for next plan        → plan sits in DB until transition fires
 //   Last item of plan N starts playing  → PUSH_NEXT_REQUESTED (queue N+1's first item ahead)
-//   First item of plan N+1 starts playing → activateNextPlan() → activePlanId = N+1 plan
+//   LS_TRACK_STARTED for any item not   → activatePlanById() → activePlanId = that item's
+//   belonging to the active plan           plan (ground truth, not a nextPlanId prediction)
 //
 // Cold start (supervisor starts mid-segment, no plan):
 //   Draft current segment with remaining_seconds as target.
@@ -51,7 +55,7 @@
 //   D51 — Organic drift vs execution drift; boundary decision at activation
 
 import { randomUUID } from 'crypto';
-import { and, asc, desc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
+import { and, asc, desc, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -506,6 +510,12 @@ export class SupervisorProcess {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
+      } else if (await this.isCurrentPlayHistoryStillOpen()) {
+        // computePlanPlayhead() found nothing 'playing' under activePlanId,
+        // but ground truth (current_play_history_id) says something IS still
+        // genuinely on air — it just belongs to a plan not yet promoted
+        // (activation follows real airtime now, not administrative timing).
+        // Not exhausted; don't force an advance.
       } else {
         await this.handleExhaustedPlan(nowMs);
       }
@@ -719,6 +729,21 @@ export class SupervisorProcess {
       .select({ id: planItemsTable.id })
       .from(planItemsTable)
       .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')))
+      .limit(1);
+    return row != null;
+  }
+
+  // Ground truth: is the play_history row we last confirmed on-air still
+  // open (LiquidSoap hasn't reported it ending)? Independent of which plan
+  // it belongs to — unlike computePlanPlayhead, which only sees items under
+  // activePlanId and would otherwise mistake "airing under next_plan,
+  // not yet promoted" for silence.
+  private async isCurrentPlayHistoryStillOpen(): Promise<boolean> {
+    if (this.currentPlayHistoryId == null) return false;
+    const [row] = await this.db
+      .select({ id: playHistoryTable.id })
+      .from(playHistoryTable)
+      .where(and(eq(playHistoryTable.id, this.currentPlayHistoryId), isNull(playHistoryTable.ended_at)))
       .limit(1);
     return row != null;
   }
@@ -948,15 +973,22 @@ export class SupervisorProcess {
       }
     }
 
-    // ── Plan activation (D44) ────────────────────────────────────────────────
-    // Promote nextPlan → activePlan only once its own first item actually
-    // starts airing — not administratively ahead of time, while the previous
-    // plan's last item might still be playing for minutes. The tick then
-    // picks up the new segment and requests a draft for the segment after next.
-    if (this.nextPlanId != null && currentPhid != null) {
-      const isFirstOfNext = await this.isFirstEverPlayingItem(this.nextPlanId, currentPhid);
-      if (isFirstOfNext) {
-        await this.activateNextPlan(Date.now());
+    // ── Plan activation (D44, ground-truth) ─────────────────────────────────
+    // Whatever plan the item that JUST genuinely started airing belongs to
+    // is now the active plan — no prediction against nextPlanId, no
+    // dependency on its timing. This is deliberately independent of the
+    // push-ahead nudge above: activation follows confirmed on-air reality,
+    // not administrative queue-management bookkeeping.
+    if (currentPhid != null) {
+      const [airingItem] = await this.db
+        .select({ plan_id: planItemsTable.plan_id })
+        .from(planItemsTable)
+        .where(eq(planItemsTable.play_history_id, currentPhid))
+        .limit(1);
+      if (airingItem && airingItem.plan_id !== this.activePlanId) {
+        await this.activatePlanById(airingItem.plan_id, Date.now(), {
+          clearNextPlan: this.nextPlanId === airingItem.plan_id,
+        });
       }
     }
 
@@ -981,31 +1013,6 @@ export class SupervisorProcess {
 
     const hasPending = await this.hasPendingItems(planId);
     return !hasPending;
-  }
-
-  // Returns true when the plan item that just transitioned to 'playing' is the
-  // FIRST item of `planId` to ever reach playing/played — i.e. nothing in this
-  // plan has aired yet, so this is its genuine on-air moment. Doesn't assume
-  // position 0, since an item can be dropped before ever airing.
-  private async isFirstEverPlayingItem(planId: number, phid: number): Promise<boolean> {
-    const [item] = await this.db
-      .select({ id: planItemsTable.id })
-      .from(planItemsTable)
-      .where(and(
-        eq(planItemsTable.plan_id, planId),
-        eq(planItemsTable.play_history_id, phid),
-      ))
-      .limit(1);
-    if (!item) return false;
-
-    const startedItems = await this.db
-      .select({ id: planItemsTable.id })
-      .from(planItemsTable)
-      .where(and(
-        eq(planItemsTable.plan_id, planId),
-        inArray(planItemsTable.status, ['playing', 'played']),
-      ));
-    return startedItems.length <= 1;
   }
 
   // ─── Plan activation (D44, D51) ─────────────────────────────────────────────
@@ -1469,6 +1476,21 @@ export class SupervisorProcess {
       process: 'supervisor', event: 'PLAN_DRAFT_READY',
       plan_id: msg.plan_id, segment_id: msg.segment_id,
     }, 'supervisor: planner produced draft plan');
+
+    // Don't let a new draft silently replace a next_plan that's already
+    // mid-flight (pushed, partially aired) with content still waiting to be
+    // queued — that content would otherwise be silently skipped once the
+    // active plan runs dry and the queue feeder's fallback jumps straight to
+    // whatever next_plan_id now points at. Leave it in 'draft' status;
+    // maybeRequestNextDraft's existing adoption lookup (matches on segment_id
+    // + clock_instance_started_at) picks it up once next_plan_id frees up.
+    if (this.nextPlanId != null && this.nextPlanId !== msg.plan_id && await this.hasPendingItems(this.nextPlanId)) {
+      this.logger?.info({
+        process: 'supervisor', event: 'NEXT_PLAN_DRAFT_DEFERRED',
+        held_plan_id: this.nextPlanId, deferred_plan_id: msg.plan_id, segment_id: msg.segment_id,
+      }, 'supervisor: keeping current next_plan — still has pending content; new draft deferred');
+      return;
+    }
 
     const isColdStartDraft = msg.segment_id === this.currentSegmentId && this.activePlanId == null;
 
