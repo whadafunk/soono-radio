@@ -1318,18 +1318,6 @@ export async function postSupervisorSkip(): Promise<SupervisorV2ControlResponse>
   return SupervisorV2ControlResponseSchema.parse(await res.json());
 }
 
-export async function postSupervisorPause(): Promise<SupervisorV2ControlResponse> {
-  const res = await fetch(`${API_BASE}/supervisor/v2/pause`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Pause failed: ${res.statusText}`);
-  return SupervisorV2ControlResponseSchema.parse(await res.json());
-}
-
-export async function postSupervisorResume(): Promise<SupervisorV2ControlResponse> {
-  const res = await fetch(`${API_BASE}/supervisor/v2/resume`, { method: 'POST' });
-  if (!res.ok) throw new Error(`Resume failed: ${res.statusText}`);
-  return SupervisorV2ControlResponseSchema.parse(await res.json());
-}
-
 export async function postSupervisorAlignToWallClock(): Promise<SupervisorV2ControlResponse> {
   const res = await fetch(`${API_BASE}/supervisor/v2/align-to-wall-clock`, { method: 'POST' });
   if (!res.ok) throw new Error(`Reconcile failed: ${res.statusText}`);

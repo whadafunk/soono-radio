@@ -23,21 +23,6 @@ export async function supervisorControlRoutes(fastify: FastifyInstance) {
     }
   });
 
-  fastify.post('/supervisor/v2/pause', async (_request, reply) => {
-    await db.update(supervisorState)
-      .set({ paused: true })
-      .where(eq(supervisorState.id, 1));
-    return reply.send({ ok: true });
-  });
-
-  fastify.post('/supervisor/v2/resume', async (_request, reply) => {
-    await db.update(supervisorState)
-      .set({ paused: false })
-      .where(eq(supervisorState.id, 1));
-    bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'resume' });
-    return reply.send({ ok: true });
-  });
-
   // Runs the supervisor's full reconcile() pass immediately instead of
   // waiting for the next start/restart. Handles cases the old standalone
   // trim-only logic couldn't: no active plan at all, calendar-segment

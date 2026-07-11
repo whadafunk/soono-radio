@@ -8,8 +8,6 @@ import {
   Mic2,
   Loader,
   SkipForward,
-  PauseCircle,
-  PlayCircle,
 } from 'lucide-react';
 import { useState } from 'react';
 import type {
@@ -23,8 +21,6 @@ import type {
 import {
   fetchSupervisorV2Status,
   postSupervisorSkip,
-  postSupervisorPause,
-  postSupervisorResume,
   postSupervisorAlignToWallClock,
   postSupervisorAlignToClock,
 } from '../../api';
@@ -60,12 +56,10 @@ function StatusBadge({ status }: { status: string }) {
 // ─── Control bar ──────────────────────────────────────────────────────────────
 
 function ControlBar({
-  paused,
   hasActivePlan,
   liveTakeoverActive,
   driftSeconds,
 }: {
-  paused: boolean;
   hasActivePlan: boolean;
   liveTakeoverActive: boolean;
   driftSeconds: number;
@@ -74,16 +68,6 @@ function ControlBar({
 
   const skipMutation = useMutation({
     mutationFn: postSupervisorSkip,
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
-  });
-
-  const pauseMutation = useMutation({
-    mutationFn: postSupervisorPause,
-    onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
-  });
-
-  const resumeMutation = useMutation({
-    mutationFn: postSupervisorResume,
     onSettled: () => void queryClient.invalidateQueries({ queryKey: ['supervisor-v2-status'] }),
   });
 
@@ -98,7 +82,6 @@ function ControlBar({
   });
 
   const skipDisabled = !hasActivePlan || liveTakeoverActive || skipMutation.isPending;
-  const toggleDisabled = pauseMutation.isPending || resumeMutation.isPending;
   const reconcileDisabled = !hasActivePlan || liveTakeoverActive || Math.abs(driftSeconds) < 5 || reconcileMutation.isPending;
   const alignToClockDisabled = !hasActivePlan || liveTakeoverActive || alignToClockMutation.isPending;
 
@@ -148,34 +131,6 @@ function ControlBar({
         <AlertTriangle className="w-4 h-4" />
         Align to Clock
       </button>
-
-      {paused ? (
-        <button
-          onClick={() => resumeMutation.mutate()}
-          disabled={toggleDisabled}
-          className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
-            ${toggleDisabled
-              ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
-              : 'bg-green-900/40 text-green-300 border border-green-800 hover:bg-green-900/60 hover:text-green-200'
-            }`}
-        >
-          <PlayCircle className="w-4 h-4" />
-          Resume
-        </button>
-      ) : (
-        <button
-          onClick={() => pauseMutation.mutate()}
-          disabled={toggleDisabled}
-          className={`inline-flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
-            ${toggleDisabled
-              ? 'bg-zinc-800/40 text-zinc-600 cursor-not-allowed'
-              : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700 hover:text-white'
-            }`}
-        >
-          <PauseCircle className="w-4 h-4" />
-          Pause
-        </button>
-      )}
     </div>
   );
 }
@@ -326,15 +281,6 @@ function LiveTakeoverBanner() {
     <div className="flex items-center gap-3 px-4 py-3 bg-red-900/30 border border-red-700 rounded-lg">
       <Mic2 className="w-5 h-5 text-red-400 flex-shrink-0" />
       <span className="text-red-300 font-semibold">Live takeover in progress</span>
-    </div>
-  );
-}
-
-function PausedBanner() {
-  return (
-    <div className="flex items-center gap-3 px-4 py-3 bg-amber-900/30 border border-amber-700 rounded-lg">
-      <PauseCircle className="w-5 h-5 text-amber-400 flex-shrink-0" />
-      <span className="text-amber-300 font-semibold">Automation paused</span>
     </div>
   );
 }
@@ -784,7 +730,6 @@ export function SupervisorPage() {
             </span>
           )}
           <ControlBar
-            paused={data?.paused ?? false}
             hasActivePlan={data?.active_plan_id != null}
             liveTakeoverActive={data?.live_takeover_active ?? false}
             driftSeconds={liveDriftSeconds}
@@ -803,9 +748,7 @@ export function SupervisorPage() {
 
       {data?.live_takeover_active && <LiveTakeoverBanner />}
 
-      {data?.paused && <PausedBanner />}
-
-      {!data?.live_takeover_active && !data?.paused && data?.active_plan_id === null && !isLoading && (
+      {!data?.live_takeover_active && data?.active_plan_id === null && !isLoading && (
         <div className="flex items-center gap-3 px-4 py-3 bg-zinc-800/40 border border-zinc-700 rounded-lg">
           <CheckCircle className="w-4 h-4 text-zinc-400 flex-shrink-0" />
           <span className="text-zinc-400 text-sm">No active plan — supervisor is idle.</span>

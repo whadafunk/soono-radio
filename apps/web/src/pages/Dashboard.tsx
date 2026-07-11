@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Activity, AlertTriangle, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, PauseCircle, PlayCircle, Clock, Headphones, Square, Volume2, TrendingUp, Wifi, RotateCcw } from 'lucide-react';
+import { Activity, AlertTriangle, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, Clock, Headphones, Square, Volume2, TrendingUp, Wifi, RotateCcw } from 'lucide-react';
 import {
   fetchIcecastStats,
   fetchIcecastConfig,
@@ -10,8 +10,6 @@ import {
   fetchSupervisorV2Status,
   fetchLiquidsoapStatus,
   fetchSimulate,
-  postSupervisorPause,
-  postSupervisorResume,
   postSupervisorAlignToWallClock,
   postSupervisorAlignToClock,
 } from '../api';
@@ -482,16 +480,18 @@ function NowPlayingCard({ status }: { status: SupervisorV2Status | undefined }) 
   const display = playing.media_title ?? '(untitled)';
 
   // Clip-level progress: how far into THIS item we are, distinct from Now
-  // Running's segment-level progress. Cumulative offset = sum of planned
-  // durations of items before this one; plan_consumed_seconds (actual
-  // consumed time, not wall clock) minus that offset = elapsed within the clip.
-  let cursor = 0;
-  for (const item of status.plan_items) {
-    if (item.status === 'playing') break;
-    cursor += item.planned_duration_seconds ?? 0;
-  }
+  // Running's segment-level progress. expected_current_item_end_ms is
+  // anchored to this item's real on-air timestamp (play_history.started_at,
+  // set by the actual LS_TRACK_STARTED webhook) — immune to drift
+  // accumulated by earlier items, unlike reconstructing it from a sum of
+  // planned durations (which broke whenever a prior track's real play time
+  // didn't match its planned_duration_seconds).
   const clipTotal = playing.planned_duration_seconds ?? 0;
-  const clipElapsed = Math.max(0, Math.min(clipTotal, status.plan_consumed_seconds - cursor));
+  const clipRemaining =
+    status.expected_current_item_end_ms != null
+      ? Math.max(0, (status.expected_current_item_end_ms - Date.now()) / 1000)
+      : null;
+  const clipElapsed = clipRemaining != null ? Math.max(0, clipTotal - clipRemaining) : null;
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
@@ -509,7 +509,7 @@ function NowPlayingCard({ status }: { status: SupervisorV2Status | undefined }) 
             </span>
           </div>
           <p className="text-2xl font-bold text-white mt-1 truncate">{display}</p>
-          {clipTotal > 0 && (
+          {clipTotal > 0 && clipElapsed != null && (
             <div className="mt-3">
               <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
                 <div
@@ -538,15 +538,12 @@ function NowRunningCard({ status }: { status: SupervisorV2Status }) {
     onError: (e: Error) => setPendingError(`${label}: ${e.message}`),
   });
 
-  const pauseM = useMutation({ mutationFn: postSupervisorPause, ...onMutate('Pause') });
-  const resumeM = useMutation({ mutationFn: postSupervisorResume, ...onMutate('Resume') });
   const reconcileM = useMutation({ mutationFn: postSupervisorAlignToWallClock, ...onMutate('Reconcile') });
   const alignM = useMutation({ mutationFn: postSupervisorAlignToClock, ...onMutate('Align to Clock') });
-  const pending = pauseM.isPending || resumeM.isPending || reconcileM.isPending || alignM.isPending;
+  const pending = reconcileM.isPending || alignM.isPending;
 
   const segment = status.current_segment;
   const nextPlan = status.next_plan;
-  const paused = status.paused;
   const liveTakeover = status.live_takeover_active;
   const hasActivePlan = status.active_plan_id != null;
 
@@ -568,11 +565,6 @@ function NowRunningCard({ status }: { status: SupervisorV2Status }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2 flex-wrap">
             Now running
-            {paused && (
-              <span className="text-amber-300 bg-amber-900/30 border border-amber-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
-                PAUSED
-              </span>
-            )}
             {liveTakeover && (
               <span className="text-red-300 bg-red-900/30 border border-red-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
                 LIVE TAKEOVER
@@ -631,27 +623,6 @@ function NowRunningCard({ status }: { status: SupervisorV2Status }) {
           )}
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {paused ? (
-            <button
-              type="button"
-              disabled={pending}
-              onClick={() => resumeM.mutate()}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-700 hover:bg-emerald-600 text-white rounded text-sm transition disabled:opacity-40"
-            >
-              <PlayCircle className="w-4 h-4" />
-              Resume
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={pending || !hasActivePlan}
-              onClick={() => pauseM.mutate()}
-              className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-700 hover:bg-amber-600 text-white rounded text-sm transition disabled:opacity-40"
-            >
-              <PauseCircle className="w-4 h-4" />
-              Pause
-            </button>
-          )}
           <button
             type="button"
             disabled={pending || !hasActivePlan || liveTakeover || Math.abs(liveDriftSeconds) < 5}
