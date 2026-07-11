@@ -4,7 +4,7 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { supervisorState, planItems, plans, clockSegments } from '../db/schema.js';
 import { HarborClient } from '../services/supervisor2/harborClient.js';
-import { bus } from '../services/supervisor2/bus.js';
+import { bus, requestReconcile } from '../services/supervisor2/bus.js';
 import { resolveCurrentSegment, segmentBoundsWithinClock } from '../services/supervisor2/clockResolver.js';
 import { abortRow } from '../services/supervisor2/playHistoryService.js';
 
@@ -33,6 +33,11 @@ export async function supervisorControlRoutes(fastify: FastifyInstance) {
           await abortRow(db, item.play_history_id, nowMs);
         }
       }
+
+      // Nudge the supervisor to reevaluate immediately — otherwise it only
+      // discovers the skip on its next incidental poll, and any hard-segment
+      // fill/trim decision or next-plan runway math stays stale until then.
+      requestReconcile('operator_skip');
 
       return reply.send({ ok: true });
     } catch (err) {

@@ -151,6 +151,18 @@ export class SupervisorProcess {
   private finalizationRequestedForPlanId: number | null = null;
   // Prevents double-requesting a draft for the same next segment.
   private draftedForNextSegment: { segmentId: number; instanceMs: number } | null = null;
+  // Set whenever resolveNextOccurrence resolves to a hard-start segment —
+  // either because it genuinely is the immediate next one, or because there
+  // wasn't enough runway to justify drafting the intervening segments
+  // normally (skip-ahead). Both cases mean nothing else will produce a plan
+  // before this boundary, so the active plan is on the hook to reach it.
+  // maybeHandleHardStartGate reads this instead of independently re-deriving
+  // the same lookahead every tick — see resolveNextOccurrence's own comment
+  // on why that decision only needs evaluating once, at activation/reconcile
+  // time, not continuously. Null means "not on the hook" — a real next
+  // segment already has (or will have) its own plan, so ordinary segment
+  // handoff applies and this gate has nothing to do.
+  private activePlanHardBoundary: { segmentId: number; startMs: number } | null = null;
   // Prevents double-emitting a cold-start finalization.
   private coldStartFinalizeSent = false;
   // Prevents re-running the exhausted-plan runway reconcile every tick while
@@ -639,9 +651,10 @@ export class SupervisorProcess {
   }
 
   // One past the highest existing position in the plan (across all
-  // statuses, not just pending) — where to append fresh items when a plan
-  // has zero pending items left (fully exhausted), unlike firstPendingPosition
-  // which assumes some pending tail already exists to splice into.
+  // statuses, not just pending) — safe to append fresh items after
+  // regardless of whether any pending items remain, since it never collides
+  // with an already-played/playing item's position the way naively reusing
+  // the lowest pending position (or defaulting to 0 when none exist) would.
   private async nextAppendPosition(planId: number): Promise<number> {
     const [row] = await this.db
       .select({ position: planItemsTable.position })
@@ -752,35 +765,29 @@ export class SupervisorProcess {
 
   // ─── Hard-start gate ─────────────────────────────────────────────────────────
   //
-  // Checked every tick. Only active when the next HARD segment (Decision 62:
-  // via resolveNextHardSegment, not necessarily the immediate structural
-  // next one — see the comment there and on resolveNextOccurrence) is close
-  // enough to matter.
+  // Checked every tick, but only acts when this.activePlanHardBoundary is
+  // set — i.e. resolveNextOccurrence (evaluated once, at activation/reconcile
+  // time by maybeRequestNextDraft/reconcileNext, not re-derived here) already
+  // decided the active plan is on the hook to reach a hard-start segment
+  // itself, either because it's genuinely the immediate next segment or
+  // because there wasn't enough real runway to draft the intervening
+  // segments normally (skip-ahead). If a normal next segment already has (or
+  // will have) its own plan, activePlanHardBoundary is null and this gate has
+  // nothing to do — ordinary exhaustion-driven handoff takes over.
   // Fill trigger: plan running short → request filler to bridge to hard boundary.
   // Trim trigger: plan running long → skip items near hard boundary.
 
   private async maybeHandleHardStartGate(nowMs: number): Promise<void> {
     if (this.activePlanId == null || this.currentSegmentEndMs == null) return;
+    if (this.activePlanHardBoundary == null) return;
 
-    // Anchored to the tracked (playhead-sourced) segment end, not a fresh
-    // wall-clock resolve — under drift the two can point at different
-    // segments, which would make this gate evaluate the wrong "next" one.
-    // Uses the multi-hop resolver rather than a single resolveCurrentSegment
-    // hop: if maybeRequestNextDraft already decided (at activation time) to
-    // skip intervening flexible segments because there wasn't enough real
-    // runway before an upcoming hard segment, this gate must still manage
-    // filling/trimming the active plan against that TRUE boundary — however
-    // many structural hops away — or the active plan could run dry and hand
-    // off to the hard segment's plan early, violating its hard start.
-    const lookahead = await resolveNextHardSegment(this.currentSegmentEndMs + 1, this.db);
-    if (!lookahead) return;
-    const next = lookahead.hard;
+    const boundaryStartMs = this.activePlanHardBoundary.startMs;
 
     const estimatedRemainingSec = await this.computeEstimatedRemaining(nowMs);
-    // next.segmentStartMs, not this.currentSegmentEndMs: those coincide when
-    // next is genuinely the immediate next segment (contiguous clock
-    // layout), but not once next is several hops away.
-    const timeToHardBoundarySec = (next.segmentStartMs - nowMs) / 1000;
+    // boundaryStartMs, not this.currentSegmentEndMs: those coincide when the
+    // hard segment is genuinely the immediate next one, but not once
+    // skip-ahead put several hops between here and there.
+    const timeToHardBoundarySec = (boundaryStartMs - nowMs) / 1000;
     const gapSec = timeToHardBoundarySec - estimatedRemainingSec;
 
     // Fill trigger: plan is running short, gap exceeds tolerance.
@@ -789,7 +796,7 @@ export class SupervisorProcess {
       gapSec > HARD_START_TOLERANCE_S &&
       this.pendingReplanForPlanId !== this.activePlanId
     ) {
-      const fromPosition = await this.firstPendingPosition(this.activePlanId);
+      const fromPosition = await this.nextAppendPosition(this.activePlanId);
       const requestId = randomUUID();
       this.pendingReplanForPlanId = this.activePlanId;
       this.logger?.info({
@@ -1106,6 +1113,7 @@ export class SupervisorProcess {
     this.planActivatedAtMs = nowMs;
     this.finalizationRequestedForPlanId = null;
     this.draftedForNextSegment = null;
+    this.activePlanHardBoundary = null;
     this.exhaustedPlanReconciledFor = null;
 
     // DB writes.
@@ -1326,6 +1334,9 @@ export class SupervisorProcess {
 
     const remainingSeconds = (afterMs - nowMs) / 1000;
     const nextIsHard = readStartPolicy(next.segment.start_policy).type === 'hard';
+    this.activePlanHardBoundary = nextIsHard
+      ? { segmentId: next.segment.id, startMs: next.segmentStartMs }
+      : null;
     // Hard boundaries can't be pulled earlier — defer entirely to the
     // existing fill/trim gate (maybeHandleHardStartGate), which already
     // runs every tick. The <3s floor still applies regardless: at that
@@ -1558,7 +1569,7 @@ export class SupervisorProcess {
     if (this.activePlanId != null && this.currentSegmentEndMs != null) {
       const remainingMs = this.currentSegmentEndMs - nowMs;
       if (remainingMs > 30_000) {
-        const fromPosition = await this.firstPendingPosition(this.activePlanId);
+        const fromPosition = await this.nextAppendPosition(this.activePlanId);
         const requestId = randomUUID();
         this.pendingReplanForPlanId = this.activePlanId;
         this._bus.emit({
@@ -1723,6 +1734,10 @@ export class SupervisorProcess {
       return;
     }
 
+    this.activePlanHardBoundary = readStartPolicy(next.segment.start_policy).type === 'hard'
+      ? { segmentId: next.segment.id, startMs: next.segmentStartMs }
+      : null;
+
     if (
       this.draftedForNextSegment &&
       this.draftedForNextSegment.segmentId === next.segment.id &&
@@ -1848,16 +1863,6 @@ export class SupervisorProcess {
   }
 
   // ─── Helpers ─────────────────────────────────────────────────────────────────
-
-  private async firstPendingPosition(planId: number): Promise<number> {
-    const [row] = await this.db
-      .select({ position: planItemsTable.position })
-      .from(planItemsTable)
-      .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')))
-      .orderBy(asc(planItemsTable.position))
-      .limit(1);
-    return row?.position ?? 0;
-  }
 
   private async updateHeartbeat(nowMs: number): Promise<void> {
     await this.db.update(supervisorStateTable)
