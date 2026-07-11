@@ -1892,7 +1892,7 @@ This is the same bug class already fixed once in a different call site: `handleE
 
 ### Decision 62 — Proactive next-hard-segment lookahead: never discover a hard start one boundary too late
 
-**Status: implemented — 2026-07-11. Not yet deployed.**
+**Status: implemented & deployed 2026-07-11 (commit `8d88077`).**
 
 Confirmed gap (found while reviewing Decision 61's aftermath): every segment resolution call site in `supervisor2/` — `maybeHandleHardStartGate`, `reconcileNext`, `resolveNextSegment` — is strictly "current" or "current+1." Nothing ever looks further than one segment ahead of wherever the tracked playhead currently sits. `reconcile()`, the one mechanism that re-grounds to true wall-clock time, only runs at boot, restart, or the manual Reconcile/Align to Clock buttons (Decision 56) — never on the ordinary tick loop.
 
@@ -1922,7 +1922,7 @@ Confirmed gap (found while reviewing Decision 61's aftermath): every segment res
 
 ### Decision 63 — play_history is the single source of truth: persist cut-short outcome, give each content process its own view, retire the unused feedback protocol
 
-**Status: proposed — 2026-07-11. Not yet implemented.**
+**Status: implemented & deployed 2026-07-11 (commit `76b9cf9`).**
 
 #### Part A — Persist on-air/cut-short outcome (the original, concrete bug)
 
@@ -1966,7 +1966,7 @@ There is no fourth case where a process needs the Planner to proactively report 
 
 ### Decision 64 — `/supervisor/v2/status` must derive segment/elapsed data from the active plan, not an independent wall-clock resolve
 
-**Status: proposed — 2026-07-11. Not yet implemented.**
+**Status: implemented & deployed 2026-07-11 (commit `3f1c7a4`).**
 
 Confirmed live, reproduced with real numbers: `current_drift_seconds`'s replacement, the operator-facing "live drift" figure (`liveDriftSeconds = elapsed_since_segment_start − plan_consumed_seconds`, Decision "drift display fixes"/`f28cd07`), can read wildly wrong — observed `-788.0s` on the Supervisor page — even though the underlying scheduling engine is healthy and self-correcting. This is a display bug in `supervisorStatus.ts`, not evidence of runaway drift.
 
@@ -1986,7 +1986,7 @@ Confirmed live, reproduced with real numbers: `current_drift_seconds`'s replacem
 
 ### Decision 65 — Rundown's show-content cursor never advances: sequencing is broken, fix it via the play_history view, not the abandoned push plan
 
-**Status: proposed — 2026-07-11. Not yet implemented.**
+**Status: implemented & deployed 2026-07-11 (commit `6f45d99`).**
 
 Confirmed live bug, found while designing Decision 63's Rundown view: `rundown_playback_cursors.next_track_index` — the cursor that's supposed to sequence a show-content playlist's tracks across repeated news/bulletin airings — is written **nowhere in the codebase**. A full grep of `apps/api/src` turns up exactly two files referencing the table: `schema.ts` (the definition) and `rundown.ts` (a pure read). There is no insert, no update, anywhere.
 
