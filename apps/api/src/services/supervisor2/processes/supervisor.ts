@@ -10,7 +10,10 @@
 //                  administratively ahead of time.
 //
 // State machine per segment N:
-//   Segment N starts (calendar boundary) → maybeRequestNextDraft(N+1)
+//   Plan N activates (ground truth,      → activatePlanById(): SEGMENT_START/SUMMARY logged,
+//   via activatePlanById, see below)       currentSegmentId/EndMs updated from N's OWN
+//                                           segment/clock_instance (not a wall-clock resolve —
+//                                           see the drift note below), then maybeRequestNextDraft(N+1)
 //   PLAN_DRAFT_READY for N+1           → nextPlanId set, drift_at_first_pass recorded
 //                                         (deferred instead if nextPlanId already
 //                                         points at a plan with pending content)
@@ -20,11 +23,30 @@
 //   LS_TRACK_STARTED for any item not   → activatePlanById() → activePlanId = that item's
 //   belonging to the active plan           plan (ground truth, not a nextPlanId prediction)
 //
+// Segment/plan transitions are playhead-driven, not wall-clock-driven: every
+// activation path (ground-truth on-air confirmation, handleExhaustedPlan's
+// forced advance, reconcile's RECONCILE_ACTIVATE, cold-start's immediate
+// activation) funnels through activatePlanById, which is the single place
+// currentSegmentId/currentSegmentEndMs/currentClockInstanceMs get updated and
+// the next draft gets requested — reconstructed from the activated plan's
+// OWN segment_id/clock_instance via resolveActivePlanSegment, never from a
+// fresh resolveCurrentSegment(Date.now()). tick() used to re-derive "current
+// segment" from wall-clock nominal durations every ~500ms and treat a change
+// there as the transition signal; under real drift (10+ minutes observed
+// 2026-07-11) that nominal resolution can report a segment 2+ slots ahead of
+// what's actually airing, silently orphaning whatever plan was drafted for
+// the skipped segment(s) — see supervisor-plan-activation-timing-redesign
+// memory for the incident this caused (536s of live dead air). Wall-clock
+// resolution is still used, deliberately, where there's no playhead to be
+// relative to (cold start, orphan recovery) or as an explicit re-grounding
+// (reconcile() / align-to-wall-clock) — never to decide an ordinary
+// transition.
+//
 // Cold start (supervisor starts mid-segment, no plan):
 //   Draft current segment with remaining_seconds as target.
 //   On draft ready: immediately finalize (no T-30s gate).
-//   On finalized: activate immediately (no last-item trigger needed).
-//   Then: maybeRequestNextDraft for the following segment.
+//   On finalized: activate immediately (no last-item trigger needed) —
+//   activatePlanById requests the next segment's draft itself.
 //
 // Boundary drift model:
 //   boundaryDrift(N) = planActivatedAtMs - scheduledSegmentStartMs(N)
@@ -401,62 +423,21 @@ export class SupervisorProcess {
     const resolved = await this.getCachedSegment(nowMs);
     if (!resolved) return;
 
-    // ── Segment boundary detection ─────────────────────────────────────────
-    this.tickOperation = 'boundary_detection';
-    const isNewSegment =
-      resolved.segment.id !== this.currentSegmentId ||
-      resolved.clockInstanceStartedAt !== this.currentClockInstanceMs;
-
-    if (isNewSegment) {
-      const previousId = this.currentSegmentId;
-      const previousPlanId = this.activePlanId;
-
-      // B5: Log summary of the segment that just ended.
-      if (previousId != null && previousPlanId != null) {
-        const summary = await this.computeSegmentSummary(previousPlanId);
-        this.logger?.info({
-          process: 'supervisor', event: 'SEGMENT_SUMMARY',
-          segment_id: previousId, plan_id: previousPlanId,
-          items_played: summary.items_played,
-          items_skipped: summary.items_skipped,
-          actual_duration_seconds: summary.actual_duration_seconds,
-          drift_at_entry_seconds: this.segmentEntryDriftSeconds,
-          drift_at_exit_seconds: this.currentDriftSeconds,
-        }, 'supervisor: segment ended');
-      }
-
-      this.currentSegmentId = resolved.segment.id;
-      this.currentSegmentEndMs = resolved.segmentEndMs;
-      this.currentClockInstanceMs = resolved.clockInstanceStartedAt;
-
-      await this.db.update(supervisorStateTable)
-        .set({ current_segment_id: resolved.segment.id })
-        .where(eq(supervisorStateTable.id, 1));
-
-      // B1: Enrich SEGMENT_START with type/name/duration/clock/show context.
-      this.logger?.info({
-        process: 'supervisor', event: 'SEGMENT_START',
-        segment_id: resolved.segment.id,
-        segment_type: resolved.segment.type,
-        segment_name: resolved.segment.name,
-        duration_seconds: resolved.segment.duration_seconds,
-        clock_id: resolved.clock_id,
-        show_id: resolved.show_id,
-        show_name: resolved.show_name,
-        previous_segment_id: previousId,
-        clock_instance_started_at: resolved.clockInstanceStartedAt,
-      }, 'supervisor: segment boundary crossed');
-
-      this.segmentEntryDriftSeconds = this.currentDriftSeconds;
-
-      // Cold start: no active plan and no next plan building.
-      if (this.activePlanId == null && this.nextPlanId == null && !this.coldStartFinalizeSent) {
-        await this.requestColdStartDraft(resolved, nowMs);
-        return;
-      }
-
-      // Normal operation: request a draft for the segment that follows this one.
-      await this.maybeRequestNextDraft(resolved, nowMs);
+    // ── Cold start ───────────────────────────────────────────────────────────
+    // No active plan and no next plan building — the only case here with no
+    // playhead to be relative to, so wall-clock resolution is the right
+    // source. Runs unconditionally each tick (guarded by its own
+    // coldStartFinalizeSent flag) rather than nested inside a wall-clock
+    // segment-change check — that check used to also drive ordinary segment
+    // transitions, which is exactly what let a nominal wall-clock jump skip
+    // past a drafted segment under drift (see supervisor-plan-activation-
+    // timing-redesign memory, 2026-07-11). Ordinary transitions are now
+    // driven from activatePlanById, anchored to the plan that actually
+    // activated, not to Date.now().
+    this.tickOperation = 'cold_start';
+    if (this.activePlanId == null && this.nextPlanId == null && !this.coldStartFinalizeSent) {
+      await this.requestColdStartDraft(resolved, nowMs);
+      return;
     }
 
     // ── T-30s finalization gate (D31) ──────────────────────────────────────
@@ -777,10 +758,10 @@ export class SupervisorProcess {
   private async maybeHandleHardStartGate(nowMs: number): Promise<void> {
     if (this.activePlanId == null || this.currentSegmentEndMs == null) return;
 
-    const resolved = await this.getCachedSegment(nowMs);
-    if (!resolved) return;
-
-    const next = await resolveCurrentSegment(resolved.segmentEndMs + 1, this.db);
+    // Anchored to the tracked (playhead-sourced) segment end, not a fresh
+    // wall-clock resolve — under drift the two can point at different
+    // segments, which would make this gate evaluate the wrong "next" one.
+    const next = await resolveCurrentSegment(this.currentSegmentEndMs + 1, this.db);
     if (!next) return;
 
     const policy = readStartPolicy(next.segment.start_policy);
@@ -1079,6 +1060,12 @@ export class SupervisorProcess {
     const nominal = segment?.duration_seconds ?? 0;
     this.plannedOvershootSeconds = totalPlanned - nominal;
 
+    // Captured before this activation overwrites in-memory state below —
+    // needed for the outgoing segment's SEGMENT_SUMMARY.
+    const previousActivePlanId = this.activePlanId;
+    const previousSegmentId = this.currentSegmentId;
+    const outgoingDriftAtExit = this.currentDriftSeconds;
+
     // Compute boundary drift: how late/early this segment actually started
     // vs its scheduled wall-clock start time.
     //   scheduledStartMs = segmentEndMs - segment.duration_seconds * 1000
@@ -1092,7 +1079,6 @@ export class SupervisorProcess {
     this.currentDriftSeconds = this.boundaryDriftSeconds;
 
     // Update in-memory state.
-    const previousActivePlanId = this.activePlanId;
     this.activePlanId = planId;
     if (opts.clearNextPlan) {
       this.nextPlanId = null;
@@ -1118,9 +1104,55 @@ export class SupervisorProcess {
         .set({ status: 'completed' })
         .where(and(eq(plansTable.id, previousActivePlanId), eq(plansTable.status, 'active')));
     }
+
+    // ── Segment boundary bookkeeping (playhead-driven) ──────────────────────
+    // This ground-truth activation IS the segment transition — anchored to
+    // the plan that actually just activated, not a fresh wall-clock resolve.
+    // A wall-clock resolve can jump forward past a segment under drift (see
+    // supervisor-plan-activation-timing-redesign memory, 2026-07-11 incident);
+    // reconstructing bounds from this plan's own segment_id/clock_instance
+    // can't skip anything, because it only ever describes what's actually
+    // airing right now.
+    if (previousActivePlanId != null && previousSegmentId != null) {
+      const summary = await this.computeSegmentSummary(previousActivePlanId);
+      this.logger?.info({
+        process: 'supervisor', event: 'SEGMENT_SUMMARY',
+        segment_id: previousSegmentId, plan_id: previousActivePlanId,
+        items_played: summary.items_played,
+        items_skipped: summary.items_skipped,
+        actual_duration_seconds: summary.actual_duration_seconds,
+        drift_at_entry_seconds: this.segmentEntryDriftSeconds,
+        drift_at_exit_seconds: outgoingDriftAtExit,
+      }, 'supervisor: segment ended');
+    }
+
+    const activeSegment = await this.resolveActivePlanSegment(planId);
+    if (activeSegment) {
+      this.currentSegmentId = activeSegment.segment.id;
+      this.currentSegmentEndMs = activeSegment.segmentEndMs;
+      this.currentClockInstanceMs = activeSegment.clockInstanceStartedAt;
+      this.segmentEntryDriftSeconds = this.boundaryDriftSeconds;
+
+      this.logger?.info({
+        process: 'supervisor', event: 'SEGMENT_START',
+        segment_id: activeSegment.segment.id,
+        segment_type: activeSegment.segment.type,
+        segment_name: activeSegment.segment.name,
+        duration_seconds: activeSegment.segment.duration_seconds,
+        clock_id: activeSegment.clock_id,
+        previous_segment_id: previousSegmentId,
+        clock_instance_started_at: activeSegment.clockInstanceStartedAt,
+      }, 'supervisor: segment boundary crossed');
+    } else {
+      this.logger?.warn({
+        process: 'supervisor', event: 'ACTIVATE_PLAN_SEGMENT_UNRESOLVED', plan_id: planId,
+      }, 'supervisor: could not reconstruct segment bounds for activated plan');
+    }
+
     await this.db.update(supervisorStateTable)
       .set({
         active_plan_id: planId,
+        current_segment_id: this.currentSegmentId,
         ...(opts.clearNextPlan
           ? { next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null }
           : {}),
@@ -1137,6 +1169,12 @@ export class SupervisorProcess {
       planned_overshoot_seconds: this.plannedOvershootSeconds,
       boundary_drift_seconds: this.boundaryDriftSeconds,
     }, 'supervisor: plan activated');
+
+    // Request a draft for the segment that follows this one — replaces the
+    // trigger that used to live in tick()'s wall-clock isNewSegment block.
+    if (activeSegment) {
+      await this.maybeRequestNextDraft(activeSegment, nowMs);
+    }
   }
 
   // ─── Reconcile ──────────────────────────────────────────────────────────────
@@ -1284,6 +1322,48 @@ export class SupervisorProcess {
     }
     const bounds = await segmentBoundsWithinClock(this.db, plan.clock_id, plan.segment_id, resolved.clockInstanceStartedAt);
     return bounds?.endMs ?? null;
+  }
+
+  // Reconstructs a ResolvedSegment-shaped view of `planId`'s own segment and
+  // clock instance — same "trust the plan's own segment, don't re-resolve
+  // wall clock" pattern as activePlanSegmentEndMs/exhaustedActivePlanSegmentEndMs,
+  // but returning full bounds. Used by activatePlanById to drive segment
+  // bookkeeping and maybeRequestNextDraft from the plan that just genuinely
+  // activated, instead of tick()'s independent wall-clock resolve — under
+  // drift the two can disagree, and trusting wall-clock resolve for "what's
+  // current" is what orphaned plans 7585/7588 on 2026-07-11 (see
+  // supervisor-plan-activation-timing-redesign memory).
+  // show_id/show_name aren't stored on `plans` (only resolved at draft time,
+  // via calendar/template context) — callers of maybeRequestNextDraft only
+  // read show fields off the *following* segment (freshly resolved there),
+  // never off `current`, so null is correct rather than a placeholder.
+  private async resolveActivePlanSegment(planId: number): Promise<ResolvedSegment | null> {
+    const [plan] = await this.db
+      .select({ segment_id: plansTable.segment_id, clock_instance_started_at: plansTable.clock_instance_started_at })
+      .from(plansTable)
+      .where(eq(plansTable.id, planId));
+    if (!plan) return null;
+
+    const [segment] = await this.db
+      .select()
+      .from(clockSegmentsTable)
+      .where(eq(clockSegmentsTable.id, plan.segment_id));
+    if (!segment) return null;
+
+    const bounds = await segmentBoundsWithinClock(this.db, segment.clock_id, segment.id, plan.clock_instance_started_at);
+    if (!bounds) return null;
+
+    return {
+      clock_id: segment.clock_id,
+      segment,
+      segmentStartMs: bounds.startMs,
+      segmentEndMs: bounds.endMs,
+      clockInstanceStartedAt: plan.clock_instance_started_at,
+      show_id: null,
+      show_name: null,
+      source_type: 'default',
+      source_id: planId,
+    };
   }
 
   // Same reconstruction as activePlanSegmentEndMs, but for the plan that just
@@ -1537,10 +1617,10 @@ export class SupervisorProcess {
     }, 'supervisor: plan finalized and ready');
 
     if (this.activePlanId == null && this.nextPlanId === msg.plan_id) {
+      // activateNextPlan -> activatePlanById already requests the next
+      // draft itself now, anchored to the plan that just activated rather
+      // than this.cachedSegment (wall-clock-based, can diverge under drift).
       await this.activateNextPlan(Date.now());
-      if (this.cachedSegment) {
-        await this.maybeRequestNextDraft(this.cachedSegment, Date.now());
-      }
     }
   }
 
