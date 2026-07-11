@@ -22,6 +22,7 @@ import { db as defaultDb } from '../../db/index.js';
 import {
   calendarEntries as calendarEntriesTable,
   clockSegments as clockSegmentsTable,
+  plans as plansTable,
   shows as showsTable,
   stationSettings as stationSettingsTable,
   templateClockEntries as templateClockEntriesTable,
@@ -197,6 +198,103 @@ export async function segmentBoundsWithinClock(
     cursorMs = segEndMs;
   }
   return null;
+}
+
+// Reconstructs a ResolvedSegment-shaped view of `planId`'s own segment and
+// clock instance — trusts the plan's own segment_id/clock_instance_started_at
+// rather than re-resolving wall clock (Decision 61). Used by activatePlanById
+// to drive segment bookkeeping from the plan that just genuinely activated,
+// and by /supervisor/v2/status (Decision 64) to derive the operator-facing
+// segment/elapsed data from what's actually airing rather than an independent
+// resolveCurrentSegment(nowMs) call — under drift the two can disagree.
+//
+// Show context isn't stored directly on `plans`, but `resolution_identity`
+// (Decision 58) records which calendar/template row produced the plan's
+// segment resolution — reused here to recover show_id/show_name without
+// re-running wall-clock resolution. Plans drafted before that column existed
+// (resolution_identity null) fall back to no show context, same as before
+// this function existed.
+export async function resolveActivePlanSegment(
+  db: typeof defaultDb,
+  planId: number,
+): Promise<ResolvedSegment | null> {
+  const [plan] = await db
+    .select({
+      segment_id: plansTable.segment_id,
+      clock_instance_started_at: plansTable.clock_instance_started_at,
+      resolution_identity: plansTable.resolution_identity,
+    })
+    .from(plansTable)
+    .where(eq(plansTable.id, planId));
+  if (!plan) return null;
+
+  const [segment] = await db
+    .select()
+    .from(clockSegmentsTable)
+    .where(eq(clockSegmentsTable.id, plan.segment_id));
+  if (!segment) return null;
+
+  const bounds = await segmentBoundsWithinClock(db, segment.clock_id, segment.id, plan.clock_instance_started_at);
+  if (!bounds) return null;
+
+  const { source_type, source_id, show_id, show_name } = await resolveShowFromResolutionIdentity(
+    db,
+    plan.resolution_identity,
+  );
+
+  return {
+    clock_id: segment.clock_id,
+    segment,
+    segmentStartMs: bounds.startMs,
+    segmentEndMs: bounds.endMs,
+    clockInstanceStartedAt: plan.clock_instance_started_at,
+    show_id,
+    show_name,
+    source_type,
+    source_id: source_id ?? planId,
+  };
+}
+
+// Parses a `resolution_identity` string (`source_type:source_id:segment_id:
+// clockInstanceStartedAt`, Decision 58) and, when the source is a calendar or
+// template row (the only two that carry a show_id), looks up its show_id and
+// resolves the show's name. Returns nulls for template_clock/default sources
+// (never show-scoped) or a missing/malformed identity.
+async function resolveShowFromResolutionIdentity(
+  db: typeof defaultDb,
+  resolutionIdentity: string | null,
+): Promise<{
+  source_type: ResolvedSegment['source_type'];
+  source_id: number | null;
+  show_id: number | null;
+  show_name: string | null;
+}> {
+  const fallback = { source_type: 'default' as const, source_id: null, show_id: null, show_name: null };
+  if (!resolutionIdentity) return fallback;
+
+  const [sourceType, sourceIdStr] = resolutionIdentity.split(':');
+  const sourceId = Number(sourceIdStr);
+  if (!Number.isFinite(sourceId)) return fallback;
+  if (sourceType !== 'calendar' && sourceType !== 'template_clock' && sourceType !== 'template' && sourceType !== 'default') {
+    return fallback;
+  }
+
+  let showId: number | null = null;
+  if (sourceType === 'calendar') {
+    const [row] = await db.select({ show_id: calendarEntriesTable.show_id }).from(calendarEntriesTable).where(eq(calendarEntriesTable.id, sourceId));
+    showId = row?.show_id ?? null;
+  } else if (sourceType === 'template') {
+    const [row] = await db.select({ show_id: templateEntriesTable.show_id }).from(templateEntriesTable).where(eq(templateEntriesTable.id, sourceId));
+    showId = row?.show_id ?? null;
+  }
+
+  let showName: string | null = null;
+  if (showId != null) {
+    const [show] = await db.select({ name: showsTable.name }).from(showsTable).where(eq(showsTable.id, showId));
+    showName = show?.name ?? null;
+  }
+
+  return { source_type: sourceType, source_id: sourceId, show_id: showId, show_name: showName };
 }
 
 // ─── Internal helpers ────────────────────────────────────────────────────────

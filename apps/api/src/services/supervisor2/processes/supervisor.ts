@@ -92,7 +92,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
-import { computeResolutionIdentity, resolveCurrentSegment, segmentBoundsWithinClock, type ResolvedSegment } from '../clockResolver.js';
+import { computeResolutionIdentity, resolveActivePlanSegment, resolveCurrentSegment, segmentBoundsWithinClock, type ResolvedSegment } from '../clockResolver.js';
 import {
   closeMostRecentOpenRow,
   closeOpenRowsBefore,
@@ -1126,7 +1126,7 @@ export class SupervisorProcess {
       }, 'supervisor: segment ended');
     }
 
-    const activeSegment = await this.resolveActivePlanSegment(planId);
+    const activeSegment = await resolveActivePlanSegment(this.db, planId);
     if (activeSegment) {
       this.currentSegmentId = activeSegment.segment.id;
       this.currentSegmentEndMs = activeSegment.segmentEndMs;
@@ -1322,48 +1322,6 @@ export class SupervisorProcess {
     }
     const bounds = await segmentBoundsWithinClock(this.db, plan.clock_id, plan.segment_id, resolved.clockInstanceStartedAt);
     return bounds?.endMs ?? null;
-  }
-
-  // Reconstructs a ResolvedSegment-shaped view of `planId`'s own segment and
-  // clock instance — same "trust the plan's own segment, don't re-resolve
-  // wall clock" pattern as activePlanSegmentEndMs/exhaustedActivePlanSegmentEndMs,
-  // but returning full bounds. Used by activatePlanById to drive segment
-  // bookkeeping and maybeRequestNextDraft from the plan that just genuinely
-  // activated, instead of tick()'s independent wall-clock resolve — under
-  // drift the two can disagree, and trusting wall-clock resolve for "what's
-  // current" is what orphaned plans 7585/7588 on 2026-07-11 (see
-  // supervisor-plan-activation-timing-redesign memory).
-  // show_id/show_name aren't stored on `plans` (only resolved at draft time,
-  // via calendar/template context) — callers of maybeRequestNextDraft only
-  // read show fields off the *following* segment (freshly resolved there),
-  // never off `current`, so null is correct rather than a placeholder.
-  private async resolveActivePlanSegment(planId: number): Promise<ResolvedSegment | null> {
-    const [plan] = await this.db
-      .select({ segment_id: plansTable.segment_id, clock_instance_started_at: plansTable.clock_instance_started_at })
-      .from(plansTable)
-      .where(eq(plansTable.id, planId));
-    if (!plan) return null;
-
-    const [segment] = await this.db
-      .select()
-      .from(clockSegmentsTable)
-      .where(eq(clockSegmentsTable.id, plan.segment_id));
-    if (!segment) return null;
-
-    const bounds = await segmentBoundsWithinClock(this.db, segment.clock_id, segment.id, plan.clock_instance_started_at);
-    if (!bounds) return null;
-
-    return {
-      clock_id: segment.clock_id,
-      segment,
-      segmentStartMs: bounds.startMs,
-      segmentEndMs: bounds.endMs,
-      clockInstanceStartedAt: plan.clock_instance_started_at,
-      show_id: null,
-      show_name: null,
-      source_type: 'default',
-      source_id: planId,
-    };
   }
 
   // Same reconstruction as activePlanSegmentEndMs, but for the plan that just

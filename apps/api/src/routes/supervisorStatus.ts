@@ -13,7 +13,7 @@ import {
   clockSegments,
   shows,
 } from '../db/schema.js';
-import { resolveCurrentSegment } from '../services/supervisor2/clockResolver.js';
+import { resolveActivePlanSegment, resolveCurrentSegment } from '../services/supervisor2/clockResolver.js';
 
 export async function supervisorStatusRoutes(fastify: FastifyInstance) {
   fastify.get('/supervisor/v2/status', async (_request, reply) => {
@@ -152,9 +152,19 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
 
       const liveTakeoverActive = activeLiveRows.length > 0;
 
-      // Resolve current segment for playhead data
+      // Resolve current segment for playhead data. Prefer the *active plan's
+      // own* segment (Decision 64) over an independent wall-clock resolve:
+      // when the active plan is mid-crossing (deliberately running past its
+      // nominal boundary to absorb earlier drift, Decision 51), a fresh
+      // resolveCurrentSegment(nowMs) can report a later segment than what's
+      // actually airing, producing a nonsensical elapsed/consumed mismatch in
+      // the operator-facing drift figure. Only fall back to the wall-clock
+      // resolve when there's no active plan to derive anything from (cold
+      // start / no schedule yet).
       const nowMs = Date.now();
-      const resolvedSegment = await resolveCurrentSegment(nowMs, db);
+      const resolvedSegment = activePlanId !== null
+        ? (await resolveActivePlanSegment(db, activePlanId)) ?? (await resolveCurrentSegment(nowMs, db))
+        : await resolveCurrentSegment(nowMs, db);
       const segmentStartedAtMs = resolvedSegment?.segmentStartMs ?? null;
       const segmentDurationSeconds = resolvedSegment?.segment.duration_seconds ?? null;
 
