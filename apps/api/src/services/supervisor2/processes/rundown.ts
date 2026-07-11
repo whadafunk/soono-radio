@@ -9,31 +9,38 @@
 //
 //   2. Show-content playlist assignment in `rundown_show_content`, keyed by
 //      (date, time_start, clock_id, segment_type). The playlist's tracks are
-//      sequenced across all segments of that type in the same clock instance,
-//      with a cursor in `rundown_playback_cursors`.
+//      sequenced across all segments of that type in the same clock
+//      instance, by counting how many have already aired in play_history
+//      (Decision 63's Rundown view, Decision 65) — not a separately
+//      maintained cursor. `rundown_playback_cursors` still exists in the
+//      schema but is dead: it was never written to anywhere, so an earlier
+//      version of this sequencing always served the same first track. See
+//      Decision 65 for the incident; dropping the now-unused table is a
+//      separate cleanup.
 //
 // Per-slot assignments take precedence over show-content. If neither exists,
 // the pool is empty and gap_estimate_seconds = segment_duration (Decision 18
 // — the planner fills the gap from the segment's normal music/branding
 // pools via coasting_order).
 //
-// State changes happen only on CONFIRM_USED. For Phase 2 we do not advance
-// the show-content cursor here — the queue feeder is the authoritative
-// owner of "what actually played" and will write play_history when audio
-// airs. Cursor advancement is currently handled by the V1 picker; once V2's
-// queue feeder lands in Phase 4 it will take over.
+// State changes happen only on CONFIRM_USED — there's nothing to advance;
+// sequencing position is derived fresh from play_history on every request,
+// the same self-correcting pattern Music/Campaign/Branding already use.
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db as defaultDb } from '../../../db/index.js';
 import {
   clockSegments,
   media as mediaTable,
+  planItems as planItemsTable,
+  playHistory as playHistoryTable,
   playlists as playlistsTable,
   playlistMedia as playlistMediaTable,
+  plans as plansTable,
   rundownAssignments as rundownAssignmentsTable,
   rundownDurationOverrides as rundownDurationOverridesTable,
-  rundownPlaybackCursors as rundownPlaybackCursorsTable,
   rundownShowContent as rundownShowContentTable,
+  type ClockSegmentType,
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import type { RundownCandidatePool, RundownItem } from '../types.js';
@@ -66,8 +73,9 @@ export class RundownProcess {
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'CONFIRM_USED' }>('CONFIRM_USED', (msg) => {
         if (msg.process !== PROCESS_NAME) return;
-        // No state to advance here — cursor advancement is owned by the
-        // queue feeder when it writes play_history (Phase 4).
+        // No state to advance — show-content sequence position is derived
+        // fresh from play_history on the next request (Decision 65), not
+        // tracked here.
       }),
     );
     this.unsubscribers.push(
@@ -179,10 +187,9 @@ export class RundownProcess {
       if (content?.playlist_id != null) {
         const item = await this.nextFromShowContentPlaylist(
           content.playlist_id,
-          date,
-          timeStart,
           segment.clock_id,
           segment.type,
+          clockInstanceStartedAt,
         );
         if (item) {
           return {
@@ -234,15 +241,19 @@ export class RundownProcess {
     };
   }
 
-  // Reads the cursor for this (date, time_start, clock_id, segment_type) slot
-  // and returns the playlist track at next_track_index. Pure read — does not
-  // advance the cursor. Cursor advancement happens at play time (Phase 4).
+  // Determines the next track in sequence by counting how many of this
+  // playlist's tracks have already aired in this clock instance (Decision
+  // 63's Rundown view, Decision 65) — replaces a cursor table
+  // (`rundown_playback_cursors`) that was never written to anywhere in the
+  // codebase, so show-content sequencing had always silently served the
+  // same first track. `count % tracks.length` is the same modulo math the
+  // dead cursor read used; only the source of the index changed, from a
+  // phantom row to ground truth.
   private async nextFromShowContentPlaylist(
     playlistId: number,
-    date: string,
-    timeStart: string,
     clockId: number,
-    segmentType: string,
+    segmentType: ClockSegmentType,
+    clockInstanceStartedAt: number,
   ): Promise<RundownItem | null> {
     const [playlist] = await this.db
       .select({ id: playlistsTable.id })
@@ -267,25 +278,52 @@ export class RundownProcess {
       (a, b) => a.sort_order - b.sort_order || a.media_id - b.media_id,
     );
 
-    const [cursor] = await this.db
-      .select({ next_track_index: rundownPlaybackCursorsTable.next_track_index })
-      .from(rundownPlaybackCursorsTable)
-      .where(
-        and(
-          eq(rundownPlaybackCursorsTable.date, date),
-          eq(rundownPlaybackCursorsTable.time_start, timeStart),
-          eq(rundownPlaybackCursorsTable.clock_id, clockId),
-          eq(rundownPlaybackCursorsTable.segment_type, segmentType),
-        ),
-      );
-    const cursorIdx = cursor?.next_track_index ?? 0;
-    const track = tracks[cursorIdx % tracks.length];
+    const mediaIds = tracks.map((t) => t.media_pk);
+    const alreadyPlayed = await this.countShowContentPlays(
+      clockId,
+      segmentType,
+      clockInstanceStartedAt,
+      mediaIds,
+    );
+    const cursorIdx = alreadyPlayed % tracks.length;
+    const track = tracks[cursorIdx];
     return {
       id: track.media_pk,
       media_id: track.media_pk,
       position: 0,
       duration_seconds: effectiveDuration(track),
     };
+  }
+
+  // Decision 63/65's Rundown view: counts how many of `mediaIds` have
+  // already aired, scoped to this clock instance and segment type — i.e.
+  // every news/bulletin segment of `segmentType` within the same clock hour
+  // shares one sequence, matching the dead cursor's original
+  // (clock_id, segment_type)-scoped intent. Counts any row regardless of
+  // `aborted`: a cut-short rundown clip still occupied a sequence position.
+  private async countShowContentPlays(
+    clockId: number,
+    segmentType: ClockSegmentType,
+    clockInstanceStartedAt: number,
+    mediaIds: number[],
+  ): Promise<number> {
+    if (mediaIds.length === 0) return 0;
+    const rows = await this.db
+      .select({ n: sql<number>`COUNT(*)`.as('n') })
+      .from(playHistoryTable)
+      .innerJoin(planItemsTable, eq(planItemsTable.id, playHistoryTable.plan_item_id))
+      .innerJoin(plansTable, eq(plansTable.id, planItemsTable.plan_id))
+      .innerJoin(clockSegments, eq(clockSegments.id, plansTable.segment_id))
+      .where(
+        and(
+          eq(planItemsTable.content_type, 'rundown'),
+          eq(plansTable.clock_instance_started_at, clockInstanceStartedAt),
+          eq(clockSegments.clock_id, clockId),
+          eq(clockSegments.type, segmentType),
+          inArray(playHistoryTable.media_id, mediaIds),
+        ),
+      );
+    return Number(rows[0]?.n ?? 0);
   }
 
   private async loadPlaylistAsItems(playlistId: number): Promise<RundownItem[]> {
