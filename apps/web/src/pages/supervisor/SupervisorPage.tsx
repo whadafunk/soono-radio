@@ -3,18 +3,21 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle,
+  ChevronsLeft,
+  ChevronsRight,
   Circle,
   Clock,
   Mic2,
   Loader,
   SkipForward,
 } from 'lucide-react';
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 import type {
   SupervisorV2PlanItem,
   SupervisorV2StopSetEstimate,
   SupervisorV2CurrentSegment,
   SupervisorV2NextPlan,
+  SupervisorV2NextHardSegment,
   SupervisorV2RecentPlay,
   SupervisorV2SegmentConfig,
 } from '@soono/shared';
@@ -31,6 +34,8 @@ import {
   CONTENT_TYPE_META,
   ContentTypeCell,
   heartbeatStatus,
+  scheduleSourceMeta,
+  computeTimelineLayout,
 } from '../../lib/supervisorV2Ui';
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
@@ -137,19 +142,52 @@ function ControlBar({
 
 // ─── Segment timeline ─────────────────────────────────────────────────────────
 
+// Small hover card anchored at a given horizontal % within a relative
+// container. Clamped away from the edges so it never clips off the card.
+function TimelineTooltip({
+  active,
+  leftPct,
+  children,
+}: {
+  active: boolean;
+  leftPct: number;
+  children: ReactNode;
+}) {
+  if (!active) return null;
+  const clampedLeft = Math.min(92, Math.max(8, leftPct));
+  return (
+    <div
+      className="absolute bottom-full mb-2 z-30 -translate-x-1/2 whitespace-nowrap rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 shadow-lg pointer-events-none"
+      style={{ left: `${clampedLeft}%` }}
+    >
+      {children}
+    </div>
+  );
+}
+
 function SegmentTimeline({
   segmentStartedAtMs,
   segmentDurationSeconds,
   planConsumedSeconds,
   planItems,
   expectedCurrentItemEndMs,
+  intentionalOffsetSeconds,
+  plannedOvershootSeconds,
+  boundaryDriftSeconds,
+  planInternalDriftSeconds,
 }: {
   segmentStartedAtMs: number | null;
   segmentDurationSeconds: number | null;
   planConsumedSeconds: number;
   planItems: SupervisorV2PlanItem[];
   expectedCurrentItemEndMs: number | null;
+  intentionalOffsetSeconds: number;
+  plannedOvershootSeconds: number;
+  boundaryDriftSeconds: number;
+  planInternalDriftSeconds: number | null;
 }) {
+  const [hoveredKey, setHoveredKey] = useState<string | null>(null);
+
   if (segmentStartedAtMs == null || segmentDurationSeconds == null || segmentDurationSeconds <= 0) {
     return (
       <section>
@@ -170,46 +208,51 @@ function SegmentTimeline({
   const driftCursorColor =
     absDrift < 5 ? 'bg-green-400' : absDrift < 10 ? 'bg-amber-400' : 'bg-red-400';
 
-  // Build item positions: cumulative offset from segment start
   const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
-  let cursor = 0;
-  const itemBlocks: Array<{
-    left: number;
-    width: number;
-    barColor: string;
-    isTerminal: boolean;
-    label: string;
-  }> = [];
+  const layout = computeTimelineLayout(
+    segmentDurationSeconds,
+    intentionalOffsetSeconds,
+    planItems.map((item) => {
+      const meta = CONTENT_TYPE_META[item.content_type] ?? { barColor: 'bg-zinc-500', label: item.content_type };
+      return {
+        durationSeconds: item.planned_duration_seconds ?? 0,
+        barColor: meta.barColor,
+        isTerminal: terminalStatuses.has(item.status),
+        isPlaying: item.status === 'playing',
+        label: item.media_title ?? item.content_type,
+        contentTypeLabel: meta.label,
+        statusLabel: item.status.replace(/_/g, ' '),
+      };
+    }),
+    plannedOvershootSeconds,
+  );
 
-  for (const item of planItems) {
-    const dur = item.planned_duration_seconds ?? 0;
-    const left = (cursor / segmentDurationSeconds) * 100;
-    const width = (dur / segmentDurationSeconds) * 100;
-    const meta = CONTENT_TYPE_META[item.content_type] ?? { barColor: 'bg-zinc-500', label: item.content_type };
-    itemBlocks.push({
-      left,
-      width,
-      barColor: meta.barColor,
-      isTerminal: terminalStatuses.has(item.status),
-      label: item.media_title ?? item.content_type,
-    });
-    cursor += dur;
-  }
-
-  const calendarCursorLeft = Math.min(100, (calendarElapsed / segmentDurationSeconds) * 100);
-  const planCursorLeft = Math.min(100, (planConsumedSeconds / segmentDurationSeconds) * 100);
-
+  const calendarCursorLeft = layout.wallClockToPct(calendarElapsed);
+  const planCursorLeft = layout.planPositionToPct(planConsumedSeconds);
   const expectedEndLeft =
     expectedCurrentItemEndMs != null
-      ? Math.min(100, ((expectedCurrentItemEndMs - segmentStartedAtMs) / 1000 / segmentDurationSeconds) * 100)
+      ? layout.wallClockToPct((expectedCurrentItemEndMs - segmentStartedAtMs) / 1000)
       : null;
+  const trailingLeftPct = layout.scheduledBoundaryPct + layout.contentPct;
+
+  const offsetLabel =
+    layout.offsetSide === 'lead'
+      ? `Fired ${fmtMmSs(Math.abs(layout.offsetSeconds))} early`
+      : layout.offsetSide === 'bite'
+        ? `Fired ${fmtMmSs(Math.abs(layout.offsetSeconds))} late`
+        : null;
+
+  const hoverHandlers = (key: string) => ({
+    onMouseEnter: () => setHoveredKey(key),
+    onMouseLeave: () => setHoveredKey((k) => (k === key ? null : k)),
+  });
 
   return (
     <section>
       <h2 className="text-base font-semibold text-white mb-3">Segment Timeline</h2>
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
         {/* Header stats */}
-        <div className="flex items-center gap-6 mb-3 text-xs text-zinc-400">
+        <div className="flex items-center gap-6 mb-3 text-sm text-zinc-400 flex-wrap">
           <span>
             <span className="text-zinc-300 font-mono">{fmtMmSs(calendarElapsed)}</span>
             {' '}elapsed
@@ -217,6 +260,14 @@ function SegmentTimeline({
           <span>
             <span className="text-zinc-300 font-mono">{fmtMmSs(remaining)}</span>
             {' '}remaining
+          </span>
+          <span title="The segment's nominal, scheduled duration">
+            scheduled{' '}
+            <span className="text-zinc-300 font-mono">{fmtMmSs(segmentDurationSeconds)}</span>
+          </span>
+          <span title="Sum of the active plan's item durations — what's actually been assembled to fill this segment">
+            planned{' '}
+            <span className="text-zinc-300 font-mono">{fmtMmSs(layout.totalContentSeconds)}</span>
           </span>
           <span>
             drift{' '}
@@ -226,48 +277,175 @@ function SegmentTimeline({
               {fmtDriftSign(drift)}
             </span>
           </span>
+          {planInternalDriftSeconds != null && Math.abs(planInternalDriftSeconds) >= 0.5 && (
+            <span
+              className={Math.abs(planInternalDriftSeconds) < 5 ? 'text-zinc-400' : 'text-amber-400'}
+              title="Has the plan's own estimated total shifted since it activated (a mid-flight replan/trim/fill) — distinct from wall-clock-vs-consumed drift above"
+            >
+              plan Δ{' '}
+              <span className="font-mono font-semibold">{fmtDriftSign(planInternalDriftSeconds)}</span>
+            </span>
+          )}
+          {Math.abs(boundaryDriftSeconds) >= 0.5 && (
+            <span title="Actual measured deviation from the scheduled wall-clock start — may differ from the intentional offset below">
+              started{' '}
+              <span className="font-mono font-semibold text-zinc-300">{fmtDriftSign(boundaryDriftSeconds)}</span>
+            </span>
+          )}
+          {layout.offsetSeconds !== 0 && (
+            <span className={layout.offsetSide === 'lead' ? 'text-sky-400' : 'text-amber-400'}>
+              offset{' '}
+              <span className="font-mono font-semibold">{fmtDriftSign(layout.offsetSeconds)}</span>
+            </span>
+          )}
+          {layout.trailingKind && (
+            <span className={layout.trailingKind === 'overshoot' ? 'text-red-400' : 'text-zinc-400'}>
+              {layout.trailingKind}{' '}
+              <span className="font-mono font-semibold">{fmtMmSs(Math.abs(layout.trailingSeconds))}</span>
+            </span>
+          )}
         </div>
 
-        {/* Timeline bar */}
-        <div className="relative h-10 bg-zinc-800 rounded overflow-hidden">
-          {/* Plan item blocks */}
-          {itemBlocks.map((block, i) => (
-            <div
-              key={i}
-              className={`absolute top-1 bottom-1 rounded-sm ${block.barColor} ${block.isTerminal ? 'opacity-30' : 'opacity-70'}`}
-              style={{ left: `${block.left}%`, width: `${Math.max(0.3, block.width)}%` }}
-              title={block.label}
-            />
-          ))}
+        {/* Timeline bar — outer wrapper stays unclipped so tooltips can float above it */}
+        <div className="relative h-12">
+          <div className="absolute inset-0 bg-zinc-800 rounded overflow-hidden">
+            {/* Offset region (fired early/late) */}
+            {layout.offsetPct > 0 && (
+              <div
+                className={`absolute top-0 bottom-0 flex items-center justify-center cursor-default ${
+                  layout.offsetSide === 'lead' ? 'bg-sky-900/40' : 'bg-amber-900/40'
+                }`}
+                style={{ left: 0, width: `${layout.offsetPct}%` }}
+                {...hoverHandlers('offset')}
+              >
+                {layout.offsetSide === 'lead' ? (
+                  <ChevronsLeft className="w-4 h-4 text-sky-400" />
+                ) : (
+                  <ChevronsRight className="w-4 h-4 text-amber-400" />
+                )}
+              </div>
+            )}
 
-          {/* Plan cursor (colored by drift) */}
-          <div
-            className={`absolute top-0 bottom-0 w-0.5 ${driftCursorColor}`}
-            style={{ left: `${planCursorLeft}%` }}
-            title={`Plan: ${fmtMmSs(planConsumedSeconds)}`}
-          />
-
-          {/* Expected end of current item */}
-          {expectedEndLeft != null && (
+            {/* Scheduled-boundary reference line — always at the offset/content border */}
             <div
-              className="absolute top-0 bottom-0 w-px bg-zinc-500 opacity-60"
-              style={{ left: `${expectedEndLeft}%` }}
-              title="Expected end of current item"
+              className="absolute top-0 bottom-0 w-2 -ml-1 cursor-default border-l border-dashed border-zinc-400 opacity-50 z-10"
+              style={{ left: `${layout.scheduledBoundaryPct}%` }}
+              {...hoverHandlers('boundary')}
             />
+
+            {/* Plan item blocks, chiseled dividers between them */}
+            {layout.contentBlocks.map((block, i) => (
+              <div
+                key={i}
+                className="absolute top-1 bottom-1 cursor-default"
+                style={{ left: `${block.leftPct}%`, width: `${Math.max(0.3, block.widthPct)}%` }}
+                {...hoverHandlers(`content-${i}`)}
+              >
+                <div
+                  className={`absolute inset-0 rounded-sm ${block.barColor} ${block.isTerminal ? 'opacity-30' : 'opacity-70'}`}
+                  style={
+                    i < layout.contentBlocks.length - 1
+                      ? { boxShadow: 'inset -1px 0 0 0 rgba(0,0,0,0.5), inset -2px 0 0 0 rgba(255,255,255,0.08)' }
+                      : undefined
+                  }
+                />
+                {block.isPlaying && (
+                  <div className="absolute -inset-0.5 border-2 border-white rounded-sm pointer-events-none" />
+                )}
+              </div>
+            ))}
+
+            {/* Trailing region: gap or overshoot */}
+            {layout.trailingPct > 0 && (
+              <div
+                className={`absolute top-0 bottom-0 flex items-center justify-center cursor-default text-xs font-mono uppercase tracking-wide ${
+                  layout.trailingKind === 'overshoot' ? 'text-red-300' : 'text-zinc-500'
+                }`}
+                style={{
+                  left: `${trailingLeftPct}%`,
+                  width: `${layout.trailingPct}%`,
+                  backgroundImage:
+                    layout.trailingKind === 'overshoot'
+                      ? 'repeating-linear-gradient(45deg, rgba(248,113,113,0.25) 0, rgba(248,113,113,0.25) 4px, transparent 4px, transparent 8px)'
+                      : 'repeating-linear-gradient(45deg, rgba(113,113,122,0.2) 0, rgba(113,113,122,0.2) 3px, transparent 3px, transparent 9px)',
+                }}
+                {...hoverHandlers('trailing')}
+              >
+                {layout.trailingKind === 'gap' ? 'Gap' : ''}
+              </div>
+            )}
+
+            {/* Plan cursor (colored by drift) */}
+            <div
+              className={`absolute top-0 bottom-0 w-1 -ml-0.5 cursor-default z-20 ${driftCursorColor}`}
+              style={{ left: `${planCursorLeft}%` }}
+              {...hoverHandlers('plan-cursor')}
+            />
+
+            {/* Expected end of current item */}
+            {expectedEndLeft != null && (
+              <div
+                className="absolute top-0 bottom-0 w-2 -ml-1 cursor-default bg-zinc-500/0 z-10"
+                style={{ left: `${expectedEndLeft}%` }}
+                {...hoverHandlers('expected-end')}
+              >
+                <div className="absolute inset-y-0 left-1/2 w-px bg-zinc-500 opacity-60" />
+              </div>
+            )}
+
+            {/* Calendar cursor (white, always on top) */}
+            <div
+              className="absolute top-0 bottom-0 w-1 -ml-0.5 cursor-default z-20"
+              style={{ left: `${calendarCursorLeft}%` }}
+              {...hoverHandlers('wall-clock')}
+            >
+              <div className="absolute inset-y-0 left-1/2 w-0.5 bg-white" />
+            </div>
+          </div>
+
+          {/* Tooltips — rendered outside the clipped inner div so they never get cut off */}
+          {layout.offsetPct > 0 && (
+            <TimelineTooltip active={hoveredKey === 'offset'} leftPct={layout.offsetPct / 2}>
+              <div className="font-semibold">{offsetLabel}</div>
+            </TimelineTooltip>
           )}
-
-          {/* Calendar cursor (white, always on top) */}
-          <div
-            className="absolute top-0 bottom-0 w-0.5 bg-white"
-            style={{ left: `${calendarCursorLeft}%` }}
-            title={`Clock: ${fmtMmSs(calendarElapsed)}`}
-          />
+          <TimelineTooltip active={hoveredKey === 'boundary'} leftPct={layout.scheduledBoundaryPct}>
+            Scheduled boundary
+          </TimelineTooltip>
+          {layout.contentBlocks.map((block, i) => (
+            <TimelineTooltip key={i} active={hoveredKey === `content-${i}`} leftPct={block.leftPct + block.widthPct / 2}>
+              <div className="font-semibold">{block.label}</div>
+              <div className="text-zinc-400 text-xs mt-0.5">
+                {block.contentTypeLabel} · {fmtMmSs(block.durationSeconds)} · {block.statusLabel}
+              </div>
+            </TimelineTooltip>
+          ))}
+          {layout.trailingPct > 0 && (
+            <TimelineTooltip active={hoveredKey === 'trailing'} leftPct={trailingLeftPct + layout.trailingPct / 2}>
+              {layout.trailingKind === 'overshoot'
+                ? `Overshoot: +${fmtMmSs(Math.abs(layout.trailingSeconds))}`
+                : `Gap: ${fmtMmSs(Math.abs(layout.trailingSeconds))}`}
+            </TimelineTooltip>
+          )}
+          <TimelineTooltip active={hoveredKey === 'plan-cursor'} leftPct={planCursorLeft}>
+            Plan position: {fmtMmSs(planConsumedSeconds)}
+          </TimelineTooltip>
+          {expectedEndLeft != null && (
+            <TimelineTooltip active={hoveredKey === 'expected-end'} leftPct={expectedEndLeft}>
+              Expected end of current item
+            </TimelineTooltip>
+          )}
+          <TimelineTooltip active={hoveredKey === 'wall-clock'} leftPct={calendarCursorLeft}>
+            Wall clock: {fmtMmSs(calendarElapsed)} elapsed
+          </TimelineTooltip>
         </div>
 
         {/* Legend */}
-        <div className="flex items-center gap-4 mt-2 text-[10px] text-zinc-500">
+        <div className="flex items-center gap-4 mt-2 text-xs text-zinc-500 flex-wrap">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-white inline-block" />wall clock</span>
           <span className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${driftCursorColor} inline-block`} />plan position</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 border-l border-dashed border-zinc-400 inline-block" />scheduled boundary</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 border-2 border-white rounded-sm inline-block" />now playing</span>
         </div>
       </div>
     </section>
@@ -483,15 +661,17 @@ function NowPlayingPanel({ planItems }: { planItems: SupervisorV2PlanItem[] }) {
 
 // ─── Current Segment Header ───────────────────────────────────────────────────
 
-function CurrentSegmentLabel({ segment, nextPlan }: {
+function CurrentSegmentLabel({ segment, nextPlan, nextHardSegment }: {
   segment: SupervisorV2CurrentSegment | null | undefined;
   nextPlan: SupervisorV2NextPlan | null | undefined;
+  nextHardSegment: SupervisorV2NextHardSegment | null | undefined;
 }) {
   if (!segment) return null;
   const remainingMins = Math.floor(segment.remaining_seconds / 60);
   const remainingSecs = Math.floor(segment.remaining_seconds % 60);
+  const source = scheduleSourceMeta(segment.source_type);
   return (
-    <div className="flex items-center gap-4 text-xs text-zinc-400">
+    <div className="flex items-center gap-4 text-sm text-zinc-400 flex-wrap">
       <span>
         <span className="text-zinc-300 font-medium uppercase tracking-wide text-[11px]">{segment.type}</span>
         {' · '}
@@ -500,6 +680,10 @@ function CurrentSegmentLabel({ segment, nextPlan }: {
       <span className="text-zinc-600">·</span>
       <span>
         {remainingMins}m {remainingSecs.toString().padStart(2, '0')}s remaining
+      </span>
+      <span className="text-zinc-600">·</span>
+      <span className={`font-medium ${source.cls}`} title="Schedule resolution tier — Calendar is normal; Template/Default Clock mean a fallback tier is in effect">
+        {source.label}
       </span>
       {nextPlan && (
         <>
@@ -510,6 +694,16 @@ function CurrentSegmentLabel({ segment, nextPlan }: {
             <span className={`inline-block px-1 py-0.5 rounded text-[10px] font-mono uppercase ${nextPlan.status === 'finalized' ? 'text-green-400' : 'text-amber-400'}`}>
               {nextPlan.status}
             </span>
+          </span>
+        </>
+      )}
+      {nextHardSegment && (
+        <>
+          <span className="text-zinc-600">·</span>
+          <span>
+            Next hard: <span className="text-zinc-300">{nextHardSegment.name}</span>
+            {' in '}
+            <span className="font-mono text-zinc-300">{fmtMmSs(nextHardSegment.seconds_until)}</span>
           </span>
         </>
       )}
@@ -757,7 +951,11 @@ export function SupervisorPage() {
 
       {/* D1: Now Playing + segment context */}
       <NowPlayingPanel planItems={data?.plan_items ?? []} />
-      <CurrentSegmentLabel segment={data?.current_segment} nextPlan={data?.next_plan} />
+      <CurrentSegmentLabel
+        segment={data?.current_segment}
+        nextPlan={data?.next_plan}
+        nextHardSegment={data?.next_hard_segment}
+      />
 
       <SegmentTimeline
         segmentStartedAtMs={data?.segment_started_at_ms ?? null}
@@ -765,6 +963,10 @@ export function SupervisorPage() {
         planConsumedSeconds={data?.plan_consumed_seconds ?? 0}
         planItems={data?.plan_items ?? []}
         expectedCurrentItemEndMs={data?.expected_current_item_end_ms ?? null}
+        intentionalOffsetSeconds={data?.current_segment?.intentional_offset_seconds ?? 0}
+        plannedOvershootSeconds={data?.current_segment?.planned_overshoot_seconds ?? 0}
+        boundaryDriftSeconds={data?.current_segment?.boundary_drift_seconds ?? 0}
+        planInternalDriftSeconds={data?.plan_internal_drift_seconds ?? null}
       />
 
       <DriftPanel

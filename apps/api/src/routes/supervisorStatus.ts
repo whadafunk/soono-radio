@@ -13,7 +13,7 @@ import {
   clockSegments,
   shows,
 } from '../db/schema.js';
-import { resolveActivePlanSegment, resolveCurrentSegment } from '../services/supervisor2/clockResolver.js';
+import { resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment } from '../services/supervisor2/clockResolver.js';
 
 export async function supervisorStatusRoutes(fastify: FastifyInstance) {
   fastify.get('/supervisor/v2/status', async (_request, reply) => {
@@ -175,6 +175,13 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
       // need to detect/compensate for a segment mismatch here anymore.
       let planConsumedSeconds = 0;
       let expectedCurrentItemEndMs: number | null = null;
+      // Plan-internal drift: has the plan's own estimated end shifted since it
+      // activated (a mid-flight replan/trim/fill changed its total content),
+      // independent of wall-clock-vs-consumed drift. Computed here off the
+      // plan_items already fetched for planConsumedSeconds — no extra query,
+      // and no tick-loop cost, since this only runs on the operator's status
+      // poll, not the 500ms supervisor tick.
+      let planInternalDriftSeconds: number | null = null;
 
       if (activePlanId !== null) {
         const allItems = await db
@@ -200,6 +207,12 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
             break;
           }
         }
+
+        const liveTotalPlannedSeconds = allItems
+          .filter((item) => item.status !== 'dropped')
+          .reduce((sum, item) => sum + (item.planned_duration_seconds ?? 0), 0);
+        const baselineTotalPlannedSeconds = (segmentDurationSeconds ?? 0) + (stateRow?.planned_overshoot_seconds ?? 0);
+        planInternalDriftSeconds = liveTotalPlannedSeconds - baselineTotalPlannedSeconds;
       }
 
       // ── C1: current_segment ────────────────────────────────────────────────
@@ -217,8 +230,26 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
           show_name: resolvedSegment.show_name,
           elapsed_seconds: Math.round(elapsedSeconds * 10) / 10,
           remaining_seconds: Math.round(remainingSeconds * 10) / 10,
+          source_type: resolvedSegment.source_type,
+          boundary_drift_seconds: stateRow?.boundary_drift_seconds ?? 0,
+          intentional_offset_seconds: stateRow?.intentional_offset_seconds ?? 0,
+          planned_overshoot_seconds: stateRow?.planned_overshoot_seconds ?? 0,
         };
       }
+
+      // ── Next hard segment lookahead ────────────────────────────────────────
+      // Reuses the same lookahead resolveNextHardSegment already computes for
+      // Decision 62/69 — no new resolution logic, just surfacing it here.
+      const hardLookahead = await resolveNextHardSegment(nowMs, db);
+      const nextHardSegment = hardLookahead
+        ? {
+            segment_id: hardLookahead.hard.segment.id,
+            name: hardLookahead.hard.segment.name,
+            type: hardLookahead.hard.segment.type,
+            starts_at_ms: hardLookahead.hard.segmentStartMs,
+            seconds_until: (hardLookahead.hard.segmentStartMs - nowMs) / 1000,
+          }
+        : null;
 
       // ── C1: next_plan ──────────────────────────────────────────────────────
       const nextPlanId = stateRow?.next_plan_id ?? null;
@@ -332,6 +363,8 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
         next_plan: nextPlan,
         recent_plays: recentPlays,
         segment_config: segmentConfig,
+        next_hard_segment: nextHardSegment,
+        plan_internal_drift_seconds: planInternalDriftSeconds,
       });
     } catch (err) {
       fastify.log.error(err, 'supervisor v2 status failed');

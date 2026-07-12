@@ -78,8 +78,29 @@ export const SupervisorV2CurrentSegmentSchema = z.object({
   show_name: z.string().nullable(),
   elapsed_seconds: z.number(),
   remaining_seconds: z.number(),
+  // Which schedule-resolution tier produced this segment — Decision 53/58's
+  // fallback cascade (clockResolver.ts). Surfaced so operators can see when
+  // the station is running on a fallback tier rather than the real schedule.
+  source_type: z.enum(['calendar', 'template_clock', 'template', 'default']),
+  // Actual measured wall-clock deviation at the moment this segment's plan
+  // activated (frozen then, not live) — distinct from intentional_offset_seconds,
+  // which is the deliberate fire-early/late decision and can diverge from it.
+  boundary_drift_seconds: z.number(),
+  intentional_offset_seconds: z.number(),
+  // Positive = planned content will run past nominal duration (overshoot);
+  // negative = planned content falls short (gap).
+  planned_overshoot_seconds: z.number(),
 });
 export type SupervisorV2CurrentSegment = z.infer<typeof SupervisorV2CurrentSegmentSchema>;
+
+export const SupervisorV2NextHardSegmentSchema = z.object({
+  segment_id: z.number().int(),
+  name: z.string(),
+  type: z.string(),
+  starts_at_ms: z.number(),
+  seconds_until: z.number(),
+});
+export type SupervisorV2NextHardSegment = z.infer<typeof SupervisorV2NextHardSegmentSchema>;
 
 export const SupervisorV2NextPlanSchema = z.object({
   id: z.number().int(),
@@ -129,6 +150,11 @@ export const SupervisorV2StatusSchema = z.object({
   next_plan: SupervisorV2NextPlanSchema.nullable(),
   recent_plays: z.array(SupervisorV2RecentPlaySchema),
   segment_config: SupervisorV2SegmentConfigSchema.nullable(),
+  next_hard_segment: SupervisorV2NextHardSegmentSchema.nullable(),
+  // Has the active plan's own estimated total shifted since it activated
+  // (a mid-flight replan/trim/fill), independent of wall-clock-vs-consumed
+  // drift. Null when there's no active plan.
+  plan_internal_drift_seconds: z.number().nullable(),
 });
 export type SupervisorV2Status = z.infer<typeof SupervisorV2StatusSchema>;
 
