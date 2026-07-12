@@ -2063,7 +2063,7 @@ This revisits the imprecision Decision 62 explicitly deferred ("Known, accepted 
 
 ### Decision 70 — Jingle and station-ID must never land back-to-back
 
-**Status: implemented 2026-07-12 (commit `4efd7a8`), not yet deployed.**
+**Status: implemented 2026-07-12 (commit `4efd7a8`), deployed 2026-07-12 (commit `04bb1b2`).**
 
 `assembleMusicPlan`'s interstitial injection checked jingle-due and station-ID-due independently against the same `musicCount`, each gated only on its own `% N === 0` cadence — if both cadences coincided at the same track boundary, both got inserted back-to-back.
 
@@ -2073,7 +2073,7 @@ This revisits the imprecision Decision 62 explicitly deferred ("Known, accepted 
 
 ### Decision 71 — First-pass drift recovery must be capped in absolute terms, not just proportionally
 
-**Status: implemented 2026-07-12 (commit `b9caa5d`), not yet deployed.**
+**Status: implemented 2026-07-12 (commit `b9caa5d`), deployed 2026-07-12 (commit `04bb1b2`).**
 
 `computeFirstPassTarget` clamped the drift-corrected target to `[floor, nominal × 1.5]` — proportional to the segment's own nominal length, with no absolute limit on how much correction one segment gets asked to absorb in a single shot. A very large drift (operator-induced, or the assembly-overshoot class of bug Decision 67 fixed) got corrected as aggressively as the proportional clamp allowed, rather than spread across several segments.
 
@@ -2083,7 +2083,7 @@ This revisits the imprecision Decision 62 explicitly deferred ("Known, accepted 
 
 ### Decision 72 — Music assembly: single boundary decision, in received order, no next-segment awareness
 
-**Status: implemented 2026-07-12 (commit `4efd7a8`), not yet deployed.**
+**Status: implemented 2026-07-12 (commit `4efd7a8`), deployed 2026-07-12 (commit `04bb1b2`).**
 
 The fill loop skipped non-fitting candidates and kept hunting the rest of the (2.5×-overserved) pool for anything that fit a shrinking ±30s tolerance window, rather than placing candidates strictly in order and stopping cleanly at the first crossing. A separate end-of-segment patch (d1/d2) bolted on next-segment-type awareness (`isNextHard`/`nextIsFlexibleStopSet`) that duplicated what the hard-start gate (Decision 66) already polices continuously and correctly.
 
@@ -2093,7 +2093,7 @@ The fill loop skipped non-fitting candidates and kept hunting the rest of the (2
 
 ### Decision 73 — Stop-sets no longer participate in drift correction at all; gain a bounded fit-overshoot tolerance instead
 
-**Status: implemented 2026-07-12 (commits `4efd7a8`, `b9caa5d`), not yet deployed.**
+**Status: implemented 2026-07-12 (commits `4efd7a8`, `b9caa5d`), deployed 2026-07-12 (commit `04bb1b2`).**
 
 Stop-set content is governed by campaign/promo pacing rules operating on their own (daily/monthly) timescale — using stop-set length as a wall-clock drift-absorption lever created exactly the first/second-pass inconsistency Decision 68 had to patch. Removing it outright is a real simplification: music segments (the majority of segment-seconds) remain fully capable of absorbing drift via Decision 71, so overall schedule-correction capacity is unaffected.
 
@@ -2107,7 +2107,7 @@ Stop-set content is governed by campaign/promo pacing rules operating on their o
 
 ### Decision 74 — Campaign and promo pacing eligibility: 5%-ahead exclusion, monthly recovery-driven stop-set lengthening
 
-**Status: implemented 2026-07-12 (commit `ac6f1f5`, wiring in `b9caa5d`), not yet deployed.**
+**Status: implemented 2026-07-12 (commit `ac6f1f5`, wiring in `b9caa5d`), deployed 2026-07-12 (commit `04bb1b2`).**
 
 **Eligibility:** a campaign or promo already `AHEAD_OF_PACE_THRESHOLD` (0.05, i.e. 5%) ahead of its own pace target is no longer eligible as a stop-set candidate. Campaigns use their existing global pacing basis (`plays_per_month`, linear-interpolated over the campaign's date range) — `computePacingScore` now returns both the existing one-sided "how behind" score and the raw signed ratio it's derived from (`globalPacingBehind` renamed `globalPacingRatio`), so the new eligibility check reuses the same query rather than running it twice. Promos have no monthly target field, so they use their existing daily basis (`min_plays_per_day`) — ahead-of-pace means already ≥5% over that daily minimum; a promo with no minimum configured (0) has nothing to be ahead of, so the check is skipped for it.
 
@@ -2119,7 +2119,7 @@ This is what actually resolves the promo-backfill gap found during design: once 
 
 ### Decision 75 — Campaign-driven stop-set recovery multiplier, sourced from the existing L1/L2/L3 budget system
 
-**Status: implemented 2026-07-12 (commit `670de9f`), not yet deployed. Supersedes the recovery-calculation half of Decision 74.**
+**Status: implemented 2026-07-12 (commit `670de9f`), deployed 2026-07-12 (commit `04bb1b2`). Supersedes the recovery-calculation half of Decision 74.**
 
 `spotBudget.ts` already has a full L1 (`getInventory` — calendar/template-projected stop-set capacity, promo-margin-adjusted) / L2 (`getDemand` — all active campaigns' pro-rated `plays_per_month` demand, correctly scoped by show/interval) / L3 (`getAvailable` — L1 minus L2) system, built specifically to answer "is there enough scheduled capacity for what campaigns need." Decision 74's recovery calculation ignored all of that and approximated with a cruder per-campaign sum, pre-allocated per segment per day — which silently lost its allocation whenever a stop-set got skipped (Decision 62 skip-ahead, or an operator crossing over one mid-plan).
 
@@ -2135,7 +2135,7 @@ This is what actually resolves the promo-backfill gap found during design: once 
 
 ### Decision 76 — Stop-set segments can no longer use a hard start policy
 
-**Status: implemented 2026-07-12, not yet deployed.**
+**Status: implemented 2026-07-12, deployed 2026-07-12 (commit `04bb1b2`).**
 
 `applyHardStartTrim` (`supervisor.ts`) protects an upcoming hard boundary by trimming the active plan's remaining content, but its `priorityGroups` only know how to cut `jingle`/`branding`/`station_id` and `music` content. A stop-set's content is exclusively campaign and promo spots — neither type is in that list. If a stop-set were configured `hard` (or sat as the active plan in front of a later hard boundary), the trim gate would find nothing it's allowed to cut and do nothing, letting the hard boundary slip silently. `stop_set` was also, until now, the *default* `start_policy` for new stop-set segments in the clock editor (`ClocksPage.tsx` `TYPE_DEFAULTS`) — not a rare misconfiguration but the built-in template.
 
