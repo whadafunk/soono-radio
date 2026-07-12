@@ -92,7 +92,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
-import { computeResolutionIdentity, readStartPolicy, resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment, segmentBoundsWithinClock, type ResolvedSegment } from '../clockResolver.js';
+import { computeResolutionIdentity, readStartPolicy, resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment, segmentBoundsWithinClock, type HardSegmentLookahead, type ResolvedSegment } from '../clockResolver.js';
 import {
   abortRow,
   closeMostRecentOpenRow,
@@ -1284,10 +1284,11 @@ export class SupervisorProcess {
   private async resolveNextOccurrence(
     afterMs: number,
     nowMs: number,
-  ): Promise<ResolvedSegment | null> {
+  ): Promise<{ resolved: ResolvedSegment | null; lookahead: HardSegmentLookahead | null }> {
     const lookahead = await resolveNextHardSegment(afterMs, this.db);
     if (!lookahead || lookahead.skipped.length === 0) {
-      return resolveCurrentSegment(afterMs, this.db);
+      const resolved = await resolveCurrentSegment(afterMs, this.db);
+      return { resolved, lookahead: lookahead ?? null };
     }
 
     const nominalRemainingSeconds = lookahead.skipped.reduce(
@@ -1298,7 +1299,8 @@ export class SupervisorProcess {
     if (realRemainingSeconds >= nominalRemainingSeconds) {
       // Enough real runway (for now) to let the intervening segments air at
       // nominal length — proceed normally.
-      return resolveCurrentSegment(afterMs, this.db);
+      const resolved = await resolveCurrentSegment(afterMs, this.db);
+      return { resolved, lookahead };
     }
 
     this.logger?.warn({
@@ -1313,7 +1315,7 @@ export class SupervisorProcess {
         segment_id: seg.segment.id, clock_instance_started_at: seg.clockInstanceStartedAt,
       }, 'supervisor: segment bypassed to reach upcoming hard segment on time');
     }
-    return lookahead.hard;
+    return { resolved: lookahead.hard, lookahead };
   }
 
   // Runway model: decide whether the segment after `afterMs` is worth
@@ -1324,7 +1326,7 @@ export class SupervisorProcess {
   // isNewSegment won't re-fire for an already-current segment). Only early
   // ACTIVATION is gated by runway.
   private async reconcileNext(afterMs: number, nowMs: number): Promise<void> {
-    const next = await this.resolveNextOccurrence(afterMs + 1, nowMs);
+    const { resolved: next } = await this.resolveNextOccurrence(afterMs + 1, nowMs);
     if (!next) {
       this.logger?.info({
         process: 'supervisor', event: 'RECONCILE_NO_NEXT_SEGMENT',
@@ -1725,7 +1727,7 @@ export class SupervisorProcess {
   // Both terms estimate how much over/under the active plan will run at segment
   // N's boundary, so N+1's plan is pre-corrected before the T-30s second pass.
   private async maybeRequestNextDraft(current: ResolvedSegment, nowMs: number): Promise<void> {
-    const next = await this.resolveNextOccurrence(current.segmentEndMs + 1, nowMs);
+    const { resolved: next } = await this.resolveNextOccurrence(current.segmentEndMs + 1, nowMs);
     if (!next) {
       this.logger?.info({
         process: 'supervisor', event: 'NO_NEXT_SEGMENT',
@@ -1825,6 +1827,61 @@ export class SupervisorProcess {
       .where(eq(clockSegmentsTable.id, plan.segment_id));
     const nominal = segment?.duration_seconds ?? 0;
 
+    // D69: re-check hard-segment adjacency — the runway to an upcoming hard
+    // segment may have shrunk (or grown) since this plan was drafted at first
+    // pass, most plausibly from operator-induced drift or the planner-assembly
+    // overshoot class of bug D67 fixed. resolveNextOccurrence recomputes fresh
+    // off nowMs each call, so calling it again here is safe and cheap.
+    const { resolved: freshNext, lookahead } = await this.resolveNextOccurrence(this.currentSegmentEndMs + 1, nowMs);
+    let hardOverrideTarget: number | null = null;
+
+    if (freshNext && freshNext.segment.id !== plan.segment_id) {
+      if (lookahead && lookahead.hard.segment.id === freshNext.segment.id) {
+        // Now says skip-to-hard where this draft was for the structural-next
+        // segment. Cap to whatever real runway is actually left before the
+        // hard boundary; if even that shrunk amount isn't worth it, retire
+        // this draft entirely and make the ACTIVE plan responsible for
+        // reaching the hard segment instead (same mechanism as the
+        // first-pass skip-ahead path — D66's activePlanHardBoundary).
+        const realRemainingSeconds = (lookahead.hard.segmentStartMs - nowMs) / 1000;
+        const cappedTarget = Math.min(nominal, realRemainingSeconds);
+
+        if (cappedTarget < RUNWAY_WORTH_IT_THRESHOLD_S) {
+          await this.db.update(plansTable)
+            .set({ status: 'completed' })
+            .where(and(eq(plansTable.id, this.nextPlanId), inArray(plansTable.status, ['draft', 'finalized'])));
+          const retiredPlanId = this.nextPlanId;
+          this.nextPlanId = null;
+          this.nextPlanSegmentId = null;
+          this.nextPlanScheduledEndMs = null;
+          this.finalizationRequestedForPlanId = null;
+          this.draftedForNextSegment = null;
+          await this.db.update(supervisorStateTable)
+            .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
+            .where(eq(supervisorStateTable.id, 1));
+          this.activePlanHardBoundary = { segmentId: lookahead.hard.segment.id, startMs: lookahead.hard.segmentStartMs };
+          this.logger?.warn({
+            process: 'supervisor', event: 'NEXT_PLAN_RETIRED_FOR_HARD_BOUNDARY',
+            retired_plan_id: retiredPlanId, drafted_segment_id: plan.segment_id,
+            hard_segment_id: lookahead.hard.segment.id, capped_target_seconds: cappedTarget,
+          }, 'supervisor: runway to hard segment collapsed below worth-it threshold — retiring draft, active plan will fill to hard boundary');
+          return;
+        }
+        hardOverrideTarget = cappedTarget;
+      } else {
+        // Reverse case — runway improved since first pass; the already-drafted
+        // hard-segment plan is now more conservative than necessary. No
+        // practical time at T-30s to draft-then-finalize a fresh plan for the
+        // newly-preferred segment without risking the boundary itself — log
+        // and keep the existing draft (Decision-62-style: revisit if it
+        // proves to matter in practice).
+        this.logger?.warn({
+          process: 'supervisor', event: 'HARD_SEGMENT_RUNWAY_RECOVERED',
+          drafted_segment_id: plan.segment_id, fresh_segment_id: freshNext.segment.id,
+        }, 'supervisor: runway to hard segment recovered since first pass — keeping existing draft as-is');
+      }
+    }
+
     // driftDelta = how much drift changed since the first pass was requested.
     // Since boundaryDrift is stable within a segment, delta is typically 0 — but
     // may differ in edge cases where plan was forced-advanced to a new segment.
@@ -1841,7 +1898,7 @@ export class SupervisorProcess {
     const isStopSet = segment?.type === 'stop_set';
     const floor = isStopSet ? nominal : nominal * 0.6;
     const ceiling = isStopSet ? nominal * 1.5 : nominal * 1.4;
-    const adjustedTarget = Math.max(floor, Math.min(ceiling, rawTarget));
+    const adjustedTarget = hardOverrideTarget ?? Math.max(floor, Math.min(ceiling, rawTarget));
 
     this.finalizationRequestedForPlanId = this.nextPlanId;
     const requestId = randomUUID();
