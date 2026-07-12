@@ -2002,6 +2002,63 @@ Confirmed live bug, found while designing Decision 63's Rundown view: `rundown_p
 
 ---
 
+### Decision 66 — Hard-start fill/trim gate must defer to the drafted decision, not re-derive its own
+
+**Status: implemented & deployed 2026-07-12 (commit `a6dd5da`).**
+
+Confirmed gap: `maybeHandleHardStartGate` independently called `resolveNextHardSegment` every tick, completely bypassing `resolveNextOccurrence`'s already-made decision (Decision 62) about whether the immediate next segment gets drafted normally or the active plan needs to bridge to a hard boundary itself. It just assumed "fill toward whatever hard segment I can find," regardless of whether a normal next-segment plan already existed. Confirmed live: a 120s stop-set got 63 items appended while its correctly-drafted next segment sat idle unused. Worse — because segment/plan transitions are exhaustion-driven with no independent wall-clock cutover (by design, see Decision 61), an oversized erroneous fill doesn't just waste planning cycles, it can indefinitely postpone a correctly-drafted next plan's activation: a scheduled 2-3 minute stop-set was observed running 42 minutes 37 seconds while an already-`finalized` next plan waited the entire time.
+
+**Fix:** cache `resolveNextOccurrence`'s decision as `activePlanHardBoundary: { segmentId, startMs } | null` at the two points it's actually made (`maybeRequestNextDraft`, `reconcileNext`), clear it in `activatePlanById` (repopulated synchronously by the `maybeRequestNextDraft` call that already follows activation), and have `maybeHandleHardStartGate` consult the cached value instead of independently re-deriving it. When null (a normal next segment already has, or will have, its own plan), the gate now does nothing at all — no fill, no trim, no risk to the real next plan's activation.
+
+**Also fixed in the same pass** (found while tracing the same incident):
+- `firstPendingPosition` fell back to position `0` whenever a plan had no pending items left — exactly the state the fill trigger always found it in (confirmed live: `from_position:0, dropped_count:0` every single firing) — colliding with already-played items' positions when `replanRemaining` re-inserted from that position, corrupting the ordering `plan_consumed_seconds` depends on (the operator-facing drift figure showed as growing within a segment, which should be impossible). Replaced with the existing, already-correct `nextAppendPosition` (`MAX(position) + 1` across all statuses) at all three call sites that needed it: the hard-start fill trigger, the live-takeover-end refill (`handleLiveEnded`), and the pre-existing exhausted-plan topup path. `firstPendingPosition` had no remaining callers and was deleted.
+- `/supervisor/v2/skip` mutated `plan_items`/called Harbor directly but emitted nothing on the bus — the running supervisor process had no way to know a skip happened until its next incidental poll. Wired to `requestReconcile('operator_skip')`, the same helper every schedule-mutation route already uses, so operator intervention triggers immediate reevaluation.
+
+**Verified live:** the previously-broken stop-set segment ran to its nominal duration (118.5s vs. 120s nominal, 4 items) on multiple subsequent hourly cycles with zero false-positive fill/trim firings across 10+ segment transitions (both stop-set and music types). The fix's first genuine (non-false-positive) `HARD_START_FILL` firing was also observed post-deploy and behaved correctly — appended a reasonably-sized batch (11 items for a ~416s real gap), no position collision.
+
+**Deliberately out of scope for this decision** (surfaced while investigating drift-cascade incidents afterward — see Decisions 67-69): the fill/trim target sizing itself is correct once the gate is only firing when it should, but a *different*, larger drift-cascade issue exists further upstream, in how the planner sizes and reassembles content — those are separate, unimplemented decisions below, not fixed here.
+
+---
+
+### Decision 67 — Second-pass full reassembly must net out already-committed (queue-ahead-pushed) content
+
+**Status: implemented & deployed 2026-07-12 (commit `5ab6d72`).**
+
+Confirmed gap (found while tracing a live drift incident): `finalizePlan`'s full-reassembly branch (`planner.ts`) computes both its reassembly trigger (`contentGapSeconds = |pendingSumSeconds − adjustedTargetSeconds|`) and its rebuild target (the `targetDurationSeconds` passed to `assembleForSegment`) using only this plan's `pending`-status items. But Decision 44's queue-ahead nudge can already have pushed this same plan's first item into Harbor *before* the T-30s finalization gate fires — flipping that item's status to `playing`, not `pending` — whenever the *previous* segment's last item starts playing well ahead of T-30s (common for long tracks). That already-committed, non-droppable item is invisible to both the reassembly trigger and the rebuild: the reassembly just builds a full `adjustedTargetSeconds` worth of *new* content on top of whatever's already committed, rather than the remainder still needed.
+
+Confirmed live: a music segment (`Music-2`) finalized to a target of 763.415s, but its already-pushed first track ("A Horse in the Country," pushed 15s before finalize) stacked on top, producing 998.37s of real airtime — a ~235s overshoot that then cascaded into subsequent segments' drift via Decision 31's boundary-drift carry-forward, since a following stop-set (Decision 68) couldn't absorb it either.
+
+**Fix:** before computing `needsFullReassembly` and before calling `assembleForSegment`, additionally query this plan's already-`playing` items and sum their `planned_duration_seconds` (`committedSeconds`). Use `effectiveTarget = Math.max(0, adjustedTargetSeconds - committedSeconds)` in place of `adjustedTargetSeconds` in both places: compare `pendingSumSeconds` against `effectiveTarget` (not the raw target) when deciding whether to reassemble, and pass `effectiveTarget` (not the raw target) as the rebuild's `targetDurationSeconds`. Log `committed_seconds` alongside the existing `PLAN_FINALIZE_FULL_REASSEMBLY` fields so this is visible in future incidents without having to cross-reference `PUSH_SENT` timing by hand.
+
+---
+
+### Decision 68 — Stop-set target floor must hold at both passes, not just the first
+
+**Status: implemented & deployed 2026-07-12 (commit `5ab6d72`).**
+
+Confirmed gap: `computeFirstPassTarget` (first pass, drafting) explicitly floors a stop-set's target at its own nominal duration — a stop-set is only ever allowed to grow to absorb negative drift (the active plan running short), never shrink, because shrinking a stop-set means cutting committed campaign airtime the campaign is owed. But `maybeRequestFinalization`'s second-pass clamp (`[0.6, 1.4] × nominal`) has no segment-type awareness at all — the identical proportional floor applies to every segment type, stop-sets included. Confirmed live: `Stop Set at 45min` (180s nominal) was finalized down to exactly 108s (`0.6 × 180`) at its T-30s gate — the opposite policy the same segment's first pass had already committed to minutes earlier.
+
+**Fix:** fetch `segment.type` alongside `duration_seconds` in `maybeRequestFinalization` (currently only the latter is selected), and give it the same type-aware bounds `computeFirstPassTarget` already has: for `stop_set`, floor at `nominal` and cap at `nominal × 1.5` (matching first pass's ceiling, not the generic `1.4`); all other types keep their existing `[0.6, 1.4] × nominal` bounds unchanged. Net effect: a stop-set's allowed range is `[nominal, nominal × 1.5]` consistently at both passes, instead of being protected at first pass and unprotected at second.
+
+**Related, deliberately separate scope:** whether a stop-set should also be allowed a small, non-drift-related overshoot/gap (distinct from the drift-floor question above) — purely because the campaign/promo candidate pool can't always fit the boundary exactly — and whether campaign pacing (a campaign already ≥5% ahead of its target pace becoming ineligible, forcing a shorter or skipped stop-set; a campaign under target driving a deliberately lengthened one) should drive stop-set sizing at all. Real, valuable design, but a distinct feature from this decision's drift-floor fix — no campaign-pacing-based eligibility exclusion exists anywhere in `campaign.ts` today (confirmed by inspection: the only threshold, `MANDATORY_PACING_THRESHOLD`, only ever *promotes* a behind-pace campaign to mandatory, never excludes an ahead-of-pace one) — to be scoped as its own decision later.
+
+---
+
+### Decision 69 — Second pass must re-check hard-segment adjacency, not just drift
+
+**Status: planned — not yet implemented; needs a dedicated design pass before implementation.**
+
+This revisits the imprecision Decision 62 explicitly deferred ("Known, accepted imprecision," above): `maybeRequestFinalization` never re-runs anything equivalent to `resolveNextOccurrence` — it only recomputes a drift-adjusted target for whatever plan is already drafted as `next_plan_id`. If the real runway to an upcoming hard segment changes between first pass (draft time) and second pass (T-30s) — most plausibly because accumulated drift shrank it in between — the already-drafted next plan is finalized as-is, with no re-evaluation of whether drafting it (at this length, or at all) is still the right call.
+
+**Design direction (not yet fully specified):** at T-30s, before computing `adjustedTarget`, re-run the same real-runway-vs-nominal-duration comparison `resolveNextOccurrence` already does for the segment this plan was drafted against:
+- Same conclusion as first pass (nothing changed) → proceed with normal finalize; Decisions 67/68's fixes apply as usual.
+- Real runway to the hard segment has shrunk below this segment's own nominal duration, but is still above `RUNWAY_WORTH_IT_THRESHOLD_S` (300s — already an existing constant, hardcoded; a good candidate to surface as an operator-configurable value) → shrink this draft's target to fit the remaining real runway instead of finalizing it at full nominal length.
+- Even the shrunk amount would fall below the worth-it threshold → retire the drafted plan (same "mark superseded" pattern `align-to-clock` already uses for a stale active plan) and switch to fill-the-active-plan-to-hard mode instead — reusing Decision 66's `activePlanHardBoundary` + hard-start gate machinery rather than inventing a parallel path.
+
+**Why this is the least-scoped of the three:** needs a closer look at (a) how to cleanly retire an already-drafted-but-not-yet-finalized plan without leaving an orphaned row `reconcileOccurrence`'s dedupe logic might later mistake for something else, and (b) how the "shrink but keep" case interacts with content-type-specific eligibility rules (particularly the campaign-pacing scope carved out of Decision 68) — not ready to implement until those are worked through.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
