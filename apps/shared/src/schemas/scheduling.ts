@@ -135,7 +135,7 @@ export const ClockSegmentSchema = z.object({
 });
 export type ClockSegment = z.infer<typeof ClockSegmentSchema>;
 
-export const ClockSegmentCreateSchema = z.object({
+const ClockSegmentCreateShape = z.object({
   // Present for an existing segment being edited (positive, matches a real row);
   // absent or a client-side negative temp id for a not-yet-persisted segment.
   // Drives PUT /clocks/:id/segments' upsert-by-id — see Decision 52.
@@ -169,9 +169,32 @@ export const ClockSegmentCreateSchema = z.object({
   rotation_type: z.enum(SIMPLE_ROTATION_TYPES).nullable().optional(),
   fallback_playlist_id: z.number().int().positive().nullable().optional(),
 });
+
+// Decision 76: stop-set segments must never use a hard start policy — the
+// hard-start trim gate (applyHardStartTrim) only knows how to cut jingle/
+// branding/station_id/music content to protect a boundary. Campaign and promo
+// content (all a stop-set ever contains) isn't in that priority list, so a
+// stop-set sitting in front of another hard boundary can't be trimmed at all.
+export const ClockSegmentCreateSchema = ClockSegmentCreateShape.superRefine((data, ctx) => {
+  if (data.type === 'stop_set' && data.start_policy.type === 'hard') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['start_policy', 'type'],
+      message: 'Stop-set segments cannot use a hard start policy — only flexible is allowed.',
+    });
+  }
+});
 export type ClockSegmentCreate = z.infer<typeof ClockSegmentCreateSchema>;
 
-export const ClockSegmentPatchSchema = ClockSegmentCreateSchema.partial().omit({ sort_order: true });
+export const ClockSegmentPatchSchema = ClockSegmentCreateShape.partial().omit({ sort_order: true }).superRefine((data, ctx) => {
+  if (data.type === 'stop_set' && data.start_policy?.type === 'hard') {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['start_policy', 'type'],
+      message: 'Stop-set segments cannot use a hard start policy — only flexible is allowed.',
+    });
+  }
+});
 export type ClockSegmentPatch = z.infer<typeof ClockSegmentPatchSchema>;
 
 // ============ RUNDOWN ============

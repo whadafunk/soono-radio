@@ -2133,6 +2133,20 @@ This is what actually resolves the promo-backfill gap found during design: once 
 
 ---
 
+### Decision 76 — Stop-set segments can no longer use a hard start policy
+
+**Status: implemented 2026-07-12, not yet deployed.**
+
+`applyHardStartTrim` (`supervisor.ts`) protects an upcoming hard boundary by trimming the active plan's remaining content, but its `priorityGroups` only know how to cut `jingle`/`branding`/`station_id` and `music` content. A stop-set's content is exclusively campaign and promo spots — neither type is in that list. If a stop-set were configured `hard` (or sat as the active plan in front of a later hard boundary), the trim gate would find nothing it's allowed to cut and do nothing, letting the hard boundary slip silently. `stop_set` was also, until now, the *default* `start_policy` for new stop-set segments in the clock editor (`ClocksPage.tsx` `TYPE_DEFAULTS`) — not a rare misconfiguration but the built-in template.
+
+**Fix:** stop-set segments may only be `flexible`, enforced at both layers:
+- `packages/shared/src/schemas/scheduling.ts` — `ClockSegmentCreateSchema` and `ClockSegmentPatchSchema` gain a `superRefine` rejecting `type === 'stop_set' && start_policy.type === 'hard'` (the shared object shape was pulled out as `ClockSegmentCreateShape` so `.partial()` for the patch schema still works after the refine is layered on for create).
+- `apps/web/src/pages/clocks/ClocksPage.tsx` — `TYPE_DEFAULTS.stop_set.start_policy` changed to `flexible`; the "Hard" radio option is hidden entirely when editing a `stop_set` segment; a segment loaded with legacy `hard` data shows an amber notice pointing at the Flexible option instead of silently mutating the operator's data.
+
+**Known pre-existing live data, not yet touched:** production clock 5, segment 230 ("Stop Set at 45min") is currently configured `hard`. This fix doesn't rewrite that row — it's a live DB write requiring separate explicit sign-off. Until that row is fixed (via the UI, next time clock 5 is edited, or a direct data fix), saving *any* change to clock 5's segment list will be rejected by the new server-side check until segment 230 is switched to flexible — this is intentional backstop behavior, not a bug.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

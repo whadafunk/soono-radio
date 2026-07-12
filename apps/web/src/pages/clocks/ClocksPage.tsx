@@ -197,7 +197,7 @@ const TYPE_DEFAULTS: Record<ClockSegmentType, {
 }> = {
   music:         { sources: [],                                         start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['station_ids', 'songs', 'jingles'],  coasting_order: ['songs', 'station_ids', 'jingles'],  accept_live: true,  sweeper_config: DEFAULT_MUSIC_SWEEPER_CONFIG },
   live:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: DEFAULT_LIVE_SWEEPER_CONFIG  },
-  stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'hard' },                                    can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
+  stop_set:      { sources: [{ type: 'campaigns' }, { type: 'promos', weight: 1 }], start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: true,  can_fill: true,  can_reschedule: false, catching_up_order: ['jingles', 'promos', 'spots'],       coasting_order: ['jingles', 'promos'],                accept_live: false, sweeper_config: null                         },
   news:          { sources: [{ type: 'live' }],                                     start_policy: { type: 'hard' },                                    can_skip: false, can_fill: false, can_reschedule: false, catching_up_order: [],                                   coasting_order: [],                                   accept_live: true,  sweeper_config: null                         },
   voice_track:   { sources: [],                                                      start_policy: { type: 'hard' },                                    can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: false, sweeper_config: null                         },
   bulletin:      { sources: [{ type: 'live' }],                                     start_policy: { type: 'flexible', late_seconds: null, early_seconds: 0 }, can_skip: false, can_fill: true,  can_reschedule: true,  catching_up_order: [],                                   coasting_order: ['jingles', 'station_ids'],            accept_live: true,  sweeper_config: null                         },
@@ -1473,18 +1473,30 @@ function SegmentDrawer({
                   <span className="text-xs text-zinc-300">Flexible</span>
                   <HelpTooltip text="This segment starts when the previous one ends naturally. Drift is absorbed by the planning algorithm." />
                 </label>
-                <label className="flex items-center gap-2 cursor-pointer select-none">
-                  <input
-                    type="radio"
-                    name="start_policy"
-                    checked={draft.start_policy.type === 'hard'}
-                    onChange={() => update({ start_policy: { type: 'hard' } })}
-                    className="accent-brand-500"
-                  />
-                  <span className="text-xs text-zinc-300">Hard</span>
-                  <HelpTooltip text="This segment must start at its scheduled clock time. The previous segment will be trimmed or padded to hit the boundary." />
-                </label>
+                {draft.type !== 'stop_set' && (
+                  <label className="flex items-center gap-2 cursor-pointer select-none">
+                    <input
+                      type="radio"
+                      name="start_policy"
+                      checked={draft.start_policy.type === 'hard'}
+                      onChange={() => update({ start_policy: { type: 'hard' } })}
+                      className="accent-brand-500"
+                    />
+                    <span className="text-xs text-zinc-300">Hard</span>
+                    <HelpTooltip text="This segment must start at its scheduled clock time. The previous segment will be trimmed or padded to hit the boundary." />
+                  </label>
+                )}
               </div>
+              {draft.type === 'stop_set' && draft.start_policy.type === 'hard' && (
+                <p className="text-xs text-amber-400 mt-2">
+                  This stop-set is currently set to Hard from earlier data. Stop-sets can no longer use a hard start policy — pick Flexible above to fix it.
+                </p>
+              )}
+              {draft.type === 'stop_set' && draft.start_policy.type !== 'hard' && (
+                <p className="text-xs text-zinc-400 mt-2">
+                  Stop-sets can only be flexible — a stop-set's content (campaign/promo spots) can't be trimmed to protect a later hard boundary.
+                </p>
+              )}
             </div>
 
             {/* End policy */}
