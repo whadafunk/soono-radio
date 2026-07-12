@@ -2149,7 +2149,7 @@ This is what actually resolves the promo-backfill gap found during design: once 
 
 ### Decision 77 — A finalized-but-empty stop-set plan must be skipped, not waited on forever
 
-**Status: implemented 2026-07-12, not yet deployed.**
+**Status: implemented & deployed 2026-07-12 (commit `9a781f7`).** Confirmed live on the deploy's own restart: `PLAN_SKIPPED_EMPTY` fired correctly for another empty stop-set plan (same ahead-of-pace situation), skipping forward cleanly instead of stalling.
 
 Live incident, same night as Decisions 70-76's deploy: segment 231 (Music-4)'s active plan exhausted normally after its last item aired. The next segment (232, "Stop Set hour-end") had already drafted and finalized — with **zero items**. All 3 currently-active campaigns were massively ahead of Decision 74's 5%-ahead-of-pace threshold (real play counts of 2,686 / 2,175 / 350 against expected ~41 / 14 / 27 by this point in each campaign's run — pre-existing pacing-target/reality mismatch, not a bug), and the one active promo has no media attached. Confirmed, per discussion: this is *correct, intentional* behavior for Decision 74 — a stop-set has nothing to say when nothing is behind pace, and should not be forced to carry filler just to avoid being empty. The bug is entirely in what happens next.
 
