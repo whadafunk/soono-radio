@@ -2147,6 +2147,28 @@ This is what actually resolves the promo-backfill gap found during design: once 
 
 ---
 
+### Decision 77 — A finalized-but-empty stop-set plan must be skipped, not waited on forever
+
+**Status: implemented 2026-07-12, not yet deployed.**
+
+Live incident, same night as Decisions 70-76's deploy: segment 231 (Music-4)'s active plan exhausted normally after its last item aired. The next segment (232, "Stop Set hour-end") had already drafted and finalized — with **zero items**. All 3 currently-active campaigns were massively ahead of Decision 74's 5%-ahead-of-pace threshold (real play counts of 2,686 / 2,175 / 350 against expected ~41 / 14 / 27 by this point in each campaign's run — pre-existing pacing-target/reality mismatch, not a bug), and the one active promo has no media attached. Confirmed, per discussion: this is *correct, intentional* behavior for Decision 74 — a stop-set has nothing to say when nothing is behind pace, and should not be forced to carry filler just to avoid being empty. The bug is entirely in what happens next.
+
+**Two compounding gaps, both real:**
+
+1. **The exhaustion-detection gate never even ran.** `tick()`'s `isCurrentPlayHistoryStillOpen()` treated the outgoing track as "still genuinely playing" purely because `play_history.ended_at` was `NULL`. But `ended_at` is only ever closed by a *later* on-air webhook confirming something new started — and here, nothing new ever got pushed (the empty plan had nothing to push), so LiquidSoap silently fell back to its own internal blank source, an event that produces no webhook at all. `ended_at` would never close, `isCurrentPlayHistoryStillOpen()` would report "still open" forever, and `handleExhaustedPlan()` — the function that already exists specifically to force an advance without waiting for Decision 60's on-air confirmation — never got invoked.
+2. **Even once invoked, `handleExhaustedPlan()` didn't check whether the next plan itself had anything to air.** It activates any `draft`/`finalized` `nextPlanId` unconditionally. A finalized plan with zero items can never satisfy Decision 60's "wait for confirmed on-air" gate — there's no first item that could ever generate that confirmation — so activating it just relocates the same deadlock one plan later.
+
+Combined, the station sat on dead air for ~37 minutes until an operator manually triggered `/supervisor/v2/align-to-clock` (Reconcile), which re-derives everything from a fresh wall-clock resolve and isn't subject to either gap.
+
+**Fix, both in `supervisor.ts`:**
+
+1. `isCurrentPlayHistoryStillOpen(nowMs)` now takes `nowMs` and corroborates `ended_at IS NULL` against the item's own expected end (`play_items.planned_duration_seconds` joined off `play_history_id`, mirroring the same `started_at`/duration plausibility check Decision 59 already uses for restart reconstruction). If the expected end has clearly passed (same 5s grace as `tick()`'s neighboring `isStale` check, extracted as `STILL_OPEN_GRACE_MS`) and nothing newer is airing, it's no longer treated as open — regardless of `ended_at`. When the row can't be corroborated (no matching `plan_items` row, e.g. a manually-inserted play), it falls back to trusting ground truth as before.
+2. `handleExhaustedPlan()` gains a check, immediately after loading `nextPlan`: if its status is `finalized` and a `plan_items` count for it comes back zero, call the new `skipEmptyNextPlan(nowMs)` instead of proceeding to activate it. Only checked once `finalized` — an empty `draft` can still gain content at the T-30s second pass, so it isn't pre-judged. `skipEmptyNextPlan` retires the empty plan (`status = 'completed'`, matching how a genuinely-aired plan gets retired), clears the `next_plan_*` pointers (in-memory and `supervisor_state`), logs `PLAN_SKIPPED_EMPTY`, and calls the existing `reconcileNext(emptySegment.segmentEndMs, nowMs)` — the exact same recovery path the neighboring "no next plan at all" branch already uses, just anchored at the empty plan's own segment end instead of the outgoing plan's. No new resolution logic — this composes with the existing runway/hard-boundary model in `reconcileNext`/`reconcileOccurrence` for free.
+
+**Deliberately not changed:** Decision 74's exclusion logic and its lack of a fallback-fill tier. Confirmed during design discussion: an empty stop-set is the *correct* outcome when every campaign is ahead of pace, not a defect to paper over.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

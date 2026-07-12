@@ -77,7 +77,7 @@
 //   D51 — Organic drift vs execution drift; boundary decision at activation
 
 import { randomUUID } from 'crypto';
-import { and, asc, desc, eq, inArray, isNotNull, isNull, lt } from 'drizzle-orm';
+import { and, asc, count, desc, eq, inArray, isNotNull, lt } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -111,6 +111,7 @@ const SILENCE_ALERT_THRESHOLD_S = 30;         // seconds of no pushes before WAR
 const RUNWAY_WORTH_IT_THRESHOLD_S = 300;      // below this, not worth riding the current plan further
 const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offset dance entirely
 const MAX_DRIFT_RECOVERY_PER_PLAN_S = 300;    // D71 — cap how much drift one plan is asked to correct; the rest persists in boundaryDriftSeconds for the next cycle
+const STILL_OPEN_GRACE_MS = 5_000;            // D77 — same grace window as tick()'s isStale check
 
 export class SupervisorProcess {
   private readonly unsubscribers: Array<() => void> = [];
@@ -505,7 +506,7 @@ export class SupervisorProcess {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
-      } else if (await this.isCurrentPlayHistoryStillOpen()) {
+      } else if (await this.isCurrentPlayHistoryStillOpen(nowMs)) {
         // computePlanPlayhead() found nothing 'playing' under activePlanId,
         // but ground truth (current_play_history_id) says something IS still
         // genuinely on air — it just belongs to a plan not yet promoted
@@ -601,6 +602,27 @@ export class SupervisorProcess {
     if (!nextPlan) return;
     if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') return;
 
+    // Decision 77: a finalized plan can legitimately have zero items — e.g.
+    // every campaign/promo candidate excluded by Decision 74's ahead-of-pace
+    // filter, with no fallback filler (intentional; a stop-set has nothing to
+    // say when nothing is behind pace). Activating it anyway would never
+    // satisfy Decision 60's "confirmed on-air" activation gate — there's no
+    // first item that could ever air — so it would sit "active" forever with
+    // nothing pushed. Treat it as pre-exhausted instead: retire it and
+    // resolve past its own segment, same as a plan that genuinely aired out.
+    // Only checked once finalized — an empty draft can still gain content at
+    // the T-30s second pass.
+    if (nextPlan.status === 'finalized') {
+      const [itemCountRow] = await this.db
+        .select({ c: count() })
+        .from(planItemsTable)
+        .where(eq(planItemsTable.plan_id, this.nextPlanId));
+      if ((itemCountRow?.c ?? 0) === 0) {
+        await this.skipEmptyNextPlan(nowMs);
+        return;
+      }
+    }
+
     // A plan for a clock instance that hasn't started yet is only blocked
     // from early activation when its own segment is hard-start — the same
     // hard/flexible decision used everywhere else for "is early OK," instead
@@ -649,6 +671,36 @@ export class SupervisorProcess {
     }, 'supervisor: forcing plan advance — active plan exhausted, nothing playing');
     await this.activateNextPlan(nowMs);
     this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'plan_exhausted_advance' });
+  }
+
+  // Decision 77 — retires a finalized-but-empty next plan and resolves past
+  // its own segment, reusing the same reconcileNext/reconcileOccurrence path
+  // that already handles "active plan exhausted, nothing lined up." Anchored
+  // at the empty plan's own segment end (not the outgoing plan's) so the
+  // resolved occurrence is whatever genuinely follows the skipped segment.
+  private async skipEmptyNextPlan(nowMs: number): Promise<void> {
+    const emptyPlanId = this.nextPlanId;
+    if (emptyPlanId == null) return;
+
+    const emptySegment = await resolveActivePlanSegment(this.db, emptyPlanId);
+
+    await this.db.update(plansTable).set({ status: 'completed' }).where(eq(plansTable.id, emptyPlanId));
+
+    this.logger?.warn({
+      process: 'supervisor', event: 'PLAN_SKIPPED_EMPTY',
+      plan_id: emptyPlanId, segment_id: emptySegment?.segment.id ?? null,
+    }, 'supervisor: next plan finalized with zero items — skipping to the segment after it');
+
+    this.nextPlanId = null;
+    this.nextPlanSegmentId = null;
+    this.nextPlanScheduledEndMs = null;
+    await this.db.update(supervisorStateTable)
+      .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
+      .where(eq(supervisorStateTable.id, 1));
+
+    if (emptySegment) {
+      await this.reconcileNext(emptySegment.segmentEndMs, nowMs);
+    }
   }
 
   // One past the highest existing position in the plan (across all
@@ -734,14 +786,34 @@ export class SupervisorProcess {
   // it belongs to — unlike computePlanPlayhead, which only sees items under
   // activePlanId and would otherwise mistake "airing under next_plan,
   // not yet promoted" for silence.
-  private async isCurrentPlayHistoryStillOpen(): Promise<boolean> {
+  //
+  // Decision 77: ended_at IS NULL alone isn't trustworthy — it's only ever
+  // closed by a *later* on_track webhook confirming something new started.
+  // If the queue runs dry, LiquidSoap falls back to its own internal blank
+  // source with no webhook at all, so this row would stay "open" forever
+  // and handleExhaustedPlan would never run. Corroborate against the item's
+  // own expected end (started_at + planned_duration_seconds): once that's
+  // clearly elapsed with nothing newer airing, treat it as no longer open
+  // regardless of ended_at. Same grace window as tick()'s isStale check.
+  private async isCurrentPlayHistoryStillOpen(nowMs: number): Promise<boolean> {
     if (this.currentPlayHistoryId == null) return false;
     const [row] = await this.db
-      .select({ id: playHistoryTable.id })
+      .select({
+        started_at: playHistoryTable.started_at,
+        ended_at: playHistoryTable.ended_at,
+        planned_duration_seconds: planItemsTable.planned_duration_seconds,
+      })
       .from(playHistoryTable)
-      .where(and(eq(playHistoryTable.id, this.currentPlayHistoryId), isNull(playHistoryTable.ended_at)))
+      .leftJoin(planItemsTable, eq(planItemsTable.play_history_id, playHistoryTable.id))
+      .where(eq(playHistoryTable.id, this.currentPlayHistoryId))
       .limit(1);
-    return row != null;
+    if (!row || row.ended_at != null) return false;
+
+    const startedAtMs = row.started_at ? new Date(row.started_at).getTime() : null;
+    if (startedAtMs == null || row.planned_duration_seconds == null) return true; // can't corroborate — trust ground truth
+
+    const expectedEndMs = startedAtMs + row.planned_duration_seconds * 1_000;
+    return expectedEndMs >= nowMs - STILL_OPEN_GRACE_MS;
   }
 
   // Unlike hasPendingItems, also counts a currently-playing item — a plan
