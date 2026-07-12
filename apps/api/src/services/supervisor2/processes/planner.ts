@@ -50,7 +50,7 @@ import {
   type PlanItemInsert,
   type SupervisorConfig,
 } from '../../../db/schema.js';
-import { readStartPolicy, resolveCurrentSegment } from '../clockResolver.js';
+import { resolveCurrentSegment } from '../clockResolver.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import type {
   BrandingCandidate,
@@ -69,9 +69,6 @@ const MIN_FILL_GAP_SECONDS = 5;
 // Default request/response timeout for content process calls. Generous —
 // content processes do real DB work but should complete well inside this.
 const CANDIDATE_REQUEST_TIMEOUT_MS = 10_000;
-// Hard-end segments may not overshoot. Flexible-end segments may overshoot
-// by at most this much before we stop walking music candidates.
-const FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS = 30;
 // Minimum spot duration the planner will attempt to place in a stop-set
 // break — below this the spot pool is treated as exhausted.
 const MIN_VIABLE_SPOT_DURATION_SECONDS = 15;
@@ -400,8 +397,13 @@ export class PlannerProcess {
     // drift hadn't moved — only the formula had. Comparing actual planned
     // content against the adjusted target catches that directly.
     const contentGapSeconds = Math.abs(pendingSumSeconds - effectiveTargetSeconds);
+    // D73: stop-sets no longer participate in drift correction at all, so
+    // driftDeltaSeconds is irrelevant to their sizing — only contentGapSeconds
+    // should ever trigger their reassembly (e.g. a campaign crossing its
+    // pacing threshold between draft and finalize — Decision 74).
+    const isStopSet = segment.type === 'stop_set';
     const needsFullReassembly =
-      !isRundown && (Math.abs(driftDeltaSeconds) >= threshold || contentGapSeconds >= threshold);
+      !isRundown && ((!isStopSet && Math.abs(driftDeltaSeconds) >= threshold) || contentGapSeconds >= threshold);
 
     let substitutions = 0;
 
@@ -793,7 +795,6 @@ export class PlannerProcess {
     const usedMusicIds = new Set<number>();
     const usedBrandingIds = new Set<number>();
 
-    const isHardEnd = readStartPolicy(segment.start_policy).type === 'hard';
     const segmentStart = branding.segment_start;
     const segmentEnd = branding.segment_end;
 
@@ -832,28 +833,42 @@ export class PlannerProcess {
     let stationIdCursor = 0;
     let musicCount = 0;
 
-    const tryFitItem = (durationSeconds: number): boolean => {
-      if (isHardEnd) {
-        return durationSeconds <= remaining;
-      }
-      return durationSeconds <= remaining + FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS;
-    };
-
+    // (b/c) Music fill — single boundary decision, in received order (D72).
+    // Walk candidates strictly in order; place anything that fits cleanly.
+    // The first candidate that WOULDN'T fit is the boundary-crossing one: make
+    // one decision (place it if its overshoot is smaller than the gap left by
+    // not placing it) and stop — no hunting further through the rest of the
+    // (over-served) pool for something that "fits better". This function no
+    // longer knows or cares whether the next segment is hard — the hard-start
+    // fill/trim gate (Decision 66) already polices actual encroachment on a
+    // real hard boundary, continuously, in real time; duplicating that
+    // awareness here was redundant and hard to trace through.
     for (const candidate of music.candidates) {
       if (usedMusicIds.has(candidate.id)) continue;
-      if (remaining <= 0 && isHardEnd) break;
-      if (remaining <= -FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) break;
 
-      // Check if the music track fits before injecting any interstitials.
-      // Interstitials must not fire for skipped candidates — otherwise musicCount
-      // stays constant and the "every N tracks" condition fires for every rejected
-      // candidate, exhausting the branding pool in a burst.
-      if (!tryFitItem(candidate.duration_seconds)) {
-        continue;
+      if (candidate.duration_seconds > remaining) {
+        const overshoot = candidate.duration_seconds - remaining;
+        const gap = remaining;
+        if (overshoot < gap) {
+          // Force cut_allowed:true regardless of config — this function can't
+          // know if the next segment is hard, so this is the safety net that
+          // lets the hard-start gate trim it short if it ever matters; costs
+          // nothing when it doesn't.
+          items.push({ ...withCutSkip(musicCandidateToItem(candidate), config), cut_allowed: true });
+          usedMusicIds.add(candidate.id);
+          remaining -= candidate.duration_seconds;
+          musicCount += 1;
+        }
+        break;
       }
 
       // Interstitial injection before each music track (except the very first).
+      // Jingle and station-ID are mutually exclusive per boundary (D70) — a
+      // station-ID never lands immediately after a jingle. Gated on whether a
+      // jingle was actually PLACED, not just due, so a jingle whose pool is
+      // exhausted or whose pick doesn't fit still leaves room for station-ID.
       if (musicCount > 0) {
+        let jinglePlaced = false;
         if (
           jinglesEnabled &&
           jingleEveryN > 0 &&
@@ -861,7 +876,7 @@ export class PlannerProcess {
           branding.jingles.length > 0
         ) {
           const j = nextBrandingPick(branding.jingles, jingleCursor, usedBrandingIds);
-          if (j && tryFitItem(j.duration_seconds)) {
+          if (j && j.duration_seconds <= remaining) {
             items.push(withCutSkip(
               brandingToItem(j, `interstitial jingle every ${jingleEveryN} tracks`),
               config,
@@ -869,16 +884,18 @@ export class PlannerProcess {
             usedBrandingIds.add(j.id);
             remaining -= j.duration_seconds;
             jingleCursor = j.cursor + 1;
+            jinglePlaced = true;
           }
         }
         if (
+          !jinglePlaced &&
           stationIdsEnabled &&
           stationIdEveryN > 0 &&
           musicCount % stationIdEveryN === 0 &&
           branding.station_ids.length > 0
         ) {
           const s = nextBrandingPick(branding.station_ids, stationIdCursor, usedBrandingIds);
-          if (s && tryFitItem(s.duration_seconds)) {
+          if (s && s.duration_seconds <= remaining) {
             items.push(withCutSkip(
               brandingToItem(s, `interstitial station_id every ${stationIdEveryN} tracks`),
               config,
@@ -894,78 +911,6 @@ export class PlannerProcess {
       usedMusicIds.add(candidate.id);
       remaining -= candidate.duration_seconds;
       musicCount += 1;
-    }
-
-    // (d) End-of-segment gap handling.
-    // When remaining > 30s (outside the undershoot tolerance window), the loop
-    // ended without filling the target. Apply a two-step approach:
-    //   d1. Try a single branding item (station ID or jingle, longest first) that
-    //       lands remaining inside [−30, +30] — i.e., closer to the target than
-    //       leaving the gap as-is.
-    //   d2. Find the unplaced music candidate with the smallest overshoot and
-    //       apply the bidirectional 30s tolerance rule:
-    //         - overshoot ≤ 30s  →  place normally (overshoot < undershoot by definition)
-    //         - overshoot > 30s, overshoot < remaining, next is hard  →  place with
-    //           cut_allowed=true so the audio engine hard-stops at the boundary
-    //         - otherwise  →  leave the gap (next is flexible; drift self-corrects)
-    if (remaining > FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) {
-      // d1: one branding item to close the gap into tolerance.
-      const availableBranding = [
-        ...branding.station_ids.filter(c => !usedBrandingIds.has(c.id)),
-        ...branding.jingles.filter(c => !usedBrandingIds.has(c.id)),
-      ].sort((a, b) => b.duration_seconds - a.duration_seconds); // longest first
-
-      for (const bc of availableBranding) {
-        const afterPlace = remaining - bc.duration_seconds;
-        const deviationIfPlaced = Math.abs(afterPlace);
-        if (deviationIfPlaced <= FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS && deviationIfPlaced < remaining) {
-          items.push(withCutSkip(
-            brandingToItem(bc, `end-of-segment branding fill: gap≈${Math.round(remaining)}s`),
-            config,
-          ));
-          usedBrandingIds.add(bc.id);
-          remaining = afterPlace;
-          break;
-        }
-      }
-
-      // d2: best-fit unplaced music candidate with bidirectional tolerance.
-      if (remaining > FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS) {
-        const nextPolicy = await this.lookupNextSegmentPolicy(segment);
-        const isNextHard = nextPolicy.type === 'hard';
-        // Ad breaks shouldn't be shortened by an earlier segment overshooting
-        // into their start time, even within normal tolerance — prefer
-        // handing over a little early instead. Hard still wins over this:
-        // dead air before a hard boundary is worse than delaying a flexible
-        // stop-set by a few seconds.
-        const nextIsFlexibleStopSet = nextPolicy.nextSegmentType === 'stop_set' && !isNextHard;
-
-        const bestFit = music.candidates
-          .filter(c => !usedMusicIds.has(c.id) && c.duration_seconds > remaining)
-          .sort((a, b) => (a.duration_seconds - remaining) - (b.duration_seconds - remaining))[0]
-          ?? null;
-
-        if (bestFit) {
-          const overshoot = bestFit.duration_seconds - remaining;
-          if (overshoot <= FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS && !nextIsFlexibleStopSet) {
-            // Overshoot within tolerance and smaller than the undershoot — place normally.
-            items.push(withCutSkip(musicCandidateToItem(bestFit), config));
-            usedMusicIds.add(bestFit.id);
-            remaining -= bestFit.duration_seconds;
-          } else if (isNextHard && overshoot < remaining) {
-            // Neither tolerance qualifies, but overshoot is the smaller of the two
-            // deviations and the next boundary is hard: silence is unacceptable.
-            // Place with cut_allowed=true — the audio engine hard-stops at the boundary.
-            items.push({ ...withCutSkip(musicCandidateToItem(bestFit), config), cut_allowed: true });
-            usedMusicIds.add(bestFit.id);
-            remaining -= bestFit.duration_seconds;
-          }
-          // else: undershoot ≤ overshoot, next segment is flexible, or next is
-          // a flexible stop-set we'd rather hand over to early. Leave the gap
-          // — drift self-corrects in the next plan for flexible segments; the
-          // hard-start gate covers ≤30s gaps for hard ones.
-        }
-      }
     }
 
     // (e) Segment-end envelope.
@@ -1125,6 +1070,86 @@ export class PlannerProcess {
       items.push(withCutSkip(promoToItem(promo, reason), config));
       usedPromoIds.add(promo.id);
       remainingSeconds -= promo.duration_seconds;
+    }
+
+    // (e) D73: single boundary decision, mirroring the music redesign (D72).
+    // Campaigns and promos above only ever place content that fits without
+    // overshoot — if a meaningful gap still remains, this is not drift (D73
+    // removed stop-sets from drift correction entirely), it's just that the
+    // spot-pool granularity couldn't fit exactly, same as music. Find the
+    // smallest-overshoot option across whatever's left (a still-eligible
+    // campaign's shortest spot, honoring the same separation rules as the
+    // main loop, or an unused promo) and place it only if its overshoot is
+    // smaller than the gap left by not placing it.
+    if (remainingSeconds > 0) {
+      const last = placed[placed.length - 1];
+      let stillEligible = pool.candidates.filter((c) => !excluded.has(c.id));
+      stillEligible = stillEligible.filter((c) => {
+        if (c.advertiser_separation_spots <= 0) return true;
+        const tail = placed
+          .slice(-c.advertiser_separation_spots)
+          .filter((it) => it.content_type === 'campaign');
+        if (tail.length === 0) return true;
+        const tailCustomerIds = tail
+          .map((it) => {
+            const orig = pool.candidates.find((p) => p.id === it.campaign_candidate_id);
+            return orig?.customer_id;
+          })
+          .filter((id): id is number => id != null);
+        return !tailCustomerIds.every((cid) => cid === c.customer_id);
+      });
+      if (last && last.content_type === 'campaign' && last.campaign_candidate_id != null) {
+        const lastCandidateId = last.campaign_candidate_id;
+        stillEligible = stillEligible.filter((c) => c.id !== lastCandidateId);
+      }
+
+      type BoundaryOption = { overshoot: number; place: () => void };
+      const options: BoundaryOption[] = [];
+
+      for (const c of stillEligible) {
+        const shortest = c.spot_pool.reduce(
+          (min, s) => (s.duration_seconds < min.duration_seconds ? s : min),
+          c.spot_pool[0],
+        );
+        if (!shortest) continue;
+        const overshoot = shortest.duration_seconds - remainingSeconds;
+        if (overshoot <= 0) continue; // would already have been placed above
+        options.push({
+          overshoot,
+          place: () => {
+            const reason =
+              `campaign='${c.name}' pacing_score=${c.pacing_score.toFixed(2)} ` +
+              `priority=${c.priority} (boundary overshoot)`;
+            const item = withCutSkip(campaignToItem(c, shortest, placed.length, reason), config);
+            items.push(item);
+            placed.push(item);
+            remainingSeconds -= shortest.duration_seconds;
+            placedCampaignIds.add(c.id);
+          },
+        });
+      }
+      for (const p of pool.promos) {
+        if (usedPromoIds.has(p.id)) continue;
+        const overshoot = p.duration_seconds - remainingSeconds;
+        if (overshoot <= 0) continue;
+        options.push({
+          overshoot,
+          place: () => {
+            const reason = `promo pacing_score=${p.pacing_score.toFixed(2)} (boundary overshoot)`;
+            items.push(withCutSkip(promoToItem(p, reason), config));
+            usedPromoIds.add(p.id);
+            remainingSeconds -= p.duration_seconds;
+          },
+        });
+      }
+
+      if (options.length > 0) {
+        options.sort((a, b) => a.overshoot - b.overshoot);
+        const best = options[0];
+        if (best.overshoot < remainingSeconds) {
+          best.place();
+        }
+      }
     }
 
     return {
@@ -1474,27 +1499,6 @@ export class PlannerProcess {
     }
 
     return { isShowStart, isShowEnd };
-  }
-
-  // Returns the start_policy of the segment immediately following `segment`
-  // within the same clock (by sort_order). Used by the end-of-segment gap
-  // handler to decide whether a cut_allowed fill is necessary.
-  private async lookupNextSegmentPolicy(
-    segment: ClockSegment,
-  ): Promise<{ type: 'hard' | 'flexible'; nextSegmentType: string | null }> {
-    const [next] = await this.db
-      .select({ start_policy: clockSegments.start_policy, type: clockSegments.type })
-      .from(clockSegments)
-      .where(
-        and(
-          eq(clockSegments.clock_id, segment.clock_id),
-          gt(clockSegments.sort_order, segment.sort_order),
-        ),
-      )
-      .orderBy(asc(clockSegments.sort_order))
-      .limit(1);
-    if (!next) return { ...readStartPolicy(null), nextSegmentType: null };
-    return { ...readStartPolicy(next.start_policy), nextSegmentType: next.type };
   }
 
   // Try a single gap-fill placement for `type`. Returns the item placed, or
