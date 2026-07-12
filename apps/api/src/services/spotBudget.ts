@@ -896,6 +896,101 @@ export async function getPacing(campaignId: number): Promise<CampaignPacingDetai
   };
 }
 
+// ─── Decision 74 — monthly pacing recovery for stop-sets ────────────────────
+//
+// A campaign meaningfully behind its own pace target should get more room in
+// today's stop-sets, not just wait for pacing_score to eventually promote it
+// to mandatory. Computes the aggregate shortfall (in seconds) across all
+// active, meaningfully-behind campaigns for the rest of the current month,
+// converts to a per-day extra-seconds need, and spreads it across today's
+// remaining (not-yet-started) stop-set occurrences proportional to each
+// one's own nominal duration — the simplest defensible default, not a
+// precisely-tuned allocation. Cached per calendar day; the monthly aggregate
+// doesn't need recomputing on every call. The supervisor caps the boost it
+// actually applies to any one stop-set (RECOVERY_ABSOLUTE_MAX_SECONDS) —
+// this function returns the raw, uncapped per-segment share.
+//
+// Mirrors AHEAD_OF_PACE_THRESHOLD in campaign.ts (same value, separate
+// literal, different file/query path — keep in sync by hand if it changes).
+const BEHIND_PACE_RECOVERY_THRESHOLD = 0.05;
+
+let recoveryBoostsCache: { day: string; bySegmentId: Map<number, number> } | null = null;
+
+async function computeStopSetRecoveryBoosts(nowMs: number): Promise<Map<number, number>> {
+  const now = new Date(nowMs);
+  const today = dateToString(now);
+  if (recoveryBoostsCache && recoveryBoostsCache.day === today) {
+    return recoveryBoostsCache.bySegmentId;
+  }
+
+  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1); // exclusive
+  const remainingDaysInMonth = Math.max(1, daysBetween(now, monthEnd));
+
+  const activeCampaigns = await db
+    .select()
+    .from(campaignsTable)
+    .where(eq(campaignsTable.active, true));
+
+  const DAYS_PER_MONTH = 30;
+  let totalShortfallSeconds = 0;
+  for (const c of activeCampaigns) {
+    const fullStart = new Date(c.starts_on);
+    const fullEnd = new Date(c.ends_on);
+    fullEnd.setDate(fullEnd.getDate() + 1); // exclusive
+    if (!(now > fullStart) || !(now < fullEnd)) continue;
+    const totalMs = fullEnd.getTime() - fullStart.getTime();
+    if (totalMs <= 0) continue;
+    const elapsedMs = Math.max(0, Math.min(totalMs, now.getTime() - fullStart.getTime()));
+    const months = totalMs / (DAYS_PER_MONTH * 24 * 3600 * 1000);
+    const totalPlanned = c.plays_per_month * months;
+    const expectedToDate = totalPlanned * (elapsedMs / totalMs);
+    if (expectedToDate <= 0) continue;
+
+    const playRows = await db
+      .select({ id: playHistoryTable.id })
+      .from(playHistoryTable)
+      .where(and(
+        eq(playHistoryTable.campaign_id, c.id),
+        gte(playHistoryTable.started_at, fullStart),
+        lte(playHistoryTable.started_at, now),
+        campaignCompletedPlayFilter,
+      ));
+    const actualToDate = playRows.length;
+
+    const ratio = (actualToDate - expectedToDate) / expectedToDate;
+    if (ratio > -BEHIND_PACE_RECOVERY_THRESHOLD) continue; // not meaningfully behind
+
+    const shortfallPlays = expectedToDate - actualToDate;
+    totalShortfallSeconds += shortfallPlays * c.duration_bracket;
+  }
+
+  const extraSecondsPerDay = totalShortfallSeconds / remainingDaysInMonth;
+
+  const bySegmentId = new Map<number, number>();
+  if (extraSecondsPerDay > 0) {
+    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const dayEnd = addDays(dayStart, 1);
+    const { occurrences } = await getOrComputeInventory({ start: dayStart, end: dayEnd }, 'remaining');
+    const nowHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
+    const remainingToday = occurrences.filter((o) => o.date === today && o.timeStart > nowHHMM);
+    const totalRemainingSeconds = remainingToday.reduce((sum, o) => sum + o.durationSeconds, 0);
+    if (totalRemainingSeconds > 0) {
+      for (const occ of remainingToday) {
+        const boost = extraSecondsPerDay * (occ.durationSeconds / totalRemainingSeconds);
+        bySegmentId.set(occ.clockSegmentId, (bySegmentId.get(occ.clockSegmentId) ?? 0) + boost);
+      }
+    }
+  }
+
+  recoveryBoostsCache = { day: today, bySegmentId };
+  return bySegmentId;
+}
+
+export async function getStopSetRecoveryBoostSeconds(clockSegmentId: number, nowMs: number): Promise<number> {
+  const boosts = await computeStopSetRecoveryBoosts(nowMs);
+  return boosts.get(clockSegmentId) ?? 0;
+}
+
 export async function getOverview(
   period: DateRange,
   mode: BudgetMode,

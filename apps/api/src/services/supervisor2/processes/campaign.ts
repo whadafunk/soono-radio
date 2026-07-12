@@ -46,6 +46,12 @@ const PROCESS_NAME: ContentProcessName = 'campaign';
 const OVERSUBSCRIBED_THRESHOLD = 0.9;
 // Pacing score above this AND priority=hard => mandatory.
 const MANDATORY_PACING_THRESHOLD = 0.2;
+// Decision 74: a campaign/promo this far ahead of its own pace target (ratio
+// of actual-vs-expected) is no longer eligible as a stop-set candidate.
+// Mirrors BEHIND_PACE_RECOVERY_THRESHOLD in spotBudget.ts — same value,
+// separate literal (different file, different query path); keep them in sync
+// by hand if this ever changes.
+const AHEAD_OF_PACE_THRESHOLD = 0.05;
 
 export class CampaignProcess {
   private readonly unsubscribers: Array<() => void> = [];
@@ -171,13 +177,18 @@ export class CampaignProcess {
       if (spotPool.length === 0) continue;
 
       // ── Pacing (global, per-show, per-interval) ──────────────────────────
-      const pacingScore = await this.computePacingScore(
+      const pacing = await this.computePacingScore(
         campaign,
         showId,
         intervalId,
         clockInstanceStartedAt,
         nowMs,
       );
+      // Decision 74: a campaign already ≥5% ahead of its global pace target
+      // isn't eligible — don't let a stop-set serve a campaign that's already
+      // over-achieving its plan, no matter how it ranks otherwise.
+      if (pacing.globalRatio >= AHEAD_OF_PACE_THRESHOLD) continue;
+      const pacingScore = pacing.score;
 
       // ── slot_1_satisfied_today: did this campaign already air in slot 1
       // today? Until plan_items is the source of truth at runtime, derive
@@ -319,14 +330,20 @@ export class CampaignProcess {
   // Pacing score = max(global_behind, per_show_behind, per_interval_behind).
   // Each level is a [0, 1+] value where 0 = on/ahead of target and 1 = none
   // delivered of the expected amount by now.
+  // Returns both the one-sided pacing score (existing behavior — higher means
+  // more behind, floors at 0) and the raw signed global ratio (negative =
+  // behind, positive = ahead) so callers needing the ahead-of-pace signal
+  // (Decision 74's eligibility exclusion) don't have to re-run the same
+  // date-range/play-count query a second time.
   private async computePacingScore(
     campaign: typeof campaignsTable.$inferSelect,
     showId: number | null,
     intervalId: number | null,
     clockInstanceStartedAt: number,
     nowMs: number,
-  ): Promise<number> {
-    const globalBehind = await this.globalPacingBehind(campaign, nowMs);
+  ): Promise<{ score: number; globalRatio: number }> {
+    const globalRatio = await this.globalPacingRatio(campaign, nowMs);
+    const globalBehind = Math.max(0, -globalRatio);
 
     let perShowBehind = 0;
     if (
@@ -365,11 +382,15 @@ export class CampaignProcess {
       );
     }
 
-    return Math.max(globalBehind, perShowBehind, perIntervalBehind);
+    return { score: Math.max(globalBehind, perShowBehind, perIntervalBehind), globalRatio };
   }
 
-  // Linear-interpolated global pacing: expected plays by now vs. actual plays.
-  private async globalPacingBehind(
+  // Linear-interpolated global pacing ratio: (actual - expected) / expected,
+  // over the campaign's own date range. Negative = behind pace, positive =
+  // ahead. Shared basis for computePacingScore's one-sided "how behind"
+  // value (Math.max(0, -ratio)) and Decision 74's ahead-of-pace eligibility
+  // exclusion in buildPool — one query serves both.
+  private async globalPacingRatio(
     campaign: typeof campaignsTable.$inferSelect,
     nowMs: number,
   ): Promise<number> {
@@ -389,7 +410,7 @@ export class CampaignProcess {
     if (expectedByNow <= 0) return 0;
 
     const actual = await this.countPlaysInRange(campaign.id, startMs, nowMs);
-    return Math.max(0, 1 - actual / expectedByNow);
+    return (actual - expectedByNow) / expectedByNow;
   }
 
   private async countPlaysInRange(
@@ -462,6 +483,16 @@ export class CampaignProcess {
       // Daily cap.
       const playsToday = await this.countPromoPlays(promo.id, midnightMsToday, nowMs);
       if (playsToday >= promo.max_plays_per_day) continue;
+      // Decision 74: promos get the same ahead-of-pace eligibility discipline
+      // as campaigns — their only "target" basis is the daily minimum, so
+      // ahead-of-pace means already ≥5% over that minimum today. No minimum
+      // configured (0) means there's nothing to be ahead of; skip the check.
+      if (
+        promo.min_plays_per_day > 0 &&
+        playsToday >= promo.min_plays_per_day * (1 + AHEAD_OF_PACE_THRESHOLD)
+      ) {
+        continue;
+      }
 
       const mediaRows = await this.db
         .select({
