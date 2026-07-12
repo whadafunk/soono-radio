@@ -1820,7 +1820,7 @@ export class SupervisorProcess {
     if (!plan) return;
 
     const [segment] = await this.db
-      .select({ duration_seconds: clockSegmentsTable.duration_seconds })
+      .select({ duration_seconds: clockSegmentsTable.duration_seconds, type: clockSegmentsTable.type })
       .from(clockSegmentsTable)
       .where(eq(clockSegmentsTable.id, plan.segment_id));
     const nominal = segment?.duration_seconds ?? 0;
@@ -1830,10 +1830,18 @@ export class SupervisorProcess {
     // may differ in edge cases where plan was forced-advanced to a new segment.
     const driftDelta = this.boundaryDriftSeconds - this.nextPlanDraftDriftSeconds;
     const rawTarget = nominal - this.boundaryDriftSeconds;
-    const adjustedTarget = Math.max(
-      nominal * 0.6,
-      Math.min(nominal * 1.4, rawTarget),
-    );
+    // Stop-sets can only ever grow to absorb negative drift, never shrink —
+    // shrinking one means cutting committed campaign airtime. computeFirstPassTarget
+    // already floors a stop-set at its own nominal (and caps at 1.5x); this second
+    // pass used to apply the generic [0.6, 1.4] clamp to every type, including
+    // stop-set, which contradicted the first pass's own floor for the same
+    // segment (D68) — confirmed live 2026-07-12: a 180s stop-set was finalized
+    // down to 108s (exactly 0.6x) minutes after its first pass had already
+    // committed to never shrinking it.
+    const isStopSet = segment?.type === 'stop_set';
+    const floor = isStopSet ? nominal : nominal * 0.6;
+    const ceiling = isStopSet ? nominal * 1.5 : nominal * 1.4;
+    const adjustedTarget = Math.max(floor, Math.min(ceiling, rawTarget));
 
     this.finalizationRequestedForPlanId = this.nextPlanId;
     const requestId = randomUUID();

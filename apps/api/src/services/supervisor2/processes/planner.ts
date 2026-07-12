@@ -376,6 +376,21 @@ export class PlannerProcess {
       .from(planItemsTable)
       .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')));
     const pendingSumSeconds = pendingItems.reduce((acc, it) => acc + it.planned_duration_seconds, 0);
+    // D44's queue-ahead nudge can already have pushed this plan's first item
+    // into Harbor before this gate fires (whenever the previous segment's
+    // last item started playing well ahead of T-30s) — flipping it to
+    // 'playing', not 'pending'. That item is real, already-committed content
+    // neither the trigger comparison nor a full reassembly can see if they
+    // only look at 'pending' rows. Netting it out of the target here (D67)
+    // is what prevents a reassembly from stacking a full fresh target on top
+    // of it — confirmed live 2026-07-12: a 763.415s target plus an already-
+    // committed track produced 998.37s of real airtime.
+    const committedItems = await this.db
+      .select({ planned_duration_seconds: planItemsTable.planned_duration_seconds })
+      .from(planItemsTable)
+      .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'playing')));
+    const committedSeconds = committedItems.reduce((acc, it) => acc + it.planned_duration_seconds, 0);
+    const effectiveTargetSeconds = Math.max(0, adjustedTargetSeconds - committedSeconds);
     // driftDeltaSeconds alone misses cases where the target changed a lot
     // without drift itself moving — first-pass and second-pass targets use
     // different formulas (first-pass folds in plannedOvershoot, second-pass
@@ -384,7 +399,7 @@ export class PlannerProcess {
     // target sat un-reassembled after the T-30s gate recomputed 168s, because
     // drift hadn't moved — only the formula had. Comparing actual planned
     // content against the adjusted target catches that directly.
-    const contentGapSeconds = Math.abs(pendingSumSeconds - adjustedTargetSeconds);
+    const contentGapSeconds = Math.abs(pendingSumSeconds - effectiveTargetSeconds);
     const needsFullReassembly =
       !isRundown && (Math.abs(driftDeltaSeconds) >= threshold || contentGapSeconds >= threshold);
 
@@ -442,7 +457,7 @@ export class PlannerProcess {
       const result = await this.assembleForSegment(
         segment,
         plan.clock_instance_started_at,
-        adjustedTargetSeconds,
+        effectiveTargetSeconds,
         nowMs,
         showCtx,
       );
@@ -458,6 +473,8 @@ export class PlannerProcess {
           segment_id: segment.id,
           drift_delta_seconds: driftDeltaSeconds,
           adjusted_target_seconds: adjustedTargetSeconds,
+          committed_seconds: committedSeconds,
+          effective_target_seconds: effectiveTargetSeconds,
           dropped_count: pendingItems.length,
           added_count: result.items.length,
         },
