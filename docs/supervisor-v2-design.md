@@ -2061,6 +2061,66 @@ This revisits the imprecision Decision 62 explicitly deferred ("Known, accepted 
 
 ---
 
+### Decision 70 — Jingle and station-ID must never land back-to-back
+
+**Status: implemented & deployed 2026-07-12 (commit `4efd7a8`).**
+
+`assembleMusicPlan`'s interstitial injection checked jingle-due and station-ID-due independently against the same `musicCount`, each gated only on its own `% N === 0` cadence — if both cadences coincided at the same track boundary, both got inserted back-to-back.
+
+**Fix:** mutually exclusive per boundary. The station-ID check only runs if a jingle wasn't actually *placed* this round (not just "due") — gating on placement rather than eligibility means a jingle whose pool is exhausted or whose pick doesn't fit still leaves room for station-ID at that same boundary.
+
+---
+
+### Decision 71 — First-pass drift recovery must be capped in absolute terms, not just proportionally
+
+**Status: implemented & deployed 2026-07-12 (commit `b9caa5d`).**
+
+`computeFirstPassTarget` clamped the drift-corrected target to `[floor, nominal × 1.5]` — proportional to the segment's own nominal length, with no absolute limit on how much correction one segment gets asked to absorb in a single shot. A very large drift (operator-induced, or the assembly-overshoot class of bug Decision 67 fixed) got corrected as aggressively as the proportional clamp allowed, rather than spread across several segments.
+
+**Fix:** cap the *correction amount itself* — `MAX_DRIFT_RECOVERY_PER_PLAN_S = 300` (5 minutes) — before applying the existing floor/ceiling clamp. No explicit "recovery ledger" needed: `boundaryDriftSeconds` is recomputed from real wall-clock-vs-schedule facts at every activation regardless of what got applied here, so whatever this cap leaves uncorrected simply persists and gets another chance next cycle. Scope: non-stop-set segments only — see Decision 73, which removes drift correction from stop-sets entirely.
+
+---
+
+### Decision 72 — Music assembly: single boundary decision, in received order, no next-segment awareness
+
+**Status: implemented & deployed 2026-07-12 (commit `4efd7a8`).**
+
+The fill loop skipped non-fitting candidates and kept hunting the rest of the (2.5×-overserved) pool for anything that fit a shrinking ±30s tolerance window, rather than placing candidates strictly in order and stopping cleanly at the first crossing. A separate end-of-segment patch (d1/d2) bolted on next-segment-type awareness (`isNextHard`/`nextIsFlexibleStopSet`) that duplicated what the hard-start gate (Decision 66) already polices continuously and correctly.
+
+**Fix:** walk `music.candidates` strictly in received order. Place anything that fits cleanly (`duration_seconds <= remaining`). The first candidate that wouldn't fit is the boundary-crossing one — make exactly one decision (place it, forcing `cut_allowed: true` as an unconditional safety net for the hard-start gate, if its overshoot is smaller than the gap left by not placing it) and stop; no further candidates are evaluated. Deleted entirely: `FLEXIBLE_OVERSHOOT_TOLERANCE_SECONDS`, `tryFitItem`, `isHardEnd`, the whole d1/d2 block, and `lookupNextSegmentPolicy` (confirmed via grep: no callers outside this function). The segment-end envelope check already handled a negative `remaining` sensibly — no change needed there, just a larger effective range of values than before.
+
+---
+
+### Decision 73 — Stop-sets no longer participate in drift correction at all; gain a bounded fit-overshoot tolerance instead
+
+**Status: implemented & deployed 2026-07-12 (commits `4efd7a8`, `b9caa5d`).**
+
+Stop-set content is governed by campaign/promo pacing rules operating on their own (daily/monthly) timescale — using stop-set length as a wall-clock drift-absorption lever created exactly the first/second-pass inconsistency Decision 68 had to patch. Removing it outright is a real simplification: music segments (the majority of segment-seconds) remain fully capable of absorbing drift via Decision 71, so overall schedule-correction capacity is unaffected.
+
+**Fix:**
+- `computeFirstPassTarget`: for `stop_set`, returns `nominal` outright — no `boundaryDriftSeconds`/`plannedOvershootSeconds` term at all (Decision 74 adds a recovery-boost addend on top, at the call sites).
+- `maybeRequestFinalization`: likewise skips the drift-based `rawTarget`/clamp entirely for `stop_set` — base target is `nominal`. Decision 68's type-aware floor/ceiling fix becomes unreachable for this branch specifically (harmless — still fully active for every other segment type).
+- `finalizePlan`'s reassembly trigger: extended the existing rundown drift-exemption to also cover `stop_set` — stop-sets no longer care about `driftDelta`, but `contentGapSeconds` remains a meaningful trigger (catches eligibility changes between draft and finalize, e.g. a campaign crossing its pacing threshold — Decision 74).
+- `assembleStopSetPlan`: gains the same single-boundary-decision shape as Decision 72's music redesign. Once the normal campaign fill loop and promo fill both exhaust without overshoot, one final step re-derives still-eligible campaigns (same advertiser-separation/adjacency rules as the main loop, without requiring a spot to already fit) and unused promos, finds the smallest-overshoot option across both (a campaign's shortest available spot, or a promo), and places it only if that overshoot is smaller than the remaining gap. Replaces the old "only ever undershoot, stop at the 15s floor" behavior with a bounded, symmetric tolerance — matching the standing view that stop-sets should tolerate a small overshoot because exact-fit is often impossible, same as music, just for a different reason (spot-pool granularity, not drift).
+
+---
+
+### Decision 74 — Campaign and promo pacing eligibility: 5%-ahead exclusion, monthly recovery-driven stop-set lengthening
+
+**Status: implemented & deployed 2026-07-12 (commit `ac6f1f5`, wiring in `b9caa5d`).**
+
+**Eligibility:** a campaign or promo already `AHEAD_OF_PACE_THRESHOLD` (0.05, i.e. 5%) ahead of its own pace target is no longer eligible as a stop-set candidate. Campaigns use their existing global pacing basis (`plays_per_month`, linear-interpolated over the campaign's date range) — `computePacingScore` now returns both the existing one-sided "how behind" score and the raw signed ratio it's derived from (`globalPacingBehind` renamed `globalPacingRatio`), so the new eligibility check reuses the same query rather than running it twice. Promos have no monthly target field, so they use their existing daily basis (`min_plays_per_day`) — ahead-of-pace means already ≥5% over that daily minimum; a promo with no minimum configured (0) has nothing to be ahead of, so the check is skipped for it.
+
+This is what actually resolves the promo-backfill gap found during design: once promos are held to the same pacing discipline as campaigns, a stop-set with everything ahead of pace genuinely ends up under-filled — exercising Decision 73's overshoot-or-gap decision on real scarcity — instead of silently backfilling with promos regardless of their own pace.
+
+**Monthly recovery-need calculation:** new `getStopSetRecoveryBoostSeconds(clockSegmentId, nowMs)` in `spotBudget.ts`. Sums the shortfall (in seconds) across all active campaigns meaningfully behind pace (`BEHIND_PACE_RECOVERY_THRESHOLD` — mirrors `AHEAD_OF_PACE_THRESHOLD`, same value, separate literal since it lives in a different file/query path) for the rest of the current month, converts to a per-day extra-seconds need, and spreads it across today's remaining (not-yet-started) stop-set occurrences proportional to each one's own nominal duration — the simplest defensible default, not a precisely-tuned allocation. Reuses the existing `getOrComputeInventory` occurrence projection rather than re-deriving today's stop-set schedule. Cached per calendar day.
+
+**Where it applies:** additive on top of Decision 73's `nominal` base, at both `computeFirstPassTarget`'s call sites (via a new `computeFirstPassTargetWithRecovery` wrapper) and `maybeRequestFinalization`'s stop-set branch — capped at `RECOVERY_ABSOLUTE_MAX_SECONDS` (240s) regardless of the computed shortfall, since removing drift correction from stop-sets (Decision 73) means there's no other headroom constraint left to bound it.
+
+**Known duplication, accepted:** the `campaign.ts` ahead-ratio computation and `spotBudget.ts`'s `getStopSetRecoveryBoostSeconds`/`getPacing` use near-identical 30-day-month math but are not the same code path — both should track closely; cross-referenced in comments rather than unified, to avoid a larger refactor entangled with this feature.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
