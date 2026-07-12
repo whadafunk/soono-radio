@@ -896,99 +896,46 @@ export async function getPacing(campaignId: number): Promise<CampaignPacingDetai
   };
 }
 
-// ─── Decision 74 — monthly pacing recovery for stop-sets ────────────────────
+// ─── Decision 75 — campaign-driven stop-set recovery multiplier ────────────
 //
-// A campaign meaningfully behind its own pace target should get more room in
-// today's stop-sets, not just wait for pacing_score to eventually promote it
-// to mandatory. Computes the aggregate shortfall (in seconds) across all
-// active, meaningfully-behind campaigns for the rest of the current month,
-// converts to a per-day extra-seconds need, and spreads it across today's
-// remaining (not-yet-started) stop-set occurrences proportional to each
-// one's own nominal duration — the simplest defensible default, not a
-// precisely-tuned allocation. Cached per calendar day; the monthly aggregate
-// doesn't need recomputing on every call. The supervisor caps the boost it
-// actually applies to any one stop-set (RECOVERY_ABSOLUTE_MAX_SECONDS) —
-// this function returns the raw, uncapped per-segment share.
+// Supersedes Decision 74's recovery calculation (not its eligibility-
+// exclusion half, which stays in campaign.ts). D74 pre-allocated a fixed
+// absolute-seconds share to each of today's scheduled stop-sets, cached for
+// the day — which broke whenever a stop-set got skipped (D62 skip-ahead, or
+// an operator crossing over one), silently losing whatever share had been
+// reserved for it. It also reinvented pacing math this file already does
+// more completely (promo margin, show/interval-scoped pool sharing).
 //
-// Mirrors AHEAD_OF_PACE_THRESHOLD in campaign.ts (same value, separate
-// literal, different file/query path — keep in sync by hand if it changes).
-const BEHIND_PACE_RECOVERY_THRESHOLD = 0.05;
-
-let recoveryBoostsCache: { day: string; bySegmentId: Map<number, number> } | null = null;
-
-async function computeStopSetRecoveryBoosts(nowMs: number): Promise<Map<number, number>> {
+// This reuses the existing L1 (getInventory)/L2 (getDemand)/L3 (getAvailable)
+// system directly: if campaign demand exceeds scheduled stop-set capacity
+// for the rest of the month, getAvailable's global minutes goes negative —
+// that's the real, already-correct shortfall signal. No caching needed here
+// (getAvailable/getInventory already hit this file's own inventoryCache/
+// demandCache internally), and no per-segment pre-allocation to lose when a
+// stop-set gets skipped — this is recomputed fresh every time a stop-set is
+// actually drafted, same as CampaignProcess.buildPool already recomputes
+// pacing fresh from play_history on every call.
+//
+// Returns the raw, uncapped ratio — the safety ceiling (MAX_RECOVERY_MULTIPLIER)
+// is applied where it's consumed (planner.ts's assembleStopSetPlan), keeping
+// "how behind are we" (pacing) separate from "how big can a break get"
+// (scheduling safety).
+export async function getStopSetRecoveryMultiplier(nowMs: number): Promise<number> {
   const now = new Date(nowMs);
-  const today = dateToString(now);
-  if (recoveryBoostsCache && recoveryBoostsCache.day === today) {
-    return recoveryBoostsCache.bySegmentId;
-  }
-
   const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1); // exclusive
-  const remainingDaysInMonth = Math.max(1, daysBetween(now, monthEnd));
+  const period: DateRange = { start: now, end: monthEnd };
+  const mode: BudgetMode = 'remaining';
 
-  const activeCampaigns = await db
-    .select()
-    .from(campaignsTable)
-    .where(eq(campaignsTable.active, true));
+  const [available, inventory] = await Promise.all([
+    getAvailable(period, mode),
+    getInventory(period, mode),
+  ]);
 
-  const DAYS_PER_MONTH = 30;
-  let totalShortfallSeconds = 0;
-  for (const c of activeCampaigns) {
-    const fullStart = new Date(c.starts_on);
-    const fullEnd = new Date(c.ends_on);
-    fullEnd.setDate(fullEnd.getDate() + 1); // exclusive
-    if (!(now > fullStart) || !(now < fullEnd)) continue;
-    const totalMs = fullEnd.getTime() - fullStart.getTime();
-    if (totalMs <= 0) continue;
-    const elapsedMs = Math.max(0, Math.min(totalMs, now.getTime() - fullStart.getTime()));
-    const months = totalMs / (DAYS_PER_MONTH * 24 * 3600 * 1000);
-    const totalPlanned = c.plays_per_month * months;
-    const expectedToDate = totalPlanned * (elapsedMs / totalMs);
-    if (expectedToDate <= 0) continue;
+  const totalMinutes = inventory.effective.global.minutes;
+  if (totalMinutes <= 0) return 1;
 
-    const playRows = await db
-      .select({ id: playHistoryTable.id })
-      .from(playHistoryTable)
-      .where(and(
-        eq(playHistoryTable.campaign_id, c.id),
-        gte(playHistoryTable.started_at, fullStart),
-        lte(playHistoryTable.started_at, now),
-        campaignCompletedPlayFilter,
-      ));
-    const actualToDate = playRows.length;
-
-    const ratio = (actualToDate - expectedToDate) / expectedToDate;
-    if (ratio > -BEHIND_PACE_RECOVERY_THRESHOLD) continue; // not meaningfully behind
-
-    const shortfallPlays = expectedToDate - actualToDate;
-    totalShortfallSeconds += shortfallPlays * c.duration_bracket;
-  }
-
-  const extraSecondsPerDay = totalShortfallSeconds / remainingDaysInMonth;
-
-  const bySegmentId = new Map<number, number>();
-  if (extraSecondsPerDay > 0) {
-    const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const dayEnd = addDays(dayStart, 1);
-    const { occurrences } = await getOrComputeInventory({ start: dayStart, end: dayEnd }, 'remaining');
-    const nowHHMM = `${String(now.getHours()).padStart(2, '0')}:${String(now.getMinutes()).padStart(2, '0')}`;
-    const remainingToday = occurrences.filter((o) => o.date === today && o.timeStart > nowHHMM);
-    const totalRemainingSeconds = remainingToday.reduce((sum, o) => sum + o.durationSeconds, 0);
-    if (totalRemainingSeconds > 0) {
-      for (const occ of remainingToday) {
-        const boost = extraSecondsPerDay * (occ.durationSeconds / totalRemainingSeconds);
-        bySegmentId.set(occ.clockSegmentId, (bySegmentId.get(occ.clockSegmentId) ?? 0) + boost);
-      }
-    }
-  }
-
-  recoveryBoostsCache = { day: today, bySegmentId };
-  return bySegmentId;
-}
-
-export async function getStopSetRecoveryBoostSeconds(clockSegmentId: number, nowMs: number): Promise<number> {
-  const boosts = await computeStopSetRecoveryBoosts(nowMs);
-  return boosts.get(clockSegmentId) ?? 0;
+  const shortfallMinutes = Math.max(0, -available.global.minutes);
+  return 1 + shortfallMinutes / totalMinutes;
 }
 
 export async function getOverview(

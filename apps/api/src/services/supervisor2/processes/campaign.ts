@@ -32,6 +32,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import { campaignCompletedPlayFilter } from '../playHistoryViews.js';
+import { getStopSetRecoveryMultiplier } from '../../spotBudget.js';
 import type {
   BreakSpaceEstimate,
   CampaignCandidate,
@@ -125,6 +126,13 @@ export class CampaignProcess {
     const todayHHMM = hhmmFromMs(nowMs);
     const dow = isoDayOfWeek(nowMs);
     const midnightMsToday = midnightMs(nowMs);
+
+    // Decision 75: campaign-driven recovery multiplier, reusing the existing
+    // L1/L2/L3 budget system (spotBudget.ts) rather than recomputing pacing
+    // shortfall independently. Recomputed fresh on every buildPool call —
+    // no caching needed, spotBudget.ts already caches its own inventory/
+    // demand queries internally.
+    const recoveryMultiplier = await getStopSetRecoveryMultiplier(nowMs);
 
     // Resolve the show and broadcast interval that scope this stop-set, if any.
     const showId = await this.resolveShowId(clockInstanceStartedAt);
@@ -264,7 +272,12 @@ export class CampaignProcess {
       this.logger?.warn({ process: 'campaign', event: 'EMPTY_POOL', segment_id: segmentId, raw_campaign_count: rawCampaigns.length }, 'campaign: no eligible campaigns for this stop-set segment');
     }
 
-    return { candidates, promos: promosPool, space_estimate: spaceEstimate };
+    return {
+      candidates,
+      promos: promosPool,
+      space_estimate: spaceEstimate,
+      recovery_multiplier: recoveryMultiplier,
+    };
   }
 
   // ── Helpers ──────────────────────────────────────────────────────────────

@@ -104,6 +104,11 @@ export interface StopSetCandidatePool {
   candidates: CampaignCandidate[];
   promos: PromoCandidate[];
   space_estimate: BreakSpaceEstimate;
+  // Decision 75: campaign-driven recovery multiplier (>= 1) — how much
+  // bigger than nominal this break should be, if campaign demand exceeds
+  // scheduled stop-set capacity for the rest of the month. Raw/uncapped;
+  // the consumer (assembleStopSetPlan) applies the safety ceiling.
+  recovery_multiplier: number;
 }
 
 // ─── Branding ─────────────────────────────────────────────────────────────────

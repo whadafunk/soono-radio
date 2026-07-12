@@ -72,6 +72,10 @@ const CANDIDATE_REQUEST_TIMEOUT_MS = 10_000;
 // Minimum spot duration the planner will attempt to place in a stop-set
 // break — below this the spot pool is treated as exhausted.
 const MIN_VIABLE_SPOT_DURATION_SECONDS = 15;
+// Decision 75: safety ceiling on the campaign-driven recovery multiplier —
+// a stop-set can grow to at most this much of its own nominal duration,
+// regardless of computed shortfall.
+const MAX_RECOVERY_MULTIPLIER = 1.5;
 
 interface PendingAssemblyItem {
   media_id: number;
@@ -950,11 +954,18 @@ export class PlannerProcess {
   ): Promise<AssemblyResult> {
     const { config } = showCtx;
     const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
+    // Decision 75: request with a generous upper bound (not the raw target)
+    // so spot-pool filtering (campaign.ts's loadSpotPool) doesn't prematurely
+    // exclude a candidate that would fit once the real recovery multiplier
+    // (computed inside buildPool) is known. The actual fill budget is
+    // derived below, after the pool comes back, and can only ever be <=
+    // this bound.
+    const requestBound = targetDurationSeconds * MAX_RECOVERY_MULTIPLIER;
     const pool = await this.requestPool<StopSetCandidatePool>(
       'campaign',
       segment,
       instance,
-      targetDurationSeconds,
+      requestBound,
       nowMs,
     );
 
@@ -967,7 +978,20 @@ export class PlannerProcess {
     const placedCampaignIds = new Set<number>();
     const usedPromoIds = new Set<number>();
     const excluded = new Set<number>();
-    let remainingSeconds = targetDurationSeconds;
+    // Only boost when targetDurationSeconds is already at-or-above nominal —
+    // if it's below nominal, a tighter external constraint is already in
+    // force (Decision 69's hard-boundary cap, which computes
+    // min(nominal, realRemaining) specifically because a hard segment is
+    // imminent) and must win outright; inflating it here would risk
+    // overshooting that boundary. Comparing against the segment's own known
+    // nominal is sufficient — no new flag needs threading through
+    // finalizePlan/bus messages for this.
+    const nominal = segment.duration_seconds;
+    const boostEligible = targetDurationSeconds >= nominal;
+    const appliedMultiplier = boostEligible
+      ? Math.min(pool.recovery_multiplier, MAX_RECOVERY_MULTIPLIER)
+      : 1;
+    let remainingSeconds = targetDurationSeconds * appliedMultiplier;
 
     // (a) First-in-slot resolution: among candidates with slot_1_required AND
     // !slot_1_satisfied_today, pick the one with the highest pacing_score.

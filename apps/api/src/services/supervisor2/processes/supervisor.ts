@@ -92,7 +92,6 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
-import { getStopSetRecoveryBoostSeconds } from '../../spotBudget.js';
 import { computeResolutionIdentity, readStartPolicy, resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment, segmentBoundsWithinClock, type HardSegmentLookahead, type ResolvedSegment } from '../clockResolver.js';
 import {
   abortRow,
@@ -112,7 +111,6 @@ const SILENCE_ALERT_THRESHOLD_S = 30;         // seconds of no pushes before WAR
 const RUNWAY_WORTH_IT_THRESHOLD_S = 300;      // below this, not worth riding the current plan further
 const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offset dance entirely
 const MAX_DRIFT_RECOVERY_PER_PLAN_S = 300;    // D71 — cap how much drift one plan is asked to correct; the rest persists in boundaryDriftSeconds for the next cycle
-const RECOVERY_ABSOLUTE_MAX_SECONDS = 240;    // D74 — safety valve on the monthly-pacing recovery boost applied to any single stop-set, regardless of computed shortfall
 
 export class SupervisorProcess {
   private readonly unsubscribers: Array<() => void> = [];
@@ -1351,10 +1349,9 @@ export class SupervisorProcess {
       remainingSeconds < RUNWAY_FLOOR_S ||
       (remainingSeconds < RUNWAY_WORTH_IT_THRESHOLD_S && !nextIsHard);
 
-    const targetDurationSeconds = await this.computeFirstPassTargetWithRecovery(next.segment, nowMs);
     await this.reconcileOccurrence(next, nowMs, {
       allowActivate: cutoverAllowed,
-      targetDurationSeconds,
+      targetDurationSeconds: this.computeFirstPassTarget(next.segment),
     });
   }
 
@@ -1721,20 +1718,6 @@ export class SupervisorProcess {
     );
   }
 
-  // D74: computeFirstPassTarget stays synchronous (it's cheap, called from
-  // multiple places); this wraps it with the async monthly-pacing-recovery
-  // boost, applied only to stop-sets, capped at RECOVERY_ABSOLUTE_MAX_SECONDS
-  // regardless of the computed shortfall.
-  private async computeFirstPassTargetWithRecovery(
-    segment: { id: number; type: string; duration_seconds: number },
-    nowMs: number,
-  ): Promise<number> {
-    const base = this.computeFirstPassTarget(segment);
-    if (segment.type !== 'stop_set') return base;
-    const rawBoost = await getStopSetRecoveryBoostSeconds(segment.id, nowMs);
-    return base + Math.min(rawBoost, RECOVERY_ABSOLUTE_MAX_SECONDS);
-  }
-
   private async requestColdStartDraft(resolved: ResolvedSegment, nowMs: number): Promise<void> {
     const remainingMs = Math.max(0, resolved.segmentEndMs - nowMs);
     const targetDuration = Math.floor(remainingMs / 1000);
@@ -1816,7 +1799,7 @@ export class SupervisorProcess {
       return;
     }
 
-    const firstPassTarget = await this.computeFirstPassTargetWithRecovery(next.segment, nowMs);
+    const firstPassTarget = this.computeFirstPassTarget(next.segment);
 
     // Store segment end time so activateNextPlan can compute boundary drift.
     this.nextPlanScheduledEndMs = next.segmentEndMs;
@@ -1927,17 +1910,18 @@ export class SupervisorProcess {
     const driftDelta = this.boundaryDriftSeconds - this.nextPlanDraftDriftSeconds;
     const isStopSet = segment?.type === 'stop_set';
     // D73: stop-sets no longer participate in drift correction at all — base
-    // target is just nominal (Decision 74 adds a recovery boost on top, at
-    // the call site). This supersedes D68's type-aware floor/ceiling for the
-    // stop-set branch specifically (that fix itself is still correct — it's
-    // just that the whole drift-based formula it protected is now bypassed
-    // for this type; still fully in effect for every other segment type).
+    // target is just nominal. This supersedes D68's type-aware floor/ceiling
+    // for the stop-set branch specifically (that fix itself is still
+    // correct — it's just that the whole drift-based formula it protected
+    // is now bypassed for this type; still fully in effect for every other
+    // segment type). D75's campaign-driven recovery multiplier is applied
+    // downstream, inside assembleStopSetPlan (planner.ts) — not here; it
+    // rides along with the candidate-pool request that already happens for
+    // every stop-set assembly, first pass and finalize alike, rather than
+    // being computed twice at separate supervisor call sites.
     let driftAdjustedTarget: number;
     if (isStopSet) {
-      // D74: monthly-pacing recovery boost, same as the first-pass call site,
-      // capped regardless of computed shortfall.
-      const rawBoost = await getStopSetRecoveryBoostSeconds(plan.segment_id, nowMs);
-      driftAdjustedTarget = nominal + Math.min(rawBoost, RECOVERY_ABSOLUTE_MAX_SECONDS);
+      driftAdjustedTarget = nominal;
     } else {
       const rawTarget = nominal - this.boundaryDriftSeconds;
       driftAdjustedTarget = Math.max(nominal * 0.6, Math.min(nominal * 1.4, rawTarget));
