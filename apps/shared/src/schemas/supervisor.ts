@@ -155,6 +155,10 @@ export const SupervisorV2StatusSchema = z.object({
   // (a mid-flight replan/trim/fill), independent of wall-clock-vs-consumed
   // drift. Null when there's no active plan.
   plan_internal_drift_seconds: z.number().nullable(),
+  // D71's cap — the most drift a single plan's target can be asked to
+  // correct for. Surfaced so the UI can explain why intentional_offset_seconds
+  // sometimes doesn't fully close the measured drift in one transition.
+  drift_recovery_cap_seconds: z.number(),
 });
 export type SupervisorV2Status = z.infer<typeof SupervisorV2StatusSchema>;
 

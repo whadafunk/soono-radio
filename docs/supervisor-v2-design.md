@@ -2169,6 +2169,28 @@ Combined, the station sat on dead air for ~37 minutes until an operator manually
 
 ---
 
+### Decision 78 — Fix the exhausted-plan/finalize race; implement `intentional_offset_seconds` for real; surface the drift-recovery cap
+
+**Status: implemented 2026-07-12, not yet deployed.**
+
+Live investigation of an "impossible"-looking timeline (planned length far exceeding a frozen "gap" baseline, `plan Δ` reporting almost the entire plan's content as a mid-flight shift) traced to a genuine concurrency bug, found on the same night as, but distinct from, Decision 77.
+
+**The race:** `tick()` runs `maybeRequestFinalization(nowMs)` first — if a plan's T-30s gate is due, this emits `PLAN_FINALIZE_REQUESTED` and returns immediately; the actual reassembly (drop old items, add new ones) happens in the planner on a later event-loop turn. Later in that *same* `tick()` call, the exhaustion check can independently decide the *previous* plan just ran out, see the plan from the finalize request as a ready `next_plan_id`, and synchronously force-activate it via `activatePlanById` — which takes a one-time snapshot of the plan's total content for `planned_overshoot_seconds`. Nothing coordinates the two: if the snapshot lands between the reassembly's drop and add, it freezes an artificially-empty baseline for the rest of the segment. Confirmed live down to the millisecond (draft with 2 items → finalize requested → exhausted-plan advance fires 16ms later → activation snapshot taken → reassembly completes 39ms after *that*, with the real 5-item/937s content).
+
+This also matters beyond the display: `planned_overshoot_seconds` is a direct input to `computeFirstPassTarget`'s drift-correction formula for whatever segment comes *after* the corrupted one — so the race doesn't just show a wrong number, it feeds a wrong number into a real scheduling decision.
+
+Separately, discussion of "does a universal, cause-agnostic drift-correction mechanism exist" found that it already does — `computeFirstPassTarget`'s `rawCorrection = boundaryDriftSeconds + plannedOvershootSeconds`, clamped to `±MAX_DRIFT_RECOVERY_PER_PLAN_S` (300s), applied at every next-draft-request site (both `reconcileNext` and the ordinary per-activation `maybeRequestNextDraft`), for any segment type except `stop_set`. No new mechanism was needed there. But `intentional_offset_seconds` (Decision 45) turned out to be dead code — `private readonly intentionalOffsetSeconds = 0;`, never assigned anywhere else in `supervisor.ts`. The UI has only ever displayed a hardcoded zero; this was a backend gap, not a UI one.
+
+**Fix, all in `supervisor.ts`:**
+
+1. **Race fix.** `finalizationRequestedForPlanId` is meant to mean "a finalize is currently in flight for this plan," but was only ever cleared inside `activatePlanById` (unconditional reset for whichever plan just activated) or the hard-boundary-retire branch of `maybeRequestFinalization` — never on genuine completion, so it couldn't distinguish "in flight" from "long done." `handlePlanFinalized` now clears it when `msg.plan_id` matches. `handleExhaustedPlan` gains a guard immediately after the `nextPlan.status` check: if `finalizationRequestedForPlanId === nextPlanId`, log `ACTIVATION_DEFERRED_FINALIZE_IN_FLIGHT` and defer — the next 500ms tick retries once the flag has cleared (finalize round-trips have consistently taken tens of milliseconds, never longer, in every observed log).
+2. **`intentional_offset_seconds` implemented for real.** New `nextPlanIntentionalOffsetSeconds` field, set as a side effect wherever the correction is actually computed: `computeFirstPassTarget` (first pass; `0` for `stop_set`, consistent with Decision 73) and `maybeRequestFinalization`'s second-pass `driftAdjustedTarget` calc (supersedes the first pass when it runs; also `0` for stop-sets). `intentionalOffsetSeconds` itself changes from a `readonly` always-zero field to a regular one, populated in `activatePlanById` from `nextPlanIntentionalOffsetSeconds` at the moment this segment's own plan activates, then reset for the next cycle — mirroring exactly how `plannedOvershootSeconds`/`boundaryDriftSeconds` are already captured at that point. `hydrateFromDb` restores it from the DB row on restart, matching its sibling fields (previously not restored at all, since it was always 0 anyway).
+3. **Cap surfaced.** `MAX_DRIFT_RECOVERY_PER_PLAN_S` exported from `supervisor.ts`; new `drift_recovery_cap_seconds` field on `SupervisorV2StatusSchema`/the status route; shown as a tooltip on the existing "offset" stat in `SegmentTimeline` (`Corrections are capped at ±{cap}s per transition — the rest carries over to the next one`) rather than a new always-visible number, consistent with the header row's existing hover-for-detail style.
+
+**Deliberately not built:** a new/parallel "universal" correction mechanism — the existing one already covers this; only its inputs needed fixing.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

@@ -110,7 +110,7 @@ const SILENCE_ALERT_THRESHOLD_S = 30;         // seconds of no pushes before WAR
 // build-time margin).
 const RUNWAY_WORTH_IT_THRESHOLD_S = 300;      // below this, not worth riding the current plan further
 const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offset dance entirely
-const MAX_DRIFT_RECOVERY_PER_PLAN_S = 300;    // D71 — cap how much drift one plan is asked to correct; the rest persists in boundaryDriftSeconds for the next cycle
+export const MAX_DRIFT_RECOVERY_PER_PLAN_S = 300;    // D71 — cap how much drift one plan is asked to correct; the rest persists in boundaryDriftSeconds for the next cycle
 const STILL_OPEN_GRACE_MS = 5_000;            // D77 — same grace window as tick()'s isStale check
 
 export class SupervisorProcess {
@@ -129,8 +129,16 @@ export class SupervisorProcess {
   // Planned overshoot of the active plan (D51). Accounted drift — subtracted
   // from nominal when computing the next plan's first-pass target.
   private plannedOvershootSeconds = 0;
-  // Always 0 until fire-early/late is implemented (D45).
-  private readonly intentionalOffsetSeconds = 0;
+  // D78 (implements D45): the drift-correction amount actually applied when
+  // sizing the NEXT plan's target — set as a side effect by
+  // computeFirstPassTarget (first pass) and maybeRequestFinalization's
+  // second-pass correction (whichever ran most recently wins). Carried over
+  // into intentionalOffsetSeconds the moment that plan activates, then reset.
+  private nextPlanIntentionalOffsetSeconds = 0;
+  // How much of the measured drift was intentionally corrected for when this
+  // segment's own target was sized. 0 for stop-sets (D73: they never
+  // drift-correct) and for any segment whose target needed no correction.
+  private intentionalOffsetSeconds = 0;
 
   // ── Boundary drift (new model) ───────────────────────────────────────────────
   // Drift computed once at plan activation: how early/late the segment actually
@@ -332,6 +340,7 @@ export class SupervisorProcess {
         this.nextPlanSegmentId = nextPlanRow?.segment_id ?? null;
       }
       this.plannedOvershootSeconds = row.planned_overshoot_seconds ?? 0;
+      this.intentionalOffsetSeconds = row.intentional_offset_seconds ?? 0;
       this.isPaused = row.paused ?? false;
 
       if (this.activePlanId != null) {
@@ -601,6 +610,22 @@ export class SupervisorProcess {
       .where(eq(plansTable.id, this.nextPlanId));
     if (!nextPlan) return;
     if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') return;
+
+    // Decision 78: never activate a plan whose finalize/reassembly we (or
+    // maybeRequestFinalization) just requested but hasn't completed yet.
+    // activatePlanById takes a one-time snapshot of the plan's own item
+    // count/total for planned_overshoot_seconds — if that snapshot lands
+    // between the reassembly dropping its old items and adding the new
+    // ones, it freezes an artificially-empty baseline for the rest of the
+    // segment. Deferring here costs at most one 500ms tick: the next tick
+    // re-checks once handlePlanFinalized has cleared this flag.
+    if (this.finalizationRequestedForPlanId === this.nextPlanId) {
+      this.logger?.info({
+        process: 'supervisor', event: 'ACTIVATION_DEFERRED_FINALIZE_IN_FLIGHT',
+        next_plan_id: this.nextPlanId,
+      }, 'supervisor: next plan has a finalize in flight — deferring activation to the next tick');
+      return;
+    }
 
     // Decision 77: a finalized plan can legitimately have zero items — e.g.
     // every campaign/promo candidate excluded by Decision 74's ahead-of-pace
@@ -1176,6 +1201,13 @@ export class SupervisorProcess {
     this.boundaryDriftSeconds = (nowMs - scheduledStartMs) / 1000;
     this.currentDriftSeconds = this.boundaryDriftSeconds;
 
+    // D78 (implements D45): carry over whatever correction was applied when
+    // this plan's target was sized (first pass, possibly superseded by a
+    // second pass at T-30s) — this segment's own intentional offset, now
+    // that it's the one activating. Reset for the next cycle.
+    this.intentionalOffsetSeconds = this.nextPlanIntentionalOffsetSeconds;
+    this.nextPlanIntentionalOffsetSeconds = 0;
+
     // Update in-memory state.
     this.activePlanId = planId;
     if (opts.clearNextPlan) {
@@ -1730,6 +1762,16 @@ export class SupervisorProcess {
       plan_id: msg.plan_id,
     }, 'supervisor: plan finalized and ready');
 
+    // Decision 78: finalizationRequestedForPlanId is meant to mean "a
+    // finalize is currently in flight for this plan" — it must be cleared
+    // here, on genuine completion, or it stays set from request all the way
+    // through to activation and can't distinguish "still in flight" from
+    // "long done." Without this, handleExhaustedPlan's in-flight guard below
+    // would never re-check successfully.
+    if (this.finalizationRequestedForPlanId === msg.plan_id) {
+      this.finalizationRequestedForPlanId = null;
+    }
+
     if (this.activePlanId == null && this.nextPlanId === msg.plan_id) {
       // activateNextPlan -> activatePlanById already requests the next
       // draft itself now, anchored to the plan that just activated rather
@@ -1765,6 +1807,8 @@ export class SupervisorProcess {
       // (daily/monthly) timescale, not by wall-clock schedule alignment.
       // Base target is just nominal; Decision 74 adds a monthly-recovery-
       // driven boost on top, at the call sites.
+      // D78: no drift correction means no intentional offset to record.
+      this.nextPlanIntentionalOffsetSeconds = 0;
       return nominal;
     }
     const floor = 30;
@@ -1781,6 +1825,9 @@ export class SupervisorProcess {
       -MAX_DRIFT_RECOVERY_PER_PLAN_S,
       Math.min(MAX_DRIFT_RECOVERY_PER_PLAN_S, rawCorrection),
     );
+    // D78 (implements D45): record the correction actually applied, so it can
+    // be carried into intentional_offset_seconds once this plan activates.
+    this.nextPlanIntentionalOffsetSeconds = appliedCorrection;
     return Math.max(
       floor,
       Math.min(
@@ -1994,9 +2041,15 @@ export class SupervisorProcess {
     let driftAdjustedTarget: number;
     if (isStopSet) {
       driftAdjustedTarget = nominal;
+      // D78: no drift correction for stop-sets, so no intentional offset.
+      this.nextPlanIntentionalOffsetSeconds = 0;
     } else {
       const rawTarget = nominal - this.boundaryDriftSeconds;
       driftAdjustedTarget = Math.max(nominal * 0.6, Math.min(nominal * 1.4, rawTarget));
+      // D78 (implements D45): the second pass supersedes the first pass's
+      // recorded correction when it runs — record what actually ended up
+      // applied here.
+      this.nextPlanIntentionalOffsetSeconds = nominal - driftAdjustedTarget;
     }
     const adjustedTarget = hardOverrideTarget ?? driftAdjustedTarget;
 

@@ -175,6 +175,7 @@ function SegmentTimeline({
   plannedOvershootSeconds,
   boundaryDriftSeconds,
   planInternalDriftSeconds,
+  driftRecoveryCapSeconds,
 }: {
   segmentStartedAtMs: number | null;
   segmentDurationSeconds: number | null;
@@ -185,6 +186,7 @@ function SegmentTimeline({
   plannedOvershootSeconds: number;
   boundaryDriftSeconds: number;
   planInternalDriftSeconds: number | null;
+  driftRecoveryCapSeconds: number;
 }) {
   const [hoveredKey, setHoveredKey] = useState<string | null>(null);
 
@@ -293,7 +295,10 @@ function SegmentTimeline({
             </span>
           )}
           {layout.offsetSeconds !== 0 && (
-            <span className={layout.offsetSide === 'lead' ? 'text-sky-400' : 'text-amber-400'}>
+            <span
+              className={layout.offsetSide === 'lead' ? 'text-sky-400' : 'text-amber-400'}
+              title={`How much of the measured drift was intentionally corrected for when this segment was sized. Corrections are capped at ±${driftRecoveryCapSeconds}s per transition — the rest carries over to the next one.`}
+            >
               offset{' '}
               <span className="font-mono font-semibold">{fmtDriftSign(layout.offsetSeconds)}</span>
             </span>
@@ -967,6 +972,7 @@ export function SupervisorPage() {
         plannedOvershootSeconds={data?.current_segment?.planned_overshoot_seconds ?? 0}
         boundaryDriftSeconds={data?.current_segment?.boundary_drift_seconds ?? 0}
         planInternalDriftSeconds={data?.plan_internal_drift_seconds ?? null}
+        driftRecoveryCapSeconds={data?.drift_recovery_cap_seconds ?? 300}
       />
 
       <DriftPanel
