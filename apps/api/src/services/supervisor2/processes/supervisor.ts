@@ -181,8 +181,29 @@ export class SupervisorProcess {
   private planActivatedAtMs = 0;
 
   // ── Guards to prevent duplicate requests ───────────────────────────────────
-  // Prevents double-emitting PLAN_FINALIZE_REQUESTED for the same plan.
+  // Prevents double-emitting PLAN_FINALIZE_REQUESTED for the same plan. Stays
+  // set once a plan has been asked to finalize — cleared only at activation
+  // (or the hard-boundary-retire branch) — deliberately NOT on completion.
+  //
+  // D79 regression, found and fixed same night: this field briefly also
+  // doubled as "is a finalize currently in flight" for Decision 78's
+  // activation guard, clearing on PLAN_FINALIZED completion. That broke ITS
+  // own de-dup purpose here — once cleared, maybeRequestFinalization/
+  // reconcileOccurrence saw the guard open again and re-requested finalize
+  // for the same already-finalized plan on the very next tick, which cleared
+  // again on completion, which re-opened the guard, forever — while
+  // handleExhaustedPlan's activation guard (checking the same field) saw it
+  // freshly re-set on every tick and deferred forever. Confirmed live:
+  // ACTIVATION_DEFERRED_FINALIZE_IN_FLIGHT fired continuously for ~18
+  // minutes of real dead air. The two concerns need separate fields with
+  // different clearing rules — see finalizeInFlightForPlanId below.
   private finalizationRequestedForPlanId: number | null = null;
+  // D78/D79: tracks "a finalize request is currently in flight for this plan
+  // id, hasn't resolved yet" — distinct from finalizationRequestedForPlanId
+  // above. Set wherever PLAN_FINALIZE_REQUESTED is emitted; cleared only in
+  // handlePlanFinalized when the matching PLAN_FINALIZED arrives. Used
+  // exclusively by handleExhaustedPlan's activation-race guard.
+  private finalizeInFlightForPlanId: number | null = null;
   // Prevents double-requesting a draft for the same next segment.
   private draftedForNextSegment: { segmentId: number; instanceMs: number } | null = null;
   // Set whenever resolveNextOccurrence resolves to a hard-start segment —
@@ -712,8 +733,10 @@ export class SupervisorProcess {
     // between the reassembly dropping its old items and adding the new
     // ones, it freezes an artificially-empty baseline for the rest of the
     // segment. Deferring here costs at most one 500ms tick: the next tick
-    // re-checks once handlePlanFinalized has cleared this flag.
-    if (this.finalizationRequestedForPlanId === this.nextPlanId) {
+    // re-checks once handlePlanFinalized has cleared this flag. Uses the
+    // dedicated finalizeInFlightForPlanId, NOT finalizationRequestedForPlanId
+    // — see the D79 regression note on that field's declaration.
+    if (this.finalizeInFlightForPlanId === this.nextPlanId) {
       this.logger?.info({
         process: 'supervisor', event: 'ACTIVATION_DEFERRED_FINALIZE_IN_FLIGHT',
         next_plan_id: this.nextPlanId,
@@ -1337,6 +1360,7 @@ export class SupervisorProcess {
     }
     this.planActivatedAtMs = nowMs;
     this.finalizationRequestedForPlanId = null;
+    this.finalizeInFlightForPlanId = null;
     this.draftedForNextSegment = null;
     this.activePlanHardBoundary = null;
     this.exhaustedPlanReconciledFor = null;
@@ -1712,6 +1736,7 @@ export class SupervisorProcess {
     if (valid && best.status === 'draft') {
       if (this.finalizationRequestedForPlanId !== best.id) {
         this.finalizationRequestedForPlanId = best.id;
+        this.finalizeInFlightForPlanId = best.id;
         const requestId = randomUUID();
         // adjusted_target_seconds must reflect what's actually planned, not a
         // placeholder — finalizePlan's reassembly trigger now also fires on
@@ -1854,6 +1879,7 @@ export class SupervisorProcess {
     if (isColdStartDraft && !this.coldStartFinalizeSent) {
       this.coldStartFinalizeSent = true;
       this.finalizationRequestedForPlanId = msg.plan_id;
+      this.finalizeInFlightForPlanId = msg.plan_id;
       const requestId = randomUUID();
       // See the matching comment in reconcileOccurrence: adjusted_target_seconds
       // must reflect the plan's actual content, not a 0 placeholder, now that
@@ -1882,14 +1908,13 @@ export class SupervisorProcess {
       plan_id: msg.plan_id,
     }, 'supervisor: plan finalized and ready');
 
-    // Decision 78: finalizationRequestedForPlanId is meant to mean "a
-    // finalize is currently in flight for this plan" — it must be cleared
-    // here, on genuine completion, or it stays set from request all the way
-    // through to activation and can't distinguish "still in flight" from
-    // "long done." Without this, handleExhaustedPlan's in-flight guard below
-    // would never re-check successfully.
-    if (this.finalizationRequestedForPlanId === msg.plan_id) {
-      this.finalizationRequestedForPlanId = null;
+    // D78/D79: finalizeInFlightForPlanId means "a finalize is currently in
+    // flight for this plan" — cleared here, on genuine completion. Distinct
+    // from finalizationRequestedForPlanId (the de-dup guard), which is
+    // deliberately NOT touched here — see that field's declaration for why
+    // conflating the two caused a real ~18-minute dead-air regression.
+    if (this.finalizeInFlightForPlanId === msg.plan_id) {
+      this.finalizeInFlightForPlanId = null;
     }
 
     if (this.activePlanId == null && this.nextPlanId === msg.plan_id) {
@@ -2118,6 +2143,7 @@ export class SupervisorProcess {
           this.nextPlanSegmentId = null;
           this.nextPlanScheduledEndMs = null;
           this.finalizationRequestedForPlanId = null;
+          this.finalizeInFlightForPlanId = null;
           this.draftedForNextSegment = null;
           await this.db.update(supervisorStateTable)
             .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
@@ -2176,6 +2202,7 @@ export class SupervisorProcess {
     const adjustedTarget = hardOverrideTarget ?? driftAdjustedTarget;
 
     this.finalizationRequestedForPlanId = this.nextPlanId;
+    this.finalizeInFlightForPlanId = this.nextPlanId;
     const requestId = randomUUID();
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_FINALIZE_REQUESTED',
