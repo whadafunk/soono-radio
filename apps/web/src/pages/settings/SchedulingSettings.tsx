@@ -8,6 +8,7 @@ export function SchedulingSettings() {
   const queryClient = useQueryClient();
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [localPct, setLocalPct] = useState(10);
+  const [localCap, setLocalCap] = useState(300);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['station-settings'],
@@ -17,6 +18,10 @@ export function SchedulingSettings() {
 
   useEffect(() => {
     if (data) setLocalPct(Math.round(data.promo_margin * 100));
+  }, [data]);
+
+  useEffect(() => {
+    if (data) setLocalCap(data.drift_recovery_cap_seconds);
   }, [data]);
 
   const mutation = useMutation({
@@ -142,10 +147,13 @@ export function SchedulingSettings() {
               min={30}
               max={1800}
               step={10}
-              value={data.drift_recovery_cap_seconds}
-              onChange={(e) => {
-                const v = Number(e.target.value);
-                if (Number.isFinite(v)) mutation.mutate({ drift_recovery_cap_seconds: v });
+              value={localCap}
+              onChange={(e) => setLocalCap(Number(e.target.value))}
+              onBlur={() => {
+                if (!Number.isFinite(localCap)) { setLocalCap(data.drift_recovery_cap_seconds); return; }
+                const clamped = Math.max(30, Math.min(1800, localCap));
+                setLocalCap(clamped);
+                if (clamped !== data.drift_recovery_cap_seconds) mutation.mutate({ drift_recovery_cap_seconds: clamped });
               }}
               className="w-28 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
             />
