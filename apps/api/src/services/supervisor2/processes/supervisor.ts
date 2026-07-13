@@ -114,6 +114,15 @@ const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offs
 const DEFAULT_DRIFT_RECOVERY_CAP_S = 300;     // fallback only — real value is station_settings.drift_recovery_cap_seconds
 const STILL_OPEN_GRACE_MS = 5_000;            // D77 — same grace window as tick()'s isStale check
 
+// ── Logging cadence (D79 — candidates for a future Logging settings tab) ──────
+// All throttled to fire well below the 500ms tick rate; none add new DB
+// queries — they only log state the tick loop already holds in memory or
+// already computed for its own decision this cycle.
+const SUPERVISOR_SNAPSHOT_INTERVAL_MS = 60_000;    // periodic in-memory state dump
+const STILL_OPEN_WAIT_LOG_THROTTLE_MS = 30_000;    // re-log cadence for a sustained "still open" wait
+const SILENCE_ALERT_REPEAT_MS = 60_000;            // re-alert cadence while a stall persists
+const SILENCE_ALERT_ESCALATE_S = 300;              // past this many seconds, escalate warn -> error
+
 // D71/D78 — cap how much drift one plan is asked to correct in one transition
 // (computeFirstPassTarget); the rest persists in boundaryDriftSeconds and gets
 // another chance next cycle. Operator-configurable (Scheduling settings) —
@@ -207,9 +216,23 @@ export class SupervisorProcess {
   // Tracks which part of tick() is executing for richer TICK_FAILED logs (B4).
   private tickOperation = 'init';
 
-  // ── Silence alert (Phase F) ──────────────────────────────────────────────────
+  // ── Silence alert (Phase F, D79 escalation) ──────────────────────────────────
   private lastPushSentMs = Date.now();
-  private silenceAlertFired = false;
+  // D79: replaces the old one-shot silenceAlertFired boolean — tracks when the
+  // alert last fired so it can re-fire (escalating) while the stall persists,
+  // instead of latching silent after the first occurrence.
+  private lastSilenceAlertMs: number | null = null;
+
+  // ── D79: throttled observability for the "still open, not exhausted" wait —
+  // this branch was previously completely silent, which made a 51-minute live
+  // stall indistinguishable from normal idling in the logs.
+  private stillOpenWaitSince: number | null = null;
+  private lastStillOpenLogMs = 0;
+
+  // ── D79: periodic in-memory state dump — no DB queries, just what's already
+  // held on this instance, so a sustained incident leaves a timeline instead
+  // of silence between "before" and "after".
+  private lastSupervisorSnapshotMs = 0;
 
   // ── Segment cache ───────────────────────────────────────────────────────────
   private cachedSegment: ResolvedSegment | null = null;
@@ -272,7 +295,7 @@ export class SupervisorProcess {
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PUSH_SENT' }>('PUSH_SENT', () => {
         this.lastPushSentMs = Date.now();
-        this.silenceAlertFired = false;
+        this.lastSilenceAlertMs = null;
       }),
     );
     // Reconcile requested from a route — either the operator's explicit
@@ -458,6 +481,26 @@ export class SupervisorProcess {
       this.lastHeartbeatWriteMs = nowMs;
     }
 
+    // D79: periodic in-memory state dump — no DB queries, just what this
+    // instance already holds. Runs regardless of which branch tick() takes
+    // below, so a sustained incident leaves a timeline instead of silence
+    // between a "before" and "after" snapshot.
+    this.tickOperation = 'supervisor_snapshot';
+    if (nowMs - this.lastSupervisorSnapshotMs >= SUPERVISOR_SNAPSHOT_INTERVAL_MS) {
+      this.lastSupervisorSnapshotMs = nowMs;
+      this.logger?.info({
+        process: 'supervisor', event: 'SUPERVISOR_SNAPSHOT',
+        active_plan_id: this.activePlanId,
+        next_plan_id: this.nextPlanId,
+        current_segment_id: this.currentSegmentId,
+        current_play_history_id: this.currentPlayHistoryId,
+        boundary_drift_seconds: this.boundaryDriftSeconds,
+        planned_overshoot_seconds: this.plannedOvershootSeconds,
+        intentional_offset_seconds: this.intentionalOffsetSeconds,
+        still_open_wait_seconds: this.stillOpenWaitSince != null ? Math.round((nowMs - this.stillOpenWaitSince) / 1000) : null,
+      }, 'supervisor: periodic state snapshot');
+    }
+
     this.tickOperation = 'segment_resolve';
     const resolved = await this.getCachedSegment(nowMs);
     if (!resolved) return;
@@ -509,15 +552,25 @@ export class SupervisorProcess {
     this.tickOperation = 'playhead_calc';
     const { expectedEndMs } = await this.computePlanPlayhead(nowMs);
 
-    // ── Silence alert (Phase F) ────────────────────────────────────────────
+    // ── Silence alert (Phase F, D79 escalation) ────────────────────────────
+    // Re-fires every SILENCE_ALERT_REPEAT_MS while the stall persists, instead
+    // of latching silent after the first occurrence — a sustained incident
+    // previously produced exactly one log line about it, then nothing.
+    // Escalates warn -> error past SILENCE_ALERT_ESCALATE_S.
     const stallSeconds = (nowMs - this.lastPushSentMs) / 1000;
-    if (stallSeconds > SILENCE_ALERT_THRESHOLD_S && !this.silenceAlertFired) {
-      this.silenceAlertFired = true;
-      this.logger?.warn({
+    if (
+      stallSeconds > SILENCE_ALERT_THRESHOLD_S &&
+      (this.lastSilenceAlertMs == null || nowMs - this.lastSilenceAlertMs >= SILENCE_ALERT_REPEAT_MS)
+    ) {
+      this.lastSilenceAlertMs = nowMs;
+      const level: 'warn' | 'error' = stallSeconds >= SILENCE_ALERT_ESCALATE_S ? 'error' : 'warn';
+      this.logger?.[level]({
         process: 'supervisor', event: 'SILENCE_ALERT',
         stall_duration_seconds: Math.floor(stallSeconds),
         active_plan_id: this.activePlanId,
-      }, 'supervisor: no push sent for >30s — station may be silent');
+        current_play_history_id: this.currentPlayHistoryId,
+        still_open_wait_seconds: this.stillOpenWaitSince != null ? Math.round((nowMs - this.stillOpenWaitSince) / 1000) : null,
+      }, `supervisor: no push sent for ${Math.floor(stallSeconds)}s — station may be silent`);
     }
 
     // ── Push timing ─────────────────────────────────────────────────────────
@@ -530,17 +583,43 @@ export class SupervisorProcess {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
-      } else if (await this.isCurrentPlayHistoryStillOpen(nowMs)) {
-        // computePlanPlayhead() found nothing 'playing' under activePlanId,
-        // but ground truth (current_play_history_id) says something IS still
-        // genuinely on air — it just belongs to a plan not yet promoted
-        // (activation follows real airtime now, not administrative timing).
-        // Not exhausted; don't force an advance.
+        this.resetStillOpenWait(nowMs);
       } else {
-        await this.handleExhaustedPlan(nowMs);
+        const stillOpenCheck = await this.isCurrentPlayHistoryStillOpen(nowMs);
+        if (stillOpenCheck.stillOpen) {
+          // computePlanPlayhead() found nothing 'playing' under activePlanId,
+          // but ground truth (current_play_history_id) says something IS
+          // still genuinely on air — it just belongs to a plan not yet
+          // promoted (activation follows real airtime now, not
+          // administrative timing). Not exhausted; don't force an advance.
+          // D79: this branch used to be completely silent — throttled entry/
+          // ongoing logging below so a sustained wait is visible in logs
+          // instead of indistinguishable from normal idling.
+          if (this.stillOpenWaitSince == null) {
+            this.stillOpenWaitSince = nowMs;
+            this.lastStillOpenLogMs = nowMs;
+            this.logger?.info({
+              process: 'supervisor', event: 'STILL_OPEN_WAIT', wait_phase: 'entry',
+              active_plan_id: this.activePlanId, current_play_history_id: this.currentPlayHistoryId,
+              expected_end_ms: stillOpenCheck.expectedEndMs, corroborated: stillOpenCheck.corroborated,
+            }, 'supervisor: active plan has nothing pending, but current play_history is still open — waiting');
+          } else if (nowMs - this.lastStillOpenLogMs >= STILL_OPEN_WAIT_LOG_THROTTLE_MS) {
+            this.lastStillOpenLogMs = nowMs;
+            this.logger?.info({
+              process: 'supervisor', event: 'STILL_OPEN_WAIT', wait_phase: 'ongoing',
+              active_plan_id: this.activePlanId, current_play_history_id: this.currentPlayHistoryId,
+              expected_end_ms: stillOpenCheck.expectedEndMs, corroborated: stillOpenCheck.corroborated,
+              waited_seconds: Math.round((nowMs - this.stillOpenWaitSince) / 1000),
+            }, 'supervisor: still waiting on current play_history to close');
+          }
+        } else {
+          this.resetStillOpenWait(nowMs);
+          await this.handleExhaustedPlan(nowMs);
+        }
       }
     } else if (expectedEndMs - nowMs <= this.PUSH_LEAD_MS) {
       this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
+      this.resetStillOpenWait(nowMs);
     }
 
     // ── Hard-start gate ────────────────────────────────────────────────────
@@ -821,6 +900,21 @@ export class SupervisorProcess {
     return row != null;
   }
 
+  // D79: logs an `exit` line with total wait time if a still-open wait was in
+  // progress, then clears the tracking fields. Called from every tick() path
+  // that isn't the "still open, waiting" branch itself, so the wait's end is
+  // as visible in logs as its start and continuation.
+  private resetStillOpenWait(nowMs: number): void {
+    if (this.stillOpenWaitSince != null) {
+      this.logger?.info({
+        process: 'supervisor', event: 'STILL_OPEN_WAIT', wait_phase: 'exit',
+        waited_seconds: Math.round((nowMs - this.stillOpenWaitSince) / 1000),
+      }, 'supervisor: still-open wait resolved');
+    }
+    this.stillOpenWaitSince = null;
+    this.lastStillOpenLogMs = 0;
+  }
+
   // Ground truth: is the play_history row we last confirmed on-air still
   // open (LiquidSoap hasn't reported it ending)? Independent of which plan
   // it belongs to — unlike computePlanPlayhead, which only sees items under
@@ -835,8 +929,16 @@ export class SupervisorProcess {
   // own expected end (started_at + planned_duration_seconds): once that's
   // clearly elapsed with nothing newer airing, treat it as no longer open
   // regardless of ended_at. Same grace window as tick()'s isStale check.
-  private async isCurrentPlayHistoryStillOpen(nowMs: number): Promise<boolean> {
-    if (this.currentPlayHistoryId == null) return false;
+  // D79: returns the diagnostic values behind the decision, not just the bare
+  // boolean — this branch produced zero log trace during a real ~51-minute
+  // live stall, making a stuck check indistinguishable from normal idling.
+  // The caller (tick()) uses these to log a throttled, informative wait.
+  private async isCurrentPlayHistoryStillOpen(nowMs: number): Promise<{
+    stillOpen: boolean;
+    expectedEndMs: number | null;
+    corroborated: boolean;
+  }> {
+    if (this.currentPlayHistoryId == null) return { stillOpen: false, expectedEndMs: null, corroborated: false };
     const [row] = await this.db
       .select({
         started_at: playHistoryTable.started_at,
@@ -847,13 +949,16 @@ export class SupervisorProcess {
       .leftJoin(planItemsTable, eq(planItemsTable.play_history_id, playHistoryTable.id))
       .where(eq(playHistoryTable.id, this.currentPlayHistoryId))
       .limit(1);
-    if (!row || row.ended_at != null) return false;
+    if (!row || row.ended_at != null) return { stillOpen: false, expectedEndMs: null, corroborated: false };
 
     const startedAtMs = row.started_at ? new Date(row.started_at).getTime() : null;
-    if (startedAtMs == null || row.planned_duration_seconds == null) return true; // can't corroborate — trust ground truth
+    if (startedAtMs == null || row.planned_duration_seconds == null) {
+      // Can't corroborate — trust ground truth.
+      return { stillOpen: true, expectedEndMs: null, corroborated: false };
+    }
 
     const expectedEndMs = startedAtMs + row.planned_duration_seconds * 1_000;
-    return expectedEndMs >= nowMs - STILL_OPEN_GRACE_MS;
+    return { stillOpen: expectedEndMs >= nowMs - STILL_OPEN_GRACE_MS, expectedEndMs, corroborated: true };
   }
 
   // Unlike hasPendingItems, also counts a currently-playing item — a plan

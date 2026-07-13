@@ -2191,6 +2191,24 @@ Separately, discussion of "does a universal, cause-agnostic drift-correction mec
 
 ---
 
+### Decision 79 — Enrich supervisor logging so silence and "stuck" stop looking identical
+
+**Status: implemented 2026-07-13, not yet deployed.**
+
+Live investigation of a real ~51-minute dead-air incident (plan 7797's last item, "Pose ton gun," confirmed on-air then never detected as exhausted) hit a wall: the deciding function, `isCurrentPlayHistoryStillOpen`, and `tick()`'s "not exhausted, no-op" branch that trusts it are both completely silent. Ruled out stale code, corrupted duration data, a crashed tick loop (`TICK_FAILED` never fired), and a `hasPendingItems` bug — but couldn't pin down why the still-open check kept returning `true` for 51 minutes, because there was zero log trace of what it was actually computing during that window. The incident only resolved via an unrelated container restart, not any self-healing logic.
+
+Explicit design constraint, since the concern raised was CPU/memory cost, not log volume: **no new DB queries anywhere in this decision.** Everything below either logs values a check was already computing to make its true/false decision, or values already sitting in memory as a side effect of normal operation (`this.activePlanId`, `this.boundaryDriftSeconds`, etc.). The only always-on-every-tick cost is a handful of cheap timestamp comparisons; the actual log writes are throttled to fire at most once every 30-60s.
+
+**Three changes, all in `supervisor.ts`:**
+
+1. **`isCurrentPlayHistoryStillOpen` returns diagnostics, not a bare boolean** — `{ stillOpen, expectedEndMs, corroborated }` from the same single query as before. `tick()` uses this to log a throttled `STILL_OPEN_WAIT` entry/ongoing/exit trio (new `stillOpenWaitSince`/`lastStillOpenLogMs` fields, same entry/ongoing/exit shape `queueFeeder.emitStall` already uses) — logged once when the wait begins, re-logged at most every `STILL_OPEN_WAIT_LOG_THROTTLE_MS` (30s) while it continues, and closed out via a new `resetStillOpenWait(nowMs)` helper called from every other branch of the push-timing block (normal push, early push, and right before `handleExhaustedPlan` runs).
+2. **Escalating silence alerts, not fire-once.** `silenceAlertFired` (a one-shot boolean, latched forever after the first alert) replaced with `lastSilenceAlertMs: number | null`, re-firing every `SILENCE_ALERT_REPEAT_MS` (60s) while the stall persists, escalating from `warn` to `error` past `SILENCE_ALERT_ESCALATE_S` (300s). Each repeat carries a fresh snapshot (`current_play_history_id`, `still_open_wait_seconds`) reusing state already in memory.
+3. **Periodic `SUPERVISOR_SNAPSHOT`** — every `SUPERVISOR_SNAPSHOT_INTERVAL_MS` (60s), regardless of which branch `tick()` takes that cycle, logs `active_plan_id`, `next_plan_id`, `current_segment_id`, `current_play_history_id`, `boundary_drift_seconds`, `planned_overshoot_seconds`, `intentional_offset_seconds`, and the current still-open wait duration if any — a flight recorder, not an alert. This is what was actually missing during the 51-minute gap: a timeline of what the system believed, not just a before/after.
+
+All four new cadence constants are grouped together and commented as candidates for a future Logging settings tab (explicitly deferred, long-term ask) — same shape as Decision 78's `drift_recovery_cap_seconds` migration (hardcoded constant → `station_settings`/`supervisor_config` column → settings field), so wiring them up later is mechanical.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
