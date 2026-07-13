@@ -127,6 +127,35 @@ export function SchedulingSettings() {
           )}
         </div>
       </div>
+
+      <div className="space-y-4">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Drift correction</p>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
+            Recovery cap per transition
+            <HelpTooltip text="How much drift a single segment's target is allowed to correct for in one transition. Whatever this leaves uncorrected persists and gets another chance at the next transition. Doesn't apply to stop-sets, which never drift-correct." />
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={30}
+              max={1800}
+              step={10}
+              value={data.drift_recovery_cap_seconds}
+              onChange={(e) => {
+                const v = Number(e.target.value);
+                if (Number.isFinite(v)) mutation.mutate({ drift_recovery_cap_seconds: v });
+              }}
+              className="w-28 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+            />
+            <span className="text-zinc-400 text-sm">seconds</span>
+          </div>
+          <p className="text-zinc-500 text-xs mt-1">
+            Default 300s (5 minutes). Raising this lets the supervisor absorb larger drift in a single plan, at the cost of a more noticeably shortened or extended segment when it does.
+          </p>
+        </div>
+      </div>
     </div>
   );
 }

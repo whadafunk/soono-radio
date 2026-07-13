@@ -999,6 +999,9 @@ export const StationSettingsSchema = z.object({
   // covers the current moment. Nullable only until configured — the
   // supervisor treats an unset default clock as a startup misconfiguration.
   default_clock_id: z.number().int().nullable(),
+  // How much drift a single plan's target is allowed to correct for in one
+  // transition — the rest carries over and gets another chance next cycle.
+  drift_recovery_cap_seconds: z.number().min(30).max(1800),
 });
 export type StationSettings = z.infer<typeof StationSettingsSchema>;
 

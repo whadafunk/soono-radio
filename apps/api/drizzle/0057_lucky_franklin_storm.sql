@@ -1,0 +1,1 @@
+ALTER TABLE `station_settings` ADD `drift_recovery_cap_seconds` real DEFAULT 300 NOT NULL;

@@ -14,7 +14,7 @@ import {
   shows,
 } from '../db/schema.js';
 import { resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment } from '../services/supervisor2/clockResolver.js';
-import { MAX_DRIFT_RECOVERY_PER_PLAN_S } from '../services/supervisor2/processes/supervisor.js';
+import { getDriftRecoveryCapSeconds } from '../services/supervisor2/processes/supervisor.js';
 
 export async function supervisorStatusRoutes(fastify: FastifyInstance) {
   fastify.get('/supervisor/v2/status', async (_request, reply) => {
@@ -27,6 +27,7 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
 
       const stateRow = state[0] ?? null;
       const activePlanId = stateRow?.active_plan_id ?? null;
+      const driftRecoveryCapSeconds = await getDriftRecoveryCapSeconds(db);
 
       // Resolve plan items for the active plan (joined with media for title)
       let resolvedPlanItems: Array<{
@@ -366,7 +367,7 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
         segment_config: segmentConfig,
         next_hard_segment: nextHardSegment,
         plan_internal_drift_seconds: planInternalDriftSeconds,
-        drift_recovery_cap_seconds: MAX_DRIFT_RECOVERY_PER_PLAN_S,
+        drift_recovery_cap_seconds: driftRecoveryCapSeconds,
       });
     } catch (err) {
       fastify.log.error(err, 'supervisor v2 status failed');

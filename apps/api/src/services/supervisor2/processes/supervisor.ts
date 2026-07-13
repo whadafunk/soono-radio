@@ -87,6 +87,7 @@ import {
   planItems as planItemsTable,
   plans as plansTable,
   playHistory as playHistoryTable,
+  stationSettings as stationSettingsTable,
   supervisorState as supervisorStateTable,
   type PlanItemContentType,
 } from '../../../db/schema.js';
@@ -110,8 +111,22 @@ const SILENCE_ALERT_THRESHOLD_S = 30;         // seconds of no pushes before WAR
 // build-time margin).
 const RUNWAY_WORTH_IT_THRESHOLD_S = 300;      // below this, not worth riding the current plan further
 const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offset dance entirely
-export const MAX_DRIFT_RECOVERY_PER_PLAN_S = 300;    // D71 — cap how much drift one plan is asked to correct; the rest persists in boundaryDriftSeconds for the next cycle
+const DEFAULT_DRIFT_RECOVERY_CAP_S = 300;     // fallback only — real value is station_settings.drift_recovery_cap_seconds
 const STILL_OPEN_GRACE_MS = 5_000;            // D77 — same grace window as tick()'s isStale check
+
+// D71/D78 — cap how much drift one plan is asked to correct in one transition
+// (computeFirstPassTarget); the rest persists in boundaryDriftSeconds and gets
+// another chance next cycle. Operator-configurable (Scheduling settings) —
+// read fresh each call, same pattern as spotBudget.ts's getPromoMargin. No
+// caching needed: a single indexed row lookup, called at most a few times a
+// minute from draft-request sites, never from the 500ms tick loop itself.
+export async function getDriftRecoveryCapSeconds(db: typeof defaultDb): Promise<number> {
+  const [row] = await db
+    .select({ drift_recovery_cap_seconds: stationSettingsTable.drift_recovery_cap_seconds })
+    .from(stationSettingsTable)
+    .where(eq(stationSettingsTable.id, 1));
+  return row?.drift_recovery_cap_seconds ?? DEFAULT_DRIFT_RECOVERY_CAP_S;
+}
 
 export class SupervisorProcess {
   private readonly unsubscribers: Array<() => void> = [];
@@ -1455,7 +1470,7 @@ export class SupervisorProcess {
 
     await this.reconcileOccurrence(next, nowMs, {
       allowActivate: cutoverAllowed,
-      targetDurationSeconds: this.computeFirstPassTarget(next.segment),
+      targetDurationSeconds: await this.computeFirstPassTarget(next.segment),
     });
   }
 
@@ -1799,7 +1814,7 @@ export class SupervisorProcess {
   // a 120s stop-set's target to the 30s floor, leaving it with one 16-second
   // spot. Protecting the floor doesn't lose the correction — it just carries
   // forward as accumulated drift for whatever flexible segment comes next.
-  private computeFirstPassTarget(segment: { type: string; duration_seconds: number }): number {
+  private async computeFirstPassTarget(segment: { type: string; duration_seconds: number }): Promise<number> {
     const nominal = segment.duration_seconds;
     if (segment.type === 'stop_set') {
       // D73: stop-sets no longer participate in drift correction at all —
@@ -1820,10 +1835,12 @@ export class SupervisorProcess {
     // facts at every activation regardless of what got applied here, so
     // whatever this cap leaves uncorrected persists and gets another chance
     // next cycle.
+    // D78: cap is now operator-configurable (Scheduling settings), read fresh.
+    const cap = await getDriftRecoveryCapSeconds(this.db);
     const rawCorrection = this.boundaryDriftSeconds + this.plannedOvershootSeconds;
     const appliedCorrection = Math.max(
-      -MAX_DRIFT_RECOVERY_PER_PLAN_S,
-      Math.min(MAX_DRIFT_RECOVERY_PER_PLAN_S, rawCorrection),
+      -cap,
+      Math.min(cap, rawCorrection),
     );
     // D78 (implements D45): record the correction actually applied, so it can
     // be carried into intentional_offset_seconds once this plan activates.
@@ -1918,7 +1935,7 @@ export class SupervisorProcess {
       return;
     }
 
-    const firstPassTarget = this.computeFirstPassTarget(next.segment);
+    const firstPassTarget = await this.computeFirstPassTarget(next.segment);
 
     // Store segment end time so activateNextPlan can compute boundary drift.
     this.nextPlanScheduledEndMs = next.segmentEndMs;

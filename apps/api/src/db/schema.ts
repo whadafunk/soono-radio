@@ -1084,6 +1084,10 @@ export const stationSettings = sqliteTable('station_settings', {
   // covers the current moment. Configuring it is a startup precondition —
   // there is no fallback beneath it. Decision 53.
   default_clock_id: integer('default_clock_id').references(() => clocks.id, { onDelete: 'set null' }),
+  // Decision 71/78: how much drift a single plan's target is allowed to
+  // correct for in one transition (computeFirstPassTarget). The rest
+  // persists in boundaryDriftSeconds and gets another chance next cycle.
+  drift_recovery_cap_seconds: real('drift_recovery_cap_seconds').notNull().default(300),
 });
 
 export type StationSettings = typeof stationSettings.$inferSelect;
