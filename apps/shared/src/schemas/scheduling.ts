@@ -1002,6 +1002,10 @@ export const StationSettingsSchema = z.object({
   // How much drift a single plan's target is allowed to correct for in one
   // transition — the rest carries over and gets another chance next cycle.
   drift_recovery_cap_seconds: z.number().min(30).max(1800),
+  // How often the supervisor's reality check (compare LiquidSoap's actual
+  // playback state against the resolved playhead) runs. The check itself is
+  // near-free, so this is a dead-air-detection tradeoff, not a resource one.
+  reality_check_interval_seconds: z.number().min(1).max(10),
 });
 export type StationSettings = z.infer<typeof StationSettingsSchema>;
 

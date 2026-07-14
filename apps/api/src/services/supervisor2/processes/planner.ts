@@ -348,6 +348,19 @@ export class PlannerProcess {
     if (!plan) {
       throw new Error(`planner.finalizePlan: plan ${planId} not found`);
     }
+    // Decision 84: idempotency at the target, not a Supervisor-side guard
+    // field. A finalize request for a plan that's already past 'draft' is a
+    // safe no-op — it's either already finalized (a duplicate/late request)
+    // or has moved further (Transitioning/active/completed/Invalid), and
+    // re-running reassembly against a plan that may already have 'playing'
+    // items would be actively wrong, not just redundant.
+    if (plan.status !== 'draft') {
+      this.logger?.info(
+        { event: 'PLAN_FINALIZE_NOOP', plan_id: planId, status: plan.status },
+        'planner: finalize requested for a plan no longer in draft — no-op',
+      );
+      return;
+    }
     const [segment] = await this.db
       .select()
       .from(clockSegments)

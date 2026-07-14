@@ -9,6 +9,7 @@ export function SchedulingSettings() {
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [localPct, setLocalPct] = useState(10);
   const [localCap, setLocalCap] = useState(300);
+  const [localRealityCheckInterval, setLocalRealityCheckInterval] = useState(3);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['station-settings'],
@@ -22,6 +23,10 @@ export function SchedulingSettings() {
 
   useEffect(() => {
     if (data) setLocalCap(data.drift_recovery_cap_seconds);
+  }, [data]);
+
+  useEffect(() => {
+    if (data) setLocalRealityCheckInterval(data.reality_check_interval_seconds);
   }, [data]);
 
   const mutation = useMutation({
@@ -161,6 +166,38 @@ export function SchedulingSettings() {
           </div>
           <p className="text-zinc-500 text-xs mt-1">
             Default 300s (5 minutes). Raising this lets the supervisor absorb larger drift in a single plan, at the cost of a more noticeably shortened or extended segment when it does.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Reality check</p>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
+            Check interval
+            <HelpTooltip text="How often the supervisor compares LiquidSoap's actual playback state against what it expects, to catch a silent failure (LiquidSoap falling to silence, a lost message) before the listener notices. The check itself is nearly free, so lower is generally safer — this isn't a resource tradeoff." />
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              max={10}
+              step={1}
+              value={localRealityCheckInterval}
+              onChange={(e) => setLocalRealityCheckInterval(Number(e.target.value))}
+              onBlur={() => {
+                if (!Number.isFinite(localRealityCheckInterval)) { setLocalRealityCheckInterval(data.reality_check_interval_seconds); return; }
+                const clamped = Math.max(1, Math.min(10, localRealityCheckInterval));
+                setLocalRealityCheckInterval(clamped);
+                if (clamped !== data.reality_check_interval_seconds) mutation.mutate({ reality_check_interval_seconds: clamped });
+              }}
+              className="w-28 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+            />
+            <span className="text-zinc-400 text-sm">seconds</span>
+          </div>
+          <p className="text-zinc-500 text-xs mt-1">
+            Default 3s. Normal operation doesn't depend on this check at all — it's a safety net, so shorter intervals catch problems faster with no real downside.
           </p>
         </div>
       </div>

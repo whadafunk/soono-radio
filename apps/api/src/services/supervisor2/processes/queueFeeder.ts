@@ -127,25 +127,34 @@ export class QueueFeederProcess {
     }
 
     // Queue-depth cap: at most 1 playing + 1 pre-queued, in the PHYSICAL
-    // LiquidSoap queue — so this must count across active AND next plan
-    // combined, not just whichever one we're about to push from. Otherwise,
-    // once the active plan runs dry, every tick falls into the next-plan
-    // fallback below with no cap at all and drains the whole plan into the
-    // queue in one burst.
-    const planIdsToCap = [activePlanId, nextPlanId].filter((id): id is number => id != null);
-    if (planIdsToCap.length > 0) {
-      const [countRow] = await this.db
-        .select({ c: count() })
-        .from(planItemsTable)
-        .where(and(inArray(planItemsTable.plan_id, planIdsToCap), eq(planItemsTable.status, 'playing')));
-      const playingCount = countRow?.c ?? 0;
-      if (playingCount >= 2) {
-        this.logger?.debug(
-          { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'queue_full', playing_count: playingCount, source },
-          'queueFeeder: queue full (2 items in playing state), skipping push',
-        );
-        return;
+    // LiquidSoap queue. Decision 88: ask LiquidSoap's real queue via
+    // /now-playing instead of counting our own plan_items.status='playing'
+    // rows — that count is a shadow belief (items flip to 'playing' at push
+    // time in our DB, not at LS's actual on-air moment) that can silently
+    // desync from what's really queued. Falls back to the DB count only if
+    // the harbor call itself fails (e.g. a transient network hiccup) — this
+    // is a hot path and shouldn't hard-fail the whole push on one bad call.
+    let physicalQueueDepth: number | null = null;
+    try {
+      const nowPlaying = await HarborClient.getNowPlaying();
+      physicalQueueDepth = nowPlaying.queue_depth + (nowPlaying.current != null ? 1 : 0);
+    } catch (err) {
+      this.logger?.warn({ process: 'queueFeeder', event: 'NOW_PLAYING_CHECK_FAILED', err: String(err) }, 'queueFeeder: /now-playing check failed, falling back to DB count for queue cap');
+      const planIdsToCap = [activePlanId, nextPlanId].filter((id): id is number => id != null);
+      if (planIdsToCap.length > 0) {
+        const [countRow] = await this.db
+          .select({ c: count() })
+          .from(planItemsTable)
+          .where(and(inArray(planItemsTable.plan_id, planIdsToCap), eq(planItemsTable.status, 'playing')));
+        physicalQueueDepth = countRow?.c ?? 0;
       }
+    }
+    if (physicalQueueDepth != null && physicalQueueDepth >= 2) {
+      this.logger?.debug(
+        { process: 'queueFeeder', event: 'PUSH_SKIPPED', reason: 'queue_full', physical_queue_depth: physicalQueueDepth, source },
+        'queueFeeder: queue full, skipping push',
+      );
+      return;
     }
 
     // Prefer the active plan; fall back to the next (locked-in, not yet

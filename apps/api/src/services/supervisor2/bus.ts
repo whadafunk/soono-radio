@@ -27,6 +27,10 @@ export type BusMessage =
       play_history_id: number | null;
       // Any additional LS metadata fields (title, artist, etc.).
       metadata: Record<string, string>;
+      // LiquidSoap's OS process id at the moment this fired (Decision 88).
+      // A value differing from supervisor_state.ls_pid is unambiguous,
+      // retroactive proof LiquidSoap restarted since the last-seen event.
+      ls_pid: number | null;
     }
   | {
       type: 'LS_TRACK_ENDING';
@@ -37,6 +41,8 @@ export type BusMessage =
       // play_history_id annotation on the ending track.
       play_history_id: number | null;
       metadata: Record<string, string>;
+      // See LS_TRACK_STARTED.ls_pid — Decision 88.
+      ls_pid: number | null;
     }
   // ─── Phase 2: Planner ↔ content process protocol (Decision 11) ──────────────
   //

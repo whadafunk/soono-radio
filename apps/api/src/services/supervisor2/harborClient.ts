@@ -42,6 +42,18 @@ export interface SkipResponse {
 
 export interface LiveStatusResponse {
   connected: boolean;
+  // LiquidSoap's OS process id at response time (Decision 88).
+  ls_pid: number;
+}
+
+export interface NowPlayingResponse {
+  // Null and "queue has items" are independently true (Decision 82/88) — a
+  // request can sit queued while LS is still resolving it, so this is never
+  // inferred from queue_depth.
+  current: { request_id: string; remaining_seconds: number; elapsed_seconds: number } | null;
+  queue_depth: number;
+  queue_ids: string[];
+  ls_pid: number;
 }
 
 export const HarborClient = {
@@ -78,5 +90,15 @@ export const HarborClient = {
       throw new Error(`Harbor /live-status failed: ${res.status} ${await res.text()}`);
     }
     return res.json() as Promise<LiveStatusResponse>;
+  },
+
+  // Decision 82/88/89: ground truth for the reality-check — what's actually
+  // playing and queued right now, plus LiquidSoap's pid for restart detection.
+  async getNowPlaying(): Promise<NowPlayingResponse> {
+    const res = await harborFetch('/now-playing', { method: 'GET' });
+    if (!res.ok) {
+      throw new Error(`Harbor /now-playing failed: ${res.status} ${await res.text()}`);
+    }
+    return res.json() as Promise<NowPlayingResponse>;
   },
 };

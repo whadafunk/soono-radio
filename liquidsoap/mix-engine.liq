@@ -22,12 +22,22 @@ live = input.harbor(
   password="cmonica"
 )
 
+# Decision 88: LiquidSoap's OS process id, captured once at script load.
+# Stamped on every webhook payload and every query response below, rather
+# than depending on one dedicated "just booted" notification — a single boot
+# message could itself be lost in the exact startup race it's meant to catch.
+# The Supervisor remembers the last pid it saw; a different one arriving on
+# any later event is unambiguous, retroactive proof LiquidSoap restarted.
+let ls_pid = process.pid()
+
 # ── Supervisor V2 — Harbor HTTP control endpoints ────────────────────────────
 #
 # POST /push   — push an annotated URI onto the queue; returns {ok, request_id}
 # GET  /queue  — return current queue depth and request IDs
 # POST /skip   — skip the currently playing track
 # GET  /live-status — return whether the live harbor input is connected
+# GET  /now-playing — return what's really playing/queued right now (Decision 82/89's
+#                     reality check reads this — never trust stored timestamps alone)
 #
 # All handlers run inside the LS audio thread; outbound HTTP (webhooks) MUST
 # use thread.run to avoid blocking the audio pipeline.
@@ -83,7 +93,35 @@ harbor.http.register(
   fun (_req, res) ->
     begin
       connected = null.defined(live.connected_client())
-      res.json({connected = connected})
+      res.json({connected = connected, ls_pid = ls_pid})
+    end
+)
+
+# "current playing" and "queue has items" are two independently-true facts,
+# not one derived from the other — an item can sit queued while LS is still
+# resolving it, so both are reported separately rather than assuming queue
+# depth implies something is actually streaming right now.
+harbor.http.register(
+  port=8005,
+  method="GET",
+  "/now-playing",
+  fun (_req, res) ->
+    begin
+      cur = queue.current()
+      ids = list.map(fun (r) -> "#{request.id(r)}", queue.queue())
+      depth = list.length(ids)
+      current_json = if null.defined(cur) then
+        r = null.get(cur)
+        {request_id = "#{request.id(r)}", remaining_seconds = queue.remaining(), elapsed_seconds = queue.elapsed()}
+      else
+        null()
+      end
+      res.json({
+        current = current_json,
+        queue_depth = depth,
+        queue_ids = ids,
+        ls_pid = ls_pid
+      })
     end
 )
 

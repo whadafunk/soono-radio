@@ -407,6 +407,13 @@
       "when": 1783922981151,
       "tag": "0057_lucky_franklin_storm",
       "breakpoints": true
+    },
+    {
+      "idx": 58,
+      "version": "6",
+      "when": 1784062423499,
+      "tag": "0058_secret_rocket_raccoon",
+      "breakpoints": true
     }
   ]
 }

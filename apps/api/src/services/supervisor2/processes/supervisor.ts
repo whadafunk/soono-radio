@@ -92,7 +92,7 @@ import {
   type PlanItemContentType,
 } from '../../../db/schema.js';
 import { bus, type BusMessage } from '../bus.js';
-import { HarborClient } from '../harborClient.js';
+import { HarborClient, type NowPlayingResponse } from '../harborClient.js';
 import { computeResolutionIdentity, readStartPolicy, resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment, segmentBoundsWithinClock, type HardSegmentLookahead, type ResolvedSegment } from '../clockResolver.js';
 import {
   abortRow,
@@ -100,6 +100,8 @@ import {
   closeOpenRowsBefore,
   stampStarted,
 } from '../playHistoryService.js';
+import { resolvePlayhead } from '../playhead.js';
+import { computeDriftAdjustedTarget } from '../requestPlan.js';
 
 // ── Thresholds ────────────────────────────────────────────────────────────────
 const SECOND_PASS_LEAD_TIME_S = 30;           // T-30s finalization gate (D31)
@@ -135,6 +137,19 @@ export async function getDriftRecoveryCapSeconds(db: typeof defaultDb): Promise<
     .from(stationSettingsTable)
     .where(eq(stationSettingsTable.id, 1));
   return row?.drift_recovery_cap_seconds ?? DEFAULT_DRIFT_RECOVERY_CAP_S;
+}
+
+// Decision 89: how often the collapsed tick loop's reality check runs.
+// Read fresh each call — same no-caching rationale as the cap above, and
+// this is now the ONLY thing gating tick()'s cadence, so it's called at most
+// once every few seconds, never in a hot loop.
+const DEFAULT_REALITY_CHECK_INTERVAL_S = 3;
+export async function getRealityCheckIntervalSeconds(db: typeof defaultDb): Promise<number> {
+  const [row] = await db
+    .select({ reality_check_interval_seconds: stationSettingsTable.reality_check_interval_seconds })
+    .from(stationSettingsTable)
+    .where(eq(stationSettingsTable.id, 1));
+  return row?.reality_check_interval_seconds ?? DEFAULT_REALITY_CHECK_INTERVAL_S;
 }
 
 export class SupervisorProcess {
@@ -204,8 +219,6 @@ export class SupervisorProcess {
   // handlePlanFinalized when the matching PLAN_FINALIZED arrives. Used
   // exclusively by handleExhaustedPlan's activation-race guard.
   private finalizeInFlightForPlanId: number | null = null;
-  // Prevents double-requesting a draft for the same next segment.
-  private draftedForNextSegment: { segmentId: number; instanceMs: number } | null = null;
   // Set whenever resolveNextOccurrence resolves to a hard-start segment —
   // either because it genuinely is the immediate next one, or because there
   // wasn't enough runway to justify drafting the intervening segments
@@ -224,6 +237,20 @@ export class SupervisorProcess {
   // waiting for its async draft/finalize to land — keyed by the plan id that
   // was exhausted, not segment/instance (this fires on a plan, not a segment).
   private exhaustedPlanReconciledFor: number | null = null;
+
+  // Decision 84: when nextPlanId's first item gets pushed while it's still
+  // 'finalized' (the queue-ahead nudge, D44/D60), it's promoted to
+  // 'Transitioning' and this is stamped. If it never gets ground-truth
+  // confirmed within SILENCE_ALERT_THRESHOLD_S, tick() marks it 'Invalid'
+  // (reason 'transition_failed') and requests a fresh plan for that segment
+  // — descriptive state for a real condition, not a request-dedup guard.
+  private nextPlanTransitioningSinceMs: number | null = null;
+
+  // Decision 88: last LiquidSoap OS process id seen on any webhook/query
+  // response. A different pid arriving later is unambiguous, retroactive
+  // proof LS restarted underneath a still-running Supervisor — distinct from
+  // a Supervisor-process restart (Decision 59/84 cover that case).
+  private lastSeenLsPid: number | null = null;
 
   // ── Other state ─────────────────────────────────────────────────────────────
   private currentPlayHistoryId: number | null = null;
@@ -255,6 +282,11 @@ export class SupervisorProcess {
   // of silence between "before" and "after".
   private lastSupervisorSnapshotMs = 0;
 
+  // Decision 89: gates the collapsed reality-check-and-dispatch — the only
+  // remaining throttle in tick() itself. Configurable via
+  // station_settings.reality_check_interval_seconds (default 3s).
+  private lastRealityCheckMs = 0;
+
   // ── Segment cache ───────────────────────────────────────────────────────────
   private cachedSegment: ResolvedSegment | null = null;
   private cachedSegmentValidUntilMs = 0;
@@ -276,6 +308,22 @@ export class SupervisorProcess {
         void this.handleTrackStarted(msg).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'LS_TRACK_STARTED' }, 'supervisor: LS_TRACK_STARTED handler failed');
         });
+      }),
+    );
+    // Decision 89: previously only queueFeeder subscribed to this event. The
+    // Supervisor now also uses it as a second event-driven trigger for the
+    // hard-start fill/trim gate (alongside LS_TRACK_STARTED) and the pid
+    // restart check, giving both roughly twice-per-track granularity instead
+    // of once-per-track — bus.on supports multiple independent subscribers
+    // per event, so this doesn't affect queueFeeder's own handling.
+    this.unsubscribers.push(
+      this._bus.on<BusMessage & { type: 'LS_TRACK_ENDING' }>('LS_TRACK_ENDING', (msg) => {
+        const nowMs = Date.now();
+        void this.checkLsPid(msg.ls_pid, nowMs)
+          .then(() => this.maybeHandleHardStartGate(nowMs))
+          .catch((err) => {
+            this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'LS_TRACK_ENDING' }, 'supervisor: LS_TRACK_ENDING handler failed');
+          });
       }),
     );
     this.unsubscribers.push(
@@ -314,7 +362,10 @@ export class SupervisorProcess {
     );
     // Track last push for silence alerting (Phase F).
     this.unsubscribers.push(
-      this._bus.on<BusMessage & { type: 'PUSH_SENT' }>('PUSH_SENT', () => {
+      this._bus.on<BusMessage & { type: 'PUSH_SENT' }>('PUSH_SENT', (msg) => {
+        void this.maybePromoteToTransitioning(msg).catch((err) => {
+          this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PUSH_SENT_TRANSITIONING' }, 'supervisor: transitioning-promotion check failed');
+        });
         this.lastPushSentMs = Date.now();
         this.lastSilenceAlertMs = null;
       }),
@@ -401,6 +452,7 @@ export class SupervisorProcess {
       this.plannedOvershootSeconds = row.planned_overshoot_seconds ?? 0;
       this.intentionalOffsetSeconds = row.intentional_offset_seconds ?? 0;
       this.isPaused = row.paused ?? false;
+      this.lastSeenLsPid = row.ls_pid ?? null;
 
       if (this.activePlanId != null) {
         await this.reconstructOrResetPlayingItem(this.activePlanId, row.current_play_history_id ?? null, row.last_heartbeat_at ?? null);
@@ -481,6 +533,25 @@ export class SupervisorProcess {
       .update(planItemsTable)
       .set({ status: 'pending' })
       .where(and(eq(planItemsTable.plan_id, activePlanId), eq(planItemsTable.status, 'playing')));
+
+    // Decision 84: mark the plan Invalid only when there was genuinely
+    // something in question — a 'playing' item existed but couldn't be
+    // confidently reconstructed (mismatched pointer, missing heartbeat,
+    // implausible timestamp, or more than one 'playing' row). When nothing
+    // was marked 'playing' at all, the blind reset above is a no-op and
+    // there's nothing actually ambiguous about this restart — the plan
+    // itself is presumably still fine, just with no in-flight item to
+    // restore.
+    if (playingItems.length >= 1) {
+      await this.db
+        .update(plansTable)
+        .set({ status: 'Invalid', reason: 'restart_ambiguous' })
+        .where(and(eq(plansTable.id, activePlanId), inArray(plansTable.status, ['active', 'Transitioning'])));
+      this.logger?.warn({
+        process: 'supervisor', event: 'PLAN_INVALIDATED',
+        plan_id: activePlanId, reason: 'restart_ambiguous', playing_items_found: playingItems.length,
+      }, 'supervisor: restart could not confidently reconstruct playing state — marked active plan Invalid');
+    }
   }
 
   // ─── Clock loop ─────────────────────────────────────────────────────────────
@@ -522,6 +593,44 @@ export class SupervisorProcess {
       }, 'supervisor: periodic state snapshot');
     }
 
+    // Decision 89: the tick loop's only remaining periodic decision work —
+    // one reality check, throttled to the configurable interval (default
+    // 3s). Everything that used to be independently polled below this line
+    // — T-30s finalize, hard-start fill/trim, cold-start/orphan/LS-restart
+    // recovery — is now either event-triggered (track-started/ending, see
+    // handleTrackStarted and the LS_TRACK_ENDING subscription in start())
+    // or a branch of this single check, rather than a dozen separately-
+    // gated concerns each re-evaluated every 500ms regardless of whether
+    // anything changed.
+    this.tickOperation = 'reality_check_gate';
+    const intervalSeconds = await getRealityCheckIntervalSeconds(this.db);
+    if (nowMs - this.lastRealityCheckMs < intervalSeconds * 1_000) return;
+    this.lastRealityCheckMs = nowMs;
+
+    await this.realityCheckAndDispatch(nowMs);
+  }
+
+  // Decision 82/89 — queries LiquidSoap's actual playback state (not just
+  // stored timestamps), cross-checks it against the tracked pid for restart
+  // detection, then dispatches to whichever of the existing, already-correct
+  // recovery mechanisms is warranted: cold-start/orphan recovery, the T-30s
+  // finalize gate, the ordinary push/exhaustion decision, or the hard-start
+  // fill/trim gate. This function restructures WHEN those mechanisms run,
+  // not what they do internally — each one is the same logic that's already
+  // been hardened through real incidents (D59-D80), just no longer forced
+  // to re-evaluate unconditionally every 500ms regardless of relevance.
+  private async realityCheckAndDispatch(nowMs: number): Promise<void> {
+    this.tickOperation = 'now_playing_check';
+    let nowPlaying: NowPlayingResponse | null = null;
+    try {
+      nowPlaying = await HarborClient.getNowPlaying();
+    } catch (err) {
+      this.logger?.warn({ err, process: 'supervisor', event: 'NOW_PLAYING_CHECK_FAILED' }, 'supervisor: /now-playing check failed this cycle — proceeding on stored state alone');
+    }
+    if (nowPlaying) {
+      await this.checkLsPid(nowPlaying.ls_pid, nowMs);
+    }
+
     this.tickOperation = 'segment_resolve';
     const resolved = await this.getCachedSegment(nowMs);
     if (!resolved) return;
@@ -529,14 +638,10 @@ export class SupervisorProcess {
     // ── Cold start ───────────────────────────────────────────────────────────
     // No active plan and no next plan building — the only case here with no
     // playhead to be relative to, so wall-clock resolution is the right
-    // source. Runs unconditionally each tick (guarded by its own
-    // coldStartFinalizeSent flag) rather than nested inside a wall-clock
-    // segment-change check — that check used to also drive ordinary segment
-    // transitions, which is exactly what let a nominal wall-clock jump skip
-    // past a drafted segment under drift (see supervisor-plan-activation-
-    // timing-redesign memory, 2026-07-11). Ordinary transitions are now
-    // driven from activatePlanById, anchored to the plan that actually
-    // activated, not to Date.now().
+    // source. Guarded by coldStartFinalizeSent (kept — see Phase 4's finding
+    // that this guards the same risky immediate-finalize path as
+    // finalizationRequestedForPlanId/finalizeInFlightForPlanId, not a
+    // request-dedup pattern safely replaceable by a DB check alone).
     this.tickOperation = 'cold_start';
     if (this.activePlanId == null && this.nextPlanId == null && !this.coldStartFinalizeSent) {
       await this.requestColdStartDraft(resolved, nowMs);
@@ -544,6 +649,9 @@ export class SupervisorProcess {
     }
 
     // ── T-30s finalization gate (D31) ──────────────────────────────────────
+    // Runs on the reality-check cadence now rather than raw 500ms — still
+    // several evaluations within the 30s window at the default 3s interval,
+    // and maybeRequestFinalization's own guards prevent re-firing regardless.
     this.tickOperation = 'finalization_check';
     await this.maybeRequestFinalization(nowMs);
 
@@ -569,9 +677,20 @@ export class SupervisorProcess {
 
     if (this.activePlanId == null) return;
 
-    // ── Plan playhead (for push timing) ───────────────────────────────────
+    // ── Plan playhead (for push timing) ─────────────────────────────────────
+    // Decision 83/89: resolvePlayhead is now the source of truth — one
+    // on-demand function instead of the separate plan-playhead accounting
+    // that used to live only in computePlanPlayhead (removed; its logic is
+    // this module's consumedSecondsForPlan now).
     this.tickOperation = 'playhead_calc';
-    const { expectedEndMs } = await this.computePlanPlayhead(nowMs);
+    const playhead = await resolvePlayhead(nowMs, this.db);
+    const expectedEndMs = playhead.expectedSegmentEndMs;
+
+    // Decision 84: a plan stuck in Transitioning too long gets marked Invalid
+    // and a fresh plan gets requested for its segment. Cheap check (in-memory
+    // timestamp comparison) that only does DB work once the threshold's hit.
+    this.tickOperation = 'transitioning_check';
+    await this.maybeInvalidateStuckTransition(nowMs);
 
     // ── Silence alert (Phase F, D79 escalation) ────────────────────────────
     // Re-fires every SILENCE_ALERT_REPEAT_MS while the stall persists, instead
@@ -599,7 +718,13 @@ export class SupervisorProcess {
     // Treat a stale 'playing' item (expectedEndMs far in the past) as null so
     // the exhausted-plan path fires instead of endlessly re-emitting pushes
     // that the queue feeder can't act on (no pending items remain).
-    const isStale = expectedEndMs != null && expectedEndMs < nowMs - 5_000;
+    // Decision 89: also treat LiquidSoap genuinely reporting nothing playing
+    // AND nothing queued as staleness — real ground truth from the reality
+    // check, not just stored-timestamp math, catching the class of failure
+    // (LS silently falling to blank()) that timestamp comparison alone can
+    // miss (D77).
+    const realSilence = nowPlaying != null && nowPlaying.current == null && nowPlaying.queue_depth === 0;
+    const isStale = (expectedEndMs != null && expectedEndMs < nowMs - 5_000) || realSilence;
     if (expectedEndMs == null || isStale) {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
@@ -608,11 +733,11 @@ export class SupervisorProcess {
       } else {
         const stillOpenCheck = await this.isCurrentPlayHistoryStillOpen(nowMs);
         if (stillOpenCheck.stillOpen) {
-          // computePlanPlayhead() found nothing 'playing' under activePlanId,
-          // but ground truth (current_play_history_id) says something IS
-          // still genuinely on air — it just belongs to a plan not yet
-          // promoted (activation follows real airtime now, not
-          // administrative timing). Not exhausted; don't force an advance.
+          // resolvePlayhead found nothing 'playing' under activePlanId, but
+          // ground truth (current_play_history_id) says something IS still
+          // genuinely on air — it just belongs to a plan not yet promoted
+          // (activation follows real airtime now, not administrative
+          // timing). Not exhausted; don't force an advance.
           // D79: this branch used to be completely silent — throttled entry/
           // ongoing logging below so a sustained wait is visible in logs
           // instead of indistinguishable from normal idling.
@@ -644,6 +769,11 @@ export class SupervisorProcess {
     }
 
     // ── Hard-start gate ────────────────────────────────────────────────────
+    // Decision 89: the primary trigger is now track-started/track-ending
+    // events (see handleTrackStarted and the LS_TRACK_ENDING subscription in
+    // start()) for prompt action right when new information exists. This is
+    // the coarse backstop at the reality-check cadence, catching anything
+    // between track boundaries.
     this.tickOperation = 'hard_start_gate';
     await this.maybeHandleHardStartGate(nowMs);
   }
@@ -873,46 +1003,10 @@ export class SupervisorProcess {
   }
 
   // ─── Plan playhead ───────────────────────────────────────────────────────────
-
-  private async computePlanPlayhead(nowMs: number): Promise<{
-    consumedSeconds: number;
-    expectedEndMs: number | null;
-  }> {
-    if (this.activePlanId == null) return { consumedSeconds: 0, expectedEndMs: null };
-
-    const items = await this.db
-      .select()
-      .from(planItemsTable)
-      .where(eq(planItemsTable.plan_id, this.activePlanId))
-      .orderBy(asc(planItemsTable.position));
-
-    const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped']);
-    let consumedSeconds = 0;
-    let expectedEndMs: number | null = null;
-
-    for (const item of items) {
-      if (terminalStatuses.has(item.status)) {
-        consumedSeconds += item.planned_duration_seconds ?? 0;
-      } else if (item.status === 'playing') {
-        let startedAtMs: number;
-        if (item.play_history_id != null) {
-          const [ph] = await this.db
-            .select({ started_at: playHistoryTable.started_at })
-            .from(playHistoryTable)
-            .where(eq(playHistoryTable.id, item.play_history_id));
-          startedAtMs = ph?.started_at ? new Date(ph.started_at).getTime() : nowMs - 5_000;
-        } else {
-          startedAtMs = nowMs - 5_000;
-        }
-        consumedSeconds += (nowMs - startedAtMs) / 1000;
-        expectedEndMs = startedAtMs + (item.planned_duration_seconds ?? 0) * 1_000;
-        break;
-      } else {
-        break;
-      }
-    }
-    return { consumedSeconds, expectedEndMs };
-  }
+  // Decision 83/89: computePlanPlayhead used to live here — its accounting
+  // (sum terminal item durations, add elapsed time in the 'playing' item) is
+  // now playhead.ts's consumedSecondsForPlan, the one implementation, used
+  // via resolvePlayhead() in realityCheckAndDispatch.
 
   private async hasPendingItems(planId: number): Promise<boolean> {
     const [row] = await this.db
@@ -1166,7 +1260,36 @@ export class SupervisorProcess {
 
   // ─── LS_TRACK_STARTED ───────────────────────────────────────────────────────
 
+  // Decision 88: an incoming pid different from the last one we saw is
+  // unambiguous, retroactive proof LiquidSoap restarted since the last
+  // ordinary event — no dedicated "just booted" webhook needed, since a
+  // single boot notification could itself be lost in exactly the startup
+  // race this is meant to catch. By the time this fires (a real track-
+  // started event), something is already flowing again — this is about
+  // correctness/observability (log it, re-establish ground truth cleanly
+  // via the same reconcile() path used everywhere else), not an emergency
+  // push, since a track genuinely just started.
+  private async checkLsPid(pid: number | null, nowMs: number): Promise<void> {
+    if (pid == null) return;
+    if (this.lastSeenLsPid != null && pid !== this.lastSeenLsPid) {
+      this.logger?.warn({
+        process: 'supervisor', event: 'LS_RESTART_DETECTED',
+        previous_pid: this.lastSeenLsPid, new_pid: pid,
+      }, 'supervisor: LiquidSoap pid changed — it restarted underneath us; re-establishing ground truth');
+      this.lastSeenLsPid = pid;
+      await this.db.update(supervisorStateTable).set({ ls_pid: pid }).where(eq(supervisorStateTable.id, 1));
+      await this.reconcile(nowMs, 'ls_restart_detected');
+      return;
+    }
+    if (this.lastSeenLsPid !== pid) {
+      this.lastSeenLsPid = pid;
+      await this.db.update(supervisorStateTable).set({ ls_pid: pid }).where(eq(supervisorStateTable.id, 1));
+    }
+  }
+
   private async handleTrackStarted(msg: BusMessage & { type: 'LS_TRACK_STARTED' }): Promise<void> {
+    await this.checkLsPid(msg.ls_pid, Date.now());
+
     const onAirMs = Math.floor(msg.on_air_timestamp * 1000);
 
     let currentPhid = msg.play_history_id;
@@ -1243,6 +1366,12 @@ export class SupervisorProcess {
       process: 'supervisor', event: 'TRACK_STARTED',
       play_history_id: currentPhid, on_air_ms: onAirMs,
     }, 'supervisor: track started');
+
+    // Decision 89: primary hard-start-gate trigger — react right when new
+    // information about consumed runway exists, rather than waiting for the
+    // next reality-check cycle. The reality check still runs this too, as a
+    // coarse backstop between track boundaries.
+    await this.maybeHandleHardStartGate(Date.now());
   }
 
   // Returns true when the plan item that just transitioned to 'playing' is the
@@ -1361,9 +1490,9 @@ export class SupervisorProcess {
     this.planActivatedAtMs = nowMs;
     this.finalizationRequestedForPlanId = null;
     this.finalizeInFlightForPlanId = null;
-    this.draftedForNextSegment = null;
     this.activePlanHardBoundary = null;
     this.exhaustedPlanReconciledFor = null;
+    this.nextPlanTransitioningSinceMs = null;
 
     // DB writes.
     await this.db.update(plansTable)
@@ -1692,7 +1821,11 @@ export class SupervisorProcess {
       .where(and(
         eq(plansTable.segment_id, resolved.segment.id),
         eq(plansTable.clock_instance_started_at, resolved.clockInstanceStartedAt),
-        inArray(plansTable.status, ['draft', 'finalized', 'active']),
+        // Decision 84: 'Transitioning' counts alongside 'finalized'/'active' —
+        // its content is already committed/pushed, so it should be found and
+        // used here rather than treated as if nothing exists for this
+        // occurrence (which would risk drafting a wasteful duplicate).
+        inArray(plansTable.status, ['draft', 'finalized', 'Transitioning', 'active']),
       ))
       .orderBy(desc(plansTable.id));
     // A badly-timed restart can leave two draft rows for the same occurrence
@@ -1712,7 +1845,7 @@ export class SupervisorProcess {
     const best = candidates[0] ?? null;
     const valid = best != null && best.resolution_identity === identity;
 
-    if (valid && (best.status === 'finalized' || best.status === 'active')) {
+    if (valid && (best.status === 'finalized' || best.status === 'Transitioning' || best.status === 'active')) {
       if (opts.allowActivate) {
         if (best.id !== this.activePlanId) {
           this.logger?.info({
@@ -1818,7 +1951,14 @@ export class SupervisorProcess {
     }
     this._bus.emit({ type: 'LIVE_STATUS_CHANGED', active: false });
 
-    if (this.activePlanId != null && this.currentSegmentEndMs != null) {
+    // Decision 85: an ordinary "fill the remainder" correction, sized off
+    // currentSegmentEndMs — defer to the hard-boundary fill/trim mechanism
+    // (Decision 66) if the active plan is already committed to reaching a
+    // hard segment. That mechanism owns hitting the boundary precisely;
+    // sizing independently off currentSegmentEndMs here could fight it
+    // rather than compose with it. maybeHandleHardStartGate already runs
+    // every tick and will pick the fill back up on its own terms.
+    if (this.activePlanId != null && this.currentSegmentEndMs != null && this.activePlanHardBoundary == null) {
       const remainingMs = this.currentSegmentEndMs - nowMs;
       if (remainingMs > 30_000) {
         const fromPosition = await this.nextAppendPosition(this.activePlanId);
@@ -1925,6 +2065,70 @@ export class SupervisorProcess {
     }
   }
 
+  // Decision 84: names the window between the queue-ahead push of a plan's
+  // first item (D44/D60) and its ground-truth on-air confirmation — a real
+  // window that previously had no state boundary, which is exactly what let
+  // the D78 activation-snapshot race happen. A pushed item only ever belongs
+  // to nextPlanId while it's still 'finalized' in the ordinary case (the
+  // active plan's own items are already 'active'-owned) — that combination
+  // is what identifies "this is the queue-ahead push," not the item's
+  // position specifically.
+  private async maybePromoteToTransitioning(msg: BusMessage & { type: 'PUSH_SENT' }): Promise<void> {
+    if (this.nextPlanId == null) return;
+    const [item] = await this.db
+      .select({ plan_id: planItemsTable.plan_id })
+      .from(planItemsTable)
+      .where(eq(planItemsTable.id, msg.plan_item_id));
+    if (!item || item.plan_id !== this.nextPlanId) return;
+
+    const nowMs = Date.now();
+    const result = await this.db
+      .update(plansTable)
+      .set({ status: 'Transitioning' })
+      .where(and(eq(plansTable.id, this.nextPlanId), eq(plansTable.status, 'finalized')))
+      .returning({ id: plansTable.id });
+    if (result.length > 0) {
+      this.nextPlanTransitioningSinceMs = nowMs;
+      this.logger?.info({
+        process: 'supervisor', event: 'PLAN_TRANSITIONING',
+        plan_id: this.nextPlanId,
+      }, 'supervisor: next plan\'s first item pushed — Transitioning until ground-truth confirmation');
+    }
+  }
+
+  // Decision 84: a plan stuck in 'Transitioning' longer than the same
+  // "how long is too long" judgment the silence alert uses is no longer
+  // trustworthy — mark it Invalid and let the normal exhausted/reconcile
+  // recovery path (already run by tick() elsewhere) pick up the slack next
+  // cycle, rather than inventing a separate recovery mechanism here.
+  private async maybeInvalidateStuckTransition(nowMs: number): Promise<void> {
+    if (this.nextPlanTransitioningSinceMs == null || this.nextPlanId == null) return;
+    if (nowMs - this.nextPlanTransitioningSinceMs < SILENCE_ALERT_THRESHOLD_S * 1_000) return;
+
+    const staleTransitioningPlanId = this.nextPlanId;
+    const result = await this.db
+      .update(plansTable)
+      .set({ status: 'Invalid', reason: 'transition_failed' })
+      .where(and(eq(plansTable.id, staleTransitioningPlanId), eq(plansTable.status, 'Transitioning')))
+      .returning({ id: plansTable.id });
+    this.nextPlanTransitioningSinceMs = null;
+    if (result.length === 0) return;
+
+    this.logger?.warn({
+      process: 'supervisor', event: 'PLAN_INVALIDATED',
+      plan_id: staleTransitioningPlanId, reason: 'transition_failed',
+    }, 'supervisor: next plan never confirmed on air within threshold — marked Invalid, requesting fresh plan');
+    this.nextPlanId = null;
+    this.nextPlanSegmentId = null;
+    this.nextPlanScheduledEndMs = null;
+    await this.db.update(supervisorStateTable)
+      .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
+      .where(eq(supervisorStateTable.id, 1));
+    if (this.currentSegmentEndMs != null) {
+      await this.reconcileNext(this.currentSegmentEndMs, nowMs);
+    }
+  }
+
   // ─── Draft request helpers ───────────────────────────────────────────────────
 
   // Both boundaryDrift and plannedOvershoot represent accumulated lateness at
@@ -1945,43 +2149,19 @@ export class SupervisorProcess {
   // spot. Protecting the floor doesn't lose the correction — it just carries
   // forward as accumulated drift for whatever flexible segment comes next.
   private async computeFirstPassTarget(segment: { type: string; duration_seconds: number }): Promise<number> {
-    const nominal = segment.duration_seconds;
-    if (segment.type === 'stop_set') {
-      // D73: stop-sets no longer participate in drift correction at all —
-      // their content is governed by campaign/promo pacing on its own
-      // (daily/monthly) timescale, not by wall-clock schedule alignment.
-      // Base target is just nominal; Decision 74 adds a monthly-recovery-
-      // driven boost on top, at the call sites.
-      // D78: no drift correction means no intentional offset to record.
-      this.nextPlanIntentionalOffsetSeconds = 0;
-      return nominal;
-    }
-    const floor = 30;
-    // D71: cap the correction ITSELF, not just the resulting target — a very
-    // large drift (operator-induced, or an assembly-overshoot bug) shouldn't
-    // get crammed into one plan just because the proportional floor/ceiling
-    // below happens to allow it. No explicit "recovery ledger" needed:
-    // boundaryDriftSeconds is recomputed from real wall-clock-vs-schedule
-    // facts at every activation regardless of what got applied here, so
-    // whatever this cap leaves uncorrected persists and gets another chance
-    // next cycle.
-    // D78: cap is now operator-configurable (Scheduling settings), read fresh.
+    // D78: cap is operator-configurable (Scheduling settings), read fresh.
     const cap = await getDriftRecoveryCapSeconds(this.db);
-    const rawCorrection = this.boundaryDriftSeconds + this.plannedOvershootSeconds;
-    const appliedCorrection = Math.max(
-      -cap,
-      Math.min(cap, rawCorrection),
-    );
+    // Decision 85/86: one shared formula for both first-pass and finalize —
+    // see requestPlan.ts for why the two used to diverge and what that cost.
+    const { targetSeconds, appliedCorrectionSeconds } = computeDriftAdjustedTarget(segment, {
+      boundaryDriftSeconds: this.boundaryDriftSeconds,
+      plannedOvershootSeconds: this.plannedOvershootSeconds,
+      capSeconds: cap,
+    });
     // D78 (implements D45): record the correction actually applied, so it can
     // be carried into intentional_offset_seconds once this plan activates.
-    this.nextPlanIntentionalOffsetSeconds = appliedCorrection;
-    return Math.max(
-      floor,
-      Math.min(
-        nominal * 1.5,
-        nominal - appliedCorrection,
-      ),
-    );
+    this.nextPlanIntentionalOffsetSeconds = appliedCorrectionSeconds;
+    return targetSeconds;
   }
 
   private async requestColdStartDraft(resolved: ResolvedSegment, nowMs: number): Promise<void> {
@@ -2028,14 +2208,11 @@ export class SupervisorProcess {
       ? { segmentId: next.segment.id, startMs: next.segmentStartMs }
       : null;
 
-    if (
-      this.draftedForNextSegment &&
-      this.draftedForNextSegment.segmentId === next.segment.id &&
-      this.draftedForNextSegment.instanceMs === next.clockInstanceStartedAt
-    ) {
-      return;
-    }
-
+    // Decision 84: idempotency at the target instead of a Supervisor-side
+    // guard field — maybeRequestNextDraft only ever fires once per
+    // activation (its one call site is activatePlanById), so this DB check
+    // is sufficient on its own; there's no tick-loop repetition to throttle
+    // the way maybeRequestFinalization/maybeHandleHardStartGate have.
     // Only look for draft/finalized — an 'active' plan is already in use and
     // should not prevent creating a new plan for the next segment.
     const [existing] = await this.db
@@ -2052,7 +2229,6 @@ export class SupervisorProcess {
         process: 'supervisor', event: 'DRAFT_SKIPPED_EXISTING',
         existing_plan_id: existing.id, status: existing.status,
       }, 'supervisor: plan already exists for next segment, skipping draft request');
-      this.draftedForNextSegment = { segmentId: next.segment.id, instanceMs: next.clockInstanceStartedAt };
       // Wire up nextPlanId so handleExhaustedPlan can activate when the active
       // plan runs out — without this, PLAN_STALL fires after every restart.
       if (this.nextPlanId == null) {
@@ -2069,7 +2245,6 @@ export class SupervisorProcess {
 
     // Store segment end time so activateNextPlan can compute boundary drift.
     this.nextPlanScheduledEndMs = next.segmentEndMs;
-    this.draftedForNextSegment = { segmentId: next.segment.id, instanceMs: next.clockInstanceStartedAt };
     const requestId = randomUUID();
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_DRAFT_REQUESTED',
@@ -2144,7 +2319,6 @@ export class SupervisorProcess {
           this.nextPlanScheduledEndMs = null;
           this.finalizationRequestedForPlanId = null;
           this.finalizeInFlightForPlanId = null;
-          this.draftedForNextSegment = null;
           await this.db.update(supervisorStateTable)
             .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
             .where(eq(supervisorStateTable.id, 1));
@@ -2175,30 +2349,24 @@ export class SupervisorProcess {
     // Since boundaryDrift is stable within a segment, delta is typically 0 — but
     // may differ in edge cases where plan was forced-advanced to a new segment.
     const driftDelta = this.boundaryDriftSeconds - this.nextPlanDraftDriftSeconds;
-    const isStopSet = segment?.type === 'stop_set';
-    // D73: stop-sets no longer participate in drift correction at all — base
-    // target is just nominal. This supersedes D68's type-aware floor/ceiling
-    // for the stop-set branch specifically (that fix itself is still
-    // correct — it's just that the whole drift-based formula it protected
-    // is now bypassed for this type; still fully in effect for every other
-    // segment type). D75's campaign-driven recovery multiplier is applied
-    // downstream, inside assembleStopSetPlan (planner.ts) — not here; it
-    // rides along with the candidate-pool request that already happens for
-    // every stop-set assembly, first pass and finalize alike, rather than
-    // being computed twice at separate supervisor call sites.
-    let driftAdjustedTarget: number;
-    if (isStopSet) {
-      driftAdjustedTarget = nominal;
-      // D78: no drift correction for stop-sets, so no intentional offset.
-      this.nextPlanIntentionalOffsetSeconds = 0;
-    } else {
-      const rawTarget = nominal - this.boundaryDriftSeconds;
-      driftAdjustedTarget = Math.max(nominal * 0.6, Math.min(nominal * 1.4, rawTarget));
-      // D78 (implements D45): the second pass supersedes the first pass's
-      // recorded correction when it runs — record what actually ended up
-      // applied here.
-      this.nextPlanIntentionalOffsetSeconds = nominal - driftAdjustedTarget;
-    }
+    // Decision 85/86: same shared formula as computeFirstPassTarget — this is
+    // the concrete fix for the two passes having silently diverged (the
+    // finalize branch used to skip both the D71 cap and the plannedOvershoot
+    // term, and clamped to different bounds). Calling the same function here
+    // means there's no second implementation left to drift out of sync.
+    const cap = await getDriftRecoveryCapSeconds(this.db);
+    const { targetSeconds: driftAdjustedTarget, appliedCorrectionSeconds } = computeDriftAdjustedTarget(
+      segment ?? { type: 'music', duration_seconds: nominal },
+      {
+        boundaryDriftSeconds: this.boundaryDriftSeconds,
+        plannedOvershootSeconds: this.plannedOvershootSeconds,
+        capSeconds: cap,
+      },
+    );
+    // D78 (implements D45): the second pass supersedes the first pass's
+    // recorded correction when it runs — record what actually ended up
+    // applied here (0 for stop-sets, per computeDriftAdjustedTarget).
+    this.nextPlanIntentionalOffsetSeconds = appliedCorrectionSeconds;
     const adjustedTarget = hardOverrideTarget ?? driftAdjustedTarget;
 
     this.finalizationRequestedForPlanId = this.nextPlanId;

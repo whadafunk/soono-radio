@@ -2209,6 +2209,215 @@ All four new cadence constants are grouped together and commented as candidates 
 
 ---
 
+### Decision 80 — Split the finalize de-dup guard from in-flight tracking (Decision 78 regression)
+
+**Status: implemented and deployed 2026-07-13 (`cfdb4c0`).**
+
+Decision 78's race fix reused `finalizationRequestedForPlanId` for two conflicting purposes: a permanent de-dup flag (must stay set once a plan has been asked to finalize, never cleared until activation) and a transient in-flight flag (must clear the moment `PLAN_FINALIZED` arrives). Clearing it on completion — required for the in-flight meaning — reopened the de-dup guard, so `maybeRequestFinalization`/`reconcileOccurrence` re-requested finalize for the same already-finalized plan on the very next tick. That completed instantly, re-cleared the flag, and repeated forever, while `handleExhaustedPlan`'s new activation guard (reading the same field) saw it freshly re-set every tick and deferred activation indefinitely. Confirmed live: `ACTIVATION_DEFERRED_FINALIZE_IN_FLIGHT` fired continuously for plan 7803, producing roughly 18 minutes of real dead air — self-inflicted by Decision 78, on the same night it shipped.
+
+**Fix:** a dedicated `finalizeInFlightForPlanId`, set at every `PLAN_FINALIZE_REQUESTED` emission site alongside `finalizationRequestedForPlanId`, cleared only in `handlePlanFinalized` on genuine completion (or when a plan is abandoned via activation or hard-boundary retirement). `finalizationRequestedForPlanId` reverts to its original semantics — set once, never cleared on completion. `handleExhaustedPlan`'s activation guard now reads `finalizeInFlightForPlanId` exclusively.
+
+This is the second guard-field regression in two decisions (77 touched the same neighborhood; 78 introduced this one; both found live, same night). See the audit immediately below for why this keeps happening and what else it found.
+
+---
+
+## Plan-Lifecycle Guard Field Audit — 2026-07-13
+
+Prompted directly by Decision 80: two guard-field bugs shipped back-to-back in the same file, both found only by live incident. Rather than wait for the next one, every instance field in `supervisor.ts` that gates a plan-lifecycle request or transition was read end-to-end — every set site, every clear site, every read site — and checked against what it's supposed to mean.
+
+**The shared root cause, found doing this:** every guard below is released by a bus message (`PLAN_DRAFT_READY`, `PLAN_FINALIZED`, `PLAN_REPLANNED`) that `planner.ts` emits *only on its handler's success path*. Each subscription in `planner.ts` (`start()`, ~line 165) is `void this.handleXRequested(msg).catch(err => logger.error(...))` — the catch exists to keep the process alive and log, not to tell the supervisor anything. If `buildPlan`, `finalizePlan`, or `replanRemaining` throws for any reason — a bad segment row, a DB error, an edge case in assembly — the corresponding completion event never fires, and whichever guard was waiting for it is stuck **permanently**, with a single `*_FAILED` log line as the only trace. No `PLAN_DRAFT_FAILED`/`PLAN_FINALIZE_FAILED`/`PLAN_REPLAN_FAILED` message exists in `bus.ts` today — there is no path back to the supervisor on failure at all.
+
+Decision 80's incident was self-inflicted (a field-reuse bug), but the identical visible symptom — a guard stuck open forever, an activation deferred forever, dead air with no self-heal — is reproducible **today**, with no code change, by any exception thrown inside the planner's three request handlers. That's the actual thing worth fixing, not another one-off patch to whichever field breaks next.
+
+| Field | Meaning | Set at | Cleared at | Verdict |
+|---|---|---|---|---|
+| `finalizationRequestedForPlanId` | De-dup: never ask twice for the same plan's finalize | `reconcileOccurrence` (draft branch), `handlePlanDraftReady` (cold start), `maybeRequestFinalization` (T-30s gate) | `activatePlanById` (unconditional), hard-boundary-retire branch of `maybeRequestFinalization` | Sound post-D80. Shares the systemic no-completion risk above. |
+| `finalizeInFlightForPlanId` | Is a finalize outstanding for this plan *right now* | Same 3 sites as above | `handlePlanFinalized` (on matching completion), `activatePlanById`, hard-boundary-retire branch | Sound post-D80. Same systemic risk: if `PLAN_FINALIZED` never arrives, this never clears, and `handleExhaustedPlan` defers that plan's activation forever — exactly tonight's symptom, via a different trigger. |
+| `draftedForNextSegment` | De-dup: don't re-request a draft for the same next segment/instance | `maybeRequestNextDraft` (existing-plan-found branch and fresh-request branch) | `activatePlanById`, hard-boundary-retire branch | Structurally sound, same systemic risk: if `buildPlan` throws, this never clears and that occurrence's draft pipeline stalls silently until the active plan exhausts and `handleExhaustedPlan`'s own reconcile fallback papers over it. |
+| `coldStartFinalizeSent` | One-shot latch: has the cold-start finalize already been sent | `handlePlanDraftReady` (cold-start branch) | `handleExhaustedPlan`'s rare resolve-failure fallback | **Gap found:** nothing guards the window between `tick()` first calling `requestColdStartDraft()` and the draft actually coming back — this flag is only set once the draft already has. `tick()` re-fires every 500ms during planner turnaround, unlike the ordinary next-draft path (which `draftedForNextSegment` protects). Low severity: `handlePlanDraftReady`'s existing "already has pending content" check absorbs the duplicates as `NEXT_PLAN_DRAFT_DEFERRED`, not incorrect behavior — just avoidable duplicate draft rows and planner load. Should get its own in-flight guard, mirroring `draftedForNextSegment`. |
+| `exhaustedPlanReconciledFor` | De-dup: only reconcile once per exhausted plan id | `handleExhaustedPlan` (no-next-plan branch) | `activatePlanById` | Sound — keyed by plan id, cleared exactly when that plan stops being active. No double duty. |
+| `activePlanHardBoundary` | Cached decision: is the active plan on the hook to reach a hard boundary itself | `reconcileNext`, `maybeRequestNextDraft`, hard-boundary-retire branch | `activatePlanById` | Sound — a recomputed-fresh-each-cycle decision cache, not a request-guard. No double duty. |
+| `pendingReplanForPlanId` | De-dup across 3 independent call sites (`EXHAUSTED_PLAN_TOPUP`, `HARD_START_FILL`, live-takeover-ended) that all request a replan for the active plan | All 3 sites | Only the `PLAN_REPLANNED` bus handler | **Confirmed latent bug**, not yet triggered live as far as the logs show: `planner.ts`'s `handleReplanRequested` only emits `PLAN_REPLANNED` after `replanRemaining()` resolves. A single replan exception permanently disables both the hard-start fill gate and the exhausted-plan top-up gate for the rest of that plan's active life — silently, with only a `PLAN_REPLAN_FAILED` log line. |
+
+**Recommended fix (not yet implemented):**
+1. Planner's three request handlers emit a `_FAILED` completion event (`PLAN_DRAFT_FAILED` / `PLAN_FINALIZE_FAILED` / `PLAN_REPLAN_FAILED`, carrying `request_id`/`plan_id`) alongside the existing log line whenever the handler throws — today's silent black hole becomes a message the supervisor can act on.
+2. Supervisor gains handlers for those three events that clear the matching guard field(s), and where sensible, fall back — a failed replan can fall back to the existing `PLAN_STALL`/reconcile path already used for "no next plan."
+3. A coarse timeout as an independent backstop: if a guard has been set longer than a generous bound (e.g. 60s — draft/finalize/replan round-trips have never been observed above low hundreds of ms in any live log this session), log a `WARN` and clear it. This protects against a bug in the new failure-event wiring itself reintroducing the same "stuck forever" class.
+4. Separately, low-priority: give cold start its own in-flight guard (mirroring `draftedForNextSegment`) so a slow planner response can't produce duplicate `PLAN_DRAFT_REQUESTED` emissions during cold start.
+
+---
+
+### Note — Decision 81 attempted, then reverted; holding for a full review instead
+
+A follow-up to the audit above was drafted and briefly implemented (bus messages for planner failures, a timeout to release a stuck guard, a matching guard for the cold-start request), then reverted at the operator's explicit direction before being committed. Not because the idea was wrong, but because of how it was arrived at: it added a sixth special-case field on top of the five the audit had just finished cataloging, patching the guard-field pattern one more time instead of stepping back from it. The operator does not want the plan-lifecycle logic maintained this way — five-plus similarly-shaped guard fields, each hand-wired at multiple call sites, tracked by name — going forward.
+
+Standing decision: no more incremental patches to individual guard fields. The next work here is a full review of the whole supervisor/scheduling algorithm — everything that automates content against the calendar/template (segment and clock-instance resolution, plan drafting/finalization, drift correction, hard-start handling, live takeover) — conducted and discussed in plain language, not in terms of internal field names. The audit above stays as accurate background for that review; it should inform the review rather than be patched around piecemeal.
+
+---
+
+### Decision 82 — Reduce the Supervisor's recurring loop to a reality-checked diagnose-and-dispatch core; plan lifecycle is explicitly not the Supervisor's problem
+
+**Status: design direction decided in review, 2026-07-14. Nothing implemented yet — no code touched.**
+
+First output of the holistic review Decision 80/81 called for. Covers two separate decisions reached together, plus a set of supporting findings from a detailed walk through the LiquidSoap integration that motivated them.
+
+**Finding: the tick loop is a checklist of independently-polled concerns, almost all assumption-based.** Today `tick()` runs ~12 steps every 500ms — segment resolution, cold start, the T-30s finalize gate, orphan self-heal, playhead computation, the silence alert, the push decision, the hard-start fill/trim gate — each deciding for itself whether to act, every cycle, mostly via cheap early-outs. None of it ever asks LiquidSoap anything; every belief about what's actually playing comes from arithmetic on stored timestamps (`now − started_at` vs. a planned duration), never a live check against reality.
+
+**Decision 1 — the loop shrinks to: heartbeat, plus one diagnostic check that queries reality and dispatches to whichever routine is warranted.** Instead of every concern polling its own condition in parallel, one check asks "are we on track" — where's the playhead really, cross-checked against LiquidSoap's own live state, not just our stored timestamps — and the *outcome* of that single check decides whether to push, correct drift, trigger hard-start fill/trim, or do nothing. This collapses today's silence check / push decision / hard-start gate from three independently-polled branches into three possible *outcomes* of one diagnosis.
+
+What moves fully outside the recurring loop as part of this:
+- **Cold start and orphan self-heal** collapse into the existing startup/reconcile path instead of remaining separate tick-checked branches. This also removes a real race found during the review: today's blunt cold-start branch (`activePlanId == null && nextPlanId == null && !coldStartFinalizeSent → request a draft, no existing-plan check`) can fire concurrently with `reconcile()`'s careful, existing-plan-checking version right after boot, because the hydrate-then-reconcile sequence in `start()` isn't awaited before the tick timer begins. One mechanism, not two, closes that.
+- **Drafting the next segment's plan** stays exactly as it is today — triggered as a side effect of a plan *activating* (ground-truth track-start, or a forced handoff), never polled. Confirmed unchanged; this was already the right shape (moved out of the tick loop earlier specifically to fix a wall-clock-jump-skips-a-segment bug), just re-affirmed rather than touched.
+- **The T-30s finalize gate and the hard-start fill/trim gate** are candidates to become scheduled one-shot timers (compute the target moment once, fire once) rather than polled thresholds — same shape as the silence alert becoming a watchdog reset on every successful push rather than a per-tick comparison. Direction agreed; exact mechanism not yet designed.
+- **The periodic snapshot's usefulness is an open question**, not yet decided either way.
+
+**Decision 2 — plan-lifecycle correctness is explicitly not the Supervisor's responsibility.** This reframes the guard-field audit above rather than replacing it. The D78/D80 fragility existed because the Supervisor kept its *own* private, in-memory bookkeeping ("did I already ask for this, is it done yet" — `finalizationRequestedForPlanId`, `finalizeInFlightForPlanId`, `draftedForNextSegment`, `pendingReplanForPlanId`, `coldStartFinalizeSent`) shadowing something the database already tracks correctly: a plan's own `status` column. The Supervisor never needed a parallel copy of "is this plan finalized yet" — it could always just read the plan's real status. Going forward, the Supervisor's job is to check reality and ask for what's needed; whether a draft/finalize/replan request eventually succeeds, fails, or needs retrying is the Planner's concern, backed by the plan's own persisted state — not a set of Supervisor instance fields that can drift out of sync with events that might never arrive. This also supersedes the earlier idea (sketched, then reverted, in the Decision 81 note above) of building one *generic* in-flight-request tracker inside the Supervisor — that was solving the problem at the wrong layer; the better fix is not tracking requests in the Supervisor at all.
+
+**Confirmed buildable: a `/now-playing`-style endpoint**, the mechanism Decision 1's reality-check depends on. Verified directly against the actual running instance (LiquidSoap 2.2.5, `soono-liquidsoap` container) via `liquidsoap -h`, not just documentation. The `queue` source (`request.queue`) exposes these as its own methods:
+- `current() → request?` — the request currently being played, **nullable**.
+- `queue() → [request]` / `length() → int` — what's waiting, separate from what's playing.
+- `remaining() → float` / `elapsed() → float` — live position within whatever `current()` returns, when it's non-null.
+
+The nullability of `current()` matters: **"nothing currently playing" and "the queue has items waiting" are two independently-true facts, not one derived from the other.** Confirmed this is a real, reachable state, not a hypothetical: `fetch()`'s own doc note says feeding the queue with a new request "can take long to return," and `is_ready()`'s doc note is explicit that being ready to stream is not the same as currently streaming. So an item can sit in the queue, formally present, while LiquidSoap is still resolving it — and since the whole output is `fallback(track_sensitive=false, [live, queue, blank()])`, if `queue` isn't ready at that exact instant, the fallback drops straight to `blank()` (real silence) even though `/queue` would still report depth > 0.
+
+This shapes what `/now-playing` needs to check: not just "remaining/elapsed on the current track" (which presumes something is playing), but `current()` first — null or not — with `queue()`/`length()` reported separately, since those two can genuinely diverge. No equivalent pull-style metadata getter exists beyond `current()`'s own request handle (`on_metadata`/`on_track` are callback-only for anything richer) — a `/now-playing` handler would need to combine `current()`/`remaining()`/`elapsed()` with metadata already captured by the existing `on_track` callback, stashed into script-side state instead of only being POSTed to the API. Same `harbor.http.register` pattern `/live-status` already proves works — query a source's live state synchronously, at request time.
+
+**Supporting findings from this review, not yet actioned, carried forward:**
+- `live-started` / `live-ended` webhooks have full receiving-side handling in the Supervisor and dedicated routes, but nothing found in the generated LiquidSoap script actually triggers them (`input.harbor`'s connect/disconnect callbacks aren't wired). The live-audio takeover itself works regardless — that's LiquidSoap's own `fallback(track_sensitive=false, [live, queue, blank()])` operator, entirely independent of any webhook — but the Supervisor's *awareness* that a takeover is happening may not be firing at all. Not yet confirmed by testing; live-host logs weren't checked (host was unreachable during the review).
+- No equivalent of the Supervisor's own heartbeat exists for LiquidSoap's liveness. `lastPushSentMs` (in-memory, resets on restart) is the closest incidental proxy, but nothing treats "is LiquidSoap actually alive" as a first-class, persisted fact the way `last_heartbeat_at` does for the Supervisor's own process.
+  - **Confirmed mechanism to close this:** `process.pid() → int` is real (verified via `liquidsoap -h`) and changes on every restart, since it's the OS process id. Capturing it once at script load and stamping it onto every webhook payload (`on_track`, `on_end`) and every query endpoint (`/live-status`, future `/now-playing`) gives the API a per-boot identifier — the Supervisor just remembers the last pid it saw, and any arrival carrying a different one is unambiguous proof LiquidSoap restarted in between. Deliberately spread across *every* event rather than relying on one dedicated "just booted" webhook: a single boot notification can itself get lost in exactly the kind of startup race seen tonight (harbor briefly unreachable right after a compose restart) — with the pid riding on everything, even a missed boot notification still gets caught retroactively by the next ordinary webhook. A dedicated boot webhook is still worth adding as the fast path on top of this, not instead of it.
+- `on_end`'s `remaining` value — genuine, LiquidSoap-verified remaining time — is received by the Queue Feeder and discarded; only used as a fire trigger, never to validate anything.
+- The queue depth-cap (at most 1 playing + 1 pre-queued) is enforced by counting `plan_items` marked `'playing'` in our own database, not by querying LiquidSoap's actual queue contents. If that count is ever wrong, an extra push doesn't error — `request.queue` has no size limit — it just sits appended at the end of the real queue and will genuinely play later, potentially firing `on_track` for stale/superseded content and confusing plan activation well after the fact.
+
+---
+
+### Decision 83 — Unified playhead: one on-demand-computed calendar position, not per-mechanism tracking
+
+**Status: design decided 2026-07-14 (holistic review continuation). Elaborates the reality-check premise of Decision 82. Not yet implemented.**
+
+Today "where are we" has no single answer — the Supervisor's plan-playhead (sum of terminal item durations plus elapsed time in the currently-playing item), the wall-clock resolver (used only at cold-start/reconcile), the per-activation drift snapshot, and the hard-segment lookahead's own starting point are four separately-computed beliefs about position, each capable of disagreeing with the others under drift — exactly the failure shape behind the Decision 61 dead-air incident.
+
+**Fix:** one playhead resolver, computed on demand, never stored. Given "now," it answers a single question — which calendar/template/default-clock segment are we in, and how far into it — derived from real ground truth (the last confirmed on-air event plus elapsed time since), never from independently re-resolving wall-clock time except when there is genuinely no ground truth to anchor to (cold start, LS-restart recovery, orphan recovery — Decision 88). Every mechanism that currently does its own position math becomes a caller of this one function instead:
+
+- Resume-after-restart (Decision 59) stops being special-cased logic living only in the boot path — it's the same function, called with whatever ground truth is available (possibly stale, bounded by last heartbeat, same trust check as today).
+- Drift becomes an always-askable live comparison (resolver's calendar position vs. true wall-clock now), not a value snapshotted once per activation and frozen until the next one.
+- The hard-segment lookahead (Decision 62) walks forward from this function's answer, not from a separately-tracked "current" pointer that could disagree with it.
+
+Explicit design rule, carried over from Decision 63's single-source-of-truth philosophy and Decision 82's Decision 2: the playhead is never a column, never a Supervisor instance field kept in sync by convention — it's a function, called fresh, every time an answer is needed.
+
+---
+
+### Decision 84 — Plan lifecycle: add `Transitioning` and `Invalid`, split write-ownership, replace guard-field bookkeeping with idempotent requests
+
+**Status: design decided 2026-07-14. Directly answers the Decision 80/81 guard-field audit; supersedes the in-flight-tracking half of Decision 82's Decision 2 with a concrete mechanism. Not yet implemented.**
+
+Two new plan states:
+
+- **`Transitioning`** — a plan whose first item has already been pushed into LiquidSoap's queue (the existing queue-ahead nudge, Decision 60) but has not yet been ground-truth-confirmed on air. This names a window that exists today but has no label — its absence is exactly what let Decision 78's activation-snapshot race happen (a snapshot taken mid-window, with no state boundary marking "this plan has one foot in the door"). Enters `Transitioning` at the queue-ahead push; exits to `active` at ground-truth confirmation (unchanged trigger from Decision 60).
+- **`Invalid`** — a plan no longer trusted as ground truth, for either of two reasons, tagged with a `reason` string (mirroring the existing mandatory `reason` already required on every `plan_item`): `transition_failed` (a `Transitioning` plan's first item never got confirmed within a bounded window — reuse the same "how long is too long" judgment the silence alert already makes) or `restart_ambiguous` (Decision 83's playhead resolver comes back without enough confidence to say where the Supervisor really is, after a restart). Declaring a plan `Invalid` always immediately triggers a fresh Request Plan call (Decision 85) for that segment — the state is only useful if it drives recovery, not just a label.
+
+Full state shape: `draft → finalized → Transitioning → active → completed`, with `Invalid` reachable as a side-exit from `Transitioning` or from restart hydration. `completed` keeps its existing meaning (retired on purpose — normal handoff or deliberate forced retirement); `Invalid` sits on a different axis entirely — retired because the state can no longer be trusted, not because the job is done.
+
+**Write ownership, made an explicit rule rather than an emergent accident:**
+- **Planner** is the sole writer of `draft → finalized` — it's the only thing that knows if content is actually ready.
+- **Supervisor** is the sole writer of `finalized → Transitioning → active → completed / Invalid` — it's the only thing that hears ground truth from LiquidSoap.
+
+**The actual fix for the guard-field class of bug (Decision 80's audit):** the root cause was never which field held which flag — it was that every flag existed because the Supervisor had to remember "did I already ask for this" in its own private memory, with no way to unstick a flag if the corresponding request silently failed (no `PLAN_DRAFT_FAILED`/`PLAN_FINALIZE_FAILED`/`PLAN_REPLAN_FAILED` message exists anywhere). The fix isn't adding failure events and a timeout to unstick a frozen flag — that approach was sketched and explicitly reverted in Decision 81 for being one more special case on the pile. The fix is removing the need to remember anything at all. **Every plan-lifecycle request becomes idempotent against the plan's own persisted state:** "give me a draft for this segment/clock-instance" is a no-op if a plan already exists for that exact occurrence (reusing the existing `resolution_identity` dedup key from Decision 58); "finalize this plan" is a no-op if it's already past `draft`. The Supervisor is free to ask as often as reality calls for it — every tick, if needed — because asking twice is harmless by construction. This removes the entire class of stuck-guard bugs (Decisions 77, 78, 80) rather than patching the next instance of it.
+
+---
+
+### Decision 85 — Universal Request Plan routine: one shared calculation, three decision contexts
+
+**Status: design decided 2026-07-14. Formalizes and extends Decisions 62/69/71/73's separately-evolved mechanisms into one named routine. Not yet implemented.**
+
+A single calculation — given Decision 83's playhead, computes `xh` (real time remaining before the next hard-start segment, walking forward across however many segments necessary, reusing Decision 62's existing `resolveNextHardSegment`) and `cs` (runway remaining in whatever segment is currently active) — backs three outcomes:
+
+1. **`xh` below the worth-it threshold** → target the hard segment directly (the structurally-next segment is skipped entirely; it never gets a `plans` row, per Decision 62's existing behavior).
+2. **`cs` above the same threshold** → correct the *current* segment (a mid-flight replan of the active plan), rather than deferring the correction to whatever comes next.
+3. **Otherwise** → target the structurally-next segment, with the drift correction folded into its sizing.
+
+**Both thresholds share one constant, not two independently-guessed numbers: 300 seconds** — reusing the value two separate parts of the system (Decision 62's lookahead, Decision 69's finalize re-check) already converged on independently through live incidents, rather than introducing new, untested placeholders for either branch. Candidate for an eventual station setting, following the same pattern as the drift-recovery cap (Decision 78).
+
+**Drift correction is capped, not divided.** The correction applied to a segment's target is clamped to an absolute ceiling (the existing `MAX_DRIFT_RECOVERY_PER_PLAN_S`/`drift_recovery_cap_seconds`, Decisions 71/78) rather than computed as a fixed fraction of the outstanding drift. A cap needs no memory of "how much correction is still owed" — drift is always re-measured fresh from real facts (Decision 83's playhead vs. wall clock) at every evaluation, so whatever the cap leaves uncorrected simply reappears as drift next time, with no ledger to maintain.
+
+**Branch 3's offset compounds two genuinely additive quantities, throttled together:** when the current segment's remaining runway (`cs`) was too small to be worth a mid-flight correction (branch 2 didn't fire), that small leftover sliver doesn't vanish — it's going to play out uncorrected regardless of what's decided next, so it behaves exactly like already-locked-in drift. The next segment's target folds in `(drift + cs)`, both under the same cap — not `drift` capped plus `cs` added afterward uncapped, since throttling only part of what's being corrected for defeats the point of throttling at all.
+
+**Hard-boundary commitment takes precedence over ordinary drift correction.** If the active plan is already committed to reaching a hard boundary (branch 1's outcome, cached at the moment it was decided — Decision 66's `activePlanHardBoundary`), branch 2's mid-flight replan does not independently recompute or contest that; it defers to the boundary-reaching fill/trim mechanism (Decision 66) instead of chasing its own drift-derived target. This reads the cached decision rather than recomputing it, so it doesn't reintroduce a second independent belief about the same fact.
+
+**Stop-sets bypass this entire routine.** A guard sits in front of all three branches: if the target segment is a stop-set, skip straight to "target = nominal," full stop — no drift offset, no `cs`-based correction (Decision 73, unchanged, already correct in production).
+
+**Three calling contexts, not one universal call site that always evaluates all three branches:**
+- **Plan activation** → only needs the `xh` check (branch 1 vs. branch 3) — the caller already knows it's asking "what comes next."
+- **A runtime deviation** (operator skip/inject, live takeover ending) → only needs the `cs` gate (branch 2, yes/no) — the caller already knows it's asking "should I fix current."
+- **Cold start, operator-triggered reconcile, or orphan-plan recovery** (Decision 88) → the only contexts with no prior triggering event to lean on, so the full three-way evaluation runs for real, starting cold from just Decision 83's playhead.
+
+**Returns, per the original design intent:** `{plan_id, start_offset, length_offset}` — a normal request/response call, awaited inline at the point it's needed. Idempotency (Decision 84) is what makes it safe if the same request fires twice (a lost response, a race, a restart mid-request) — it is not a reason to avoid waiting for the answer in the first place.
+
+---
+
+### Decision 86 — Two-phase gate consistency by construction: finalize re-invokes Request Plan, it does not re-derive its own logic
+
+**Status: design decided 2026-07-14. Resolves the root cause behind Decisions 68 and 69 (a stop-set floor enforced at draft but forgotten at finalize; hard-segment adjacency checked at draft but never re-checked at finalize) and Decision 67's finding that draft and finalize used different formulas for the same target. Not yet implemented.**
+
+Both historical bugs happened because draft and finalize computed "what should this segment's target be" via two separately hand-written pieces of logic that started out equivalent and drifted apart as one got a fix the other didn't. **Fix: finalize does not compute a target any other way than calling Decision 85's Request Plan routine again**, with whatever the playhead/drift/runway looks like at finalize time (which may differ from draft time). Every rule Request Plan applies — the stop-set guard, the hard-boundary precedence, the cap — is automatically reapplied, because it's the same code path re-executing, not a second implementation that has to be remembered to stay in sync with the first.
+
+What remains genuinely finalize-specific, and is not a gate-consistency question: comparing the fresh answer against what's already been assembled, netting out content that's already irreversibly committed (pushed to LiquidSoap, Decision 67's `committedSeconds` fix) before deciding whether the gap between assembled and target content is small enough for lightweight substitution or large enough to warrant a full reassembly. That comparison-and-reconcile logic stays; only the target-computation logic gets unified.
+
+This also means mid-flight replanning (Decision 85's branch 2, current-segment correction) is the same call site, not a third implementation — draft, finalize, and replan are one mechanism, invoked at three different moments, rather than three things that must be kept consistent with each other by discipline.
+
+---
+
+### Decision 87 — Fill/skip is a tactical target-chasing tool, not a drift-recovery lever
+
+**Status: design decided 2026-07-14. Clarifies the relationship between `catching_up_order`/`coasting_order` (Decision 27) and drift correction (Decision 85) as the design matured. Not a rule change to the underlying content-selection logic (Decision 27) — a clarification of intended usage going forward.**
+
+Fill/skip plays three distinct, narrower roles, none of which decide "how much drift to correct":
+
+1. **Ordinary gap-filling during plan assembly** (Decision 8) — unrelated to drift, present even when drift is zero; makes one segment's assembled content match *its own already-decided target*.
+2. **Precision boundary-reaching** (Decision 66's fill/trim gate) — closes the last stretch of gap between what's airing and a boundary it needs to hit, only after Decision 85 has already set the target; a fine-tuning instrument, not a strategic decision.
+3. **Reactive correction for runtime deviations** (Decision 8's deviation monitor — operator skip, manual inject, live takeover ending) — realigns already-built content with a target that was already decided; it does not re-decide the target itself.
+
+**Explicit rule going forward: fill/skip must never be triggered directly by the raw wall-clock drift number.** It should only ever respond to a local gap — how far the content already built is from the target Decision 85 already committed to. Decision 85's hard-boundary-precedence rule is the first application of this discipline; any future fill/skip logic that reaches for raw drift instead of a local target-vs-actual comparison is a regression to the pre-Decision-85 mental model and should be caught in review.
+
+Also confirmed and left unchanged, as orthogonal to drift entirely: a stop-set's own small content-fit overshoot tolerance (Decision 73 — spot/promo durations don't always sum exactly to a target) and the campaign-pacing-driven recovery multiplier that can lengthen a stop-set (Decisions 74/75 — driven by monthly ad-inventory math, not wall-clock schedule drift).
+
+---
+
+### Decision 88 — LiquidSoap-restart detection via process pid; cold start, orphan recovery, and LS-restart recovery unify into one path
+
+**Status: design decided 2026-07-14, extending Decision 82's confirmed-buildable `process.pid()` finding into a concrete mechanism. Not yet implemented.**
+
+**The gap:** no mechanism exists today to detect that LiquidSoap itself restarted while the Supervisor process kept running — confirmed by code survey, not just absence of a doc reference. This is distinct from a Supervisor-process restart (Decision 59/84's `Invalid`/resume handling) — here the Supervisor's own beliefs are intact, but LiquidSoap came back up with an empty queue and nothing playing underneath it.
+
+**Fix:** `process.pid()`, captured once at LiquidSoap script load, rides on every webhook payload (`on_track`, `on_end`) and every query response (`/live-status`, the new `/now-playing` from Decision 82), rather than depending on one dedicated "just booted" notification (which could itself be lost in exactly the startup race this is meant to catch). The Supervisor remembers the last pid it saw; any arrival carrying a different one is unambiguous, retroactive proof of a restart, caught by the next ordinary event even if a dedicated boot signal is missed.
+
+**On detection:** treat it exactly like `Invalid`/no-confident-ground-truth (Decision 84) and immediately re-run Decision 85's full cold-start three-way evaluation — do not trust whatever the Supervisor currently believes is playing or queued. Since a freshly-restarted LiquidSoap has nothing queued, this should trigger an immediate push, rather than waiting on the existing minutes-scale silence alert to eventually notice.
+
+**Also fixed in the same pass, since it's the same "ask reality, not a shadow belief" principle:** the queue-depth cap ("at most 1 playing + 1 pre-queued") is enforced today by counting `plan_items` marked `'playing'` in the Supervisor's own database, not by querying LiquidSoap's actual queue. If that count is ever wrong, an extra push doesn't error — it just sits appended in the real queue and plays later, confusing plan activation well after the fact (confirmed real risk, not hypothetical, per Decision 82's findings). Once `/now-playing` exposes `queue()`/`length()` directly, the cap should be enforced against that, not the internal count.
+
+**Confirmed still open, not part of this decision's scope:** whether `live-started`/`live-ended` webhooks actually fire in production — the receiving-side handling exists, but nothing in the generated LiquidSoap script appears to wire `input.harbor`'s connect/disconnect callbacks to trigger them (Decision 82's finding, unconfirmed by live testing). Worth verifying directly against the running instance before or during implementation, not a design question to resolve here.
+
+---
+
+### Decision 89 — The tick loop collapses to a heartbeat plus one reality-check-and-dispatch; nearly everything else becomes event- or timer-triggered
+
+**Status: design decided 2026-07-14. This is the concrete mechanism Decision 82's Decision 1 called for but didn't fully specify. Not yet implemented.**
+
+Today's `tick()` runs roughly a dozen independently-polled concerns every 500ms, almost all assumption-based (arithmetic on stored timestamps, never a live check against LiquidSoap). The redesigned loop:
+
+**What stays periodic:** a heartbeat write, plus one reality check — query `/now-playing` (Decisions 82/88), compare against Decision 83's playhead resolver, and dispatch to exactly one outcome if they disagree: push (queue starved), correct the current plan (Decision 85 branch 2), or run the LS-restart recovery path (Decision 88). If they agree, do nothing.
+
+**Recommended interval: 3 seconds**, operator-configurable in a 1–10 second range (following the same hardcoded-constant → `station_settings` column → settings-page field pattern as the drift-recovery cap, Decision 78). The check itself is near-free (a single local HTTP call, sub-5ms per Decision 82's own testing), so the interval should be chosen purely by "how much genuine dead air is tolerable before the safety net notices a silent failure," not by any resource-cost tradeoff. 3 seconds is a 10x improvement over today's 30-second first silence-alert threshold, without trying to compete with the sub-100ms event-driven path that already handles all normal operation.
+
+**Moved out of the periodic loop, now event- or timer-triggered:**
+- Segment/plan transition bookkeeping and next-plan drafting — already activation-triggered today (Decision 61), unchanged.
+- The T-30s finalize gate — becomes a one-shot timer scheduled at the moment a plan activates (its expected end time is known then); rescheduled only if a later replan changes that expected end time. No more per-tick "is it T-30s yet" comparison.
+- The hard-start fill/trim gate (Decision 66) — re-evaluated at every track-started/track-ending event, the only moments new information about consumed runway actually exists, rather than on a fixed interval regardless of whether anything changed.
+
+**Cold start, orphan-plan recovery, and LS-restart recovery stop being three separate special-case code paths.** All three are the same underlying situation — the Supervisor has no confident belief about what's currently happening — and all three are now just the reality check's first comparison finding a mismatch ("nothing is happening, and something should be"), dispatching to Decision 85's full three-way cold-start evaluation. There is no dedicated cold-start branch anymore, no dedicated orphan-recovery branch; one mechanism, three ways of arriving at the same starting condition.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

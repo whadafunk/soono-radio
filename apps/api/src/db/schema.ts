@@ -1088,6 +1088,10 @@ export const stationSettings = sqliteTable('station_settings', {
   // correct for in one transition (computeFirstPassTarget). The rest
   // persists in boundaryDriftSeconds and gets another chance next cycle.
   drift_recovery_cap_seconds: real('drift_recovery_cap_seconds').notNull().default(300),
+  // Decision 89: how often the collapsed tick loop's reality check (compare
+  // /now-playing against the resolved playhead) runs. The check itself is
+  // near-free, so this is a dead-air-detection tradeoff, not a resource one.
+  reality_check_interval_seconds: real('reality_check_interval_seconds').notNull().default(3),
 });
 
 export type StationSettings = typeof stationSettings.$inferSelect;
@@ -1095,8 +1099,18 @@ export type RundownPlaybackCursorInsert = typeof rundownPlaybackCursors.$inferIn
 
 // ─── Supervisor V2 ────────────────────────────────────────────────────────────
 
-export const PLAN_STATUSES = ['draft', 'finalized', 'active', 'completed'] as const;
+// Decision 84: 'Transitioning' names the window between the queue-ahead push
+// of a plan's first item and its ground-truth on-air confirmation (Decision
+// 60) — it exists today but has no label, which is what let the Decision 78
+// activation-snapshot race happen. 'Invalid' is a plan no longer trusted as
+// ground truth (see `reason` below) — a different axis than 'completed'
+// (retired on purpose) — declaring it always drives an immediate fresh
+// Request Plan call, it is not just a status label.
+export const PLAN_STATUSES = ['draft', 'finalized', 'Transitioning', 'active', 'completed', 'Invalid'] as const;
 export type PlanStatus = (typeof PLAN_STATUSES)[number];
+
+export const PLAN_INVALID_REASONS = ['transition_failed', 'restart_ambiguous'] as const;
+export type PlanInvalidReason = (typeof PLAN_INVALID_REASONS)[number];
 
 export const plans = sqliteTable(
   'plans',
@@ -1114,6 +1128,10 @@ export const plans = sqliteTable(
     // created before this column existed.
     resolution_identity: text('resolution_identity'),
     status: text('status', { enum: PLAN_STATUSES }).notNull(),
+    // Decision 84: why this plan was marked 'Invalid' — null for every other
+    // status. Not validated at the DB level (SQLite text column); enforced by
+    // the Zod schema / whatever sets status='Invalid'.
+    reason: text('reason', { enum: PLAN_INVALID_REASONS }),
     created_at: integer('created_at').notNull(),
     finalized_at: integer('finalized_at'),
   },
@@ -1234,6 +1252,11 @@ export const supervisorState = sqliteTable('supervisor_state', {
   // changes (handleTrackStarted) so a restart can reconstruct instead of
   // blind-resetting 'playing' plan_items to 'pending'. Decision 59.
   current_play_history_id: integer('current_play_history_id').references(() => playHistory.id, { onDelete: 'set null' }),
+  // Decision 88: LiquidSoap's OS process id, last seen on any webhook/query
+  // response. A different pid arriving on a later event is unambiguous,
+  // retroactive proof LiquidSoap restarted underneath a still-running
+  // Supervisor process — distinct from a Supervisor-process restart.
+  ls_pid: integer('ls_pid'),
 });
 
 export type SupervisorStateRow = typeof supervisorState.$inferSelect;

@@ -8,8 +8,19 @@ import { invalidateInventory } from '../services/spotBudget.js';
 async function ensureRow() {
   const [row] = await db.select().from(stationSettings).where(eq(stationSettings.id, 1));
   if (!row) {
-    await db.insert(stationSettings).values({ id: 1, promo_margin: 0.10, drift_recovery_cap_seconds: 300 });
-    return { id: 1, promo_margin: 0.10, default_clock_id: null, drift_recovery_cap_seconds: 300 };
+    await db.insert(stationSettings).values({
+      id: 1,
+      promo_margin: 0.10,
+      drift_recovery_cap_seconds: 300,
+      reality_check_interval_seconds: 3,
+    });
+    return {
+      id: 1,
+      promo_margin: 0.10,
+      default_clock_id: null,
+      drift_recovery_cap_seconds: 300,
+      reality_check_interval_seconds: 3,
+    };
   }
   return row;
 }

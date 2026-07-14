@@ -38,13 +38,15 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
           ? parseInt(String(rawPhid), 10)
           : null;
 
+      const ls_pid = typeof body['ls_pid'] === 'number' ? (body['ls_pid'] as number) : null;
+
       const metadata: Record<string, string> = {};
       for (const [k, v] of Object.entries(body)) {
         if (typeof v === 'string') metadata[k] = v;
       }
 
       request.log.info(
-        { on_air_timestamp, uri, play_history_id },
+        { on_air_timestamp, uri, play_history_id, ls_pid },
         'LS on_track webhook received',
       );
 
@@ -54,6 +56,7 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
         uri,
         play_history_id: Number.isFinite(play_history_id) ? play_history_id : null,
         metadata,
+        ls_pid,
       });
 
       return reply.status(200).send({ ok: true });
@@ -81,13 +84,15 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
           ? parseInt(String(rawPhid), 10)
           : null;
 
+      const ls_pid = typeof body['ls_pid'] === 'number' ? (body['ls_pid'] as number) : null;
+
       const metadata: Record<string, string> = {};
       for (const [k, v] of Object.entries(body)) {
         if (typeof v === 'string') metadata[k] = v;
       }
 
       request.log.info(
-        { remaining_seconds, uri, play_history_id },
+        { remaining_seconds, uri, play_history_id, ls_pid },
         'LS on_end webhook received',
       );
 
@@ -97,6 +102,7 @@ export async function lsWebhookRoutes(fastify: FastifyInstance) {
         uri,
         play_history_id: Number.isFinite(play_history_id) ? play_history_id : null,
         metadata,
+        ls_pid,
       });
 
       return reply.status(200).send({ ok: true });
