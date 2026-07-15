@@ -73,23 +73,39 @@ export function scheduleSourceMeta(sourceType: string): { label: string; cls: st
 // ─── Segment timeline layout ──────────────────────────────────────────────────
 //
 // Pure layout math for the Segment Timeline, kept independent of JSX so the
-// geometry can be reasoned about (and sanity-checked) on its own. Model,
-// left to right: [offset region][scheduled-boundary reference][content
-// blocks][trailing region: gap or overshoot]. Offset and trailing regions use
-// hybrid sizing — a floor so a small anomaly stays readable, a cap so a large
-// one doesn't dominate the bar, linear in between; the exact seconds are
-// always available for a tooltip/label regardless of the clamped width.
-// Content is scaled against actual planned length (sum of item durations),
-// not the nominal segment duration, per design discussion.
-
-const OFFSET_OVERSHOOT_FLOOR_PCT = 6;
-const OFFSET_OVERSHOOT_CAP_PCT = 20;
-
-function hybridRegionPct(seconds: number, nominalDurationSeconds: number): number {
-  if (seconds === 0 || nominalDurationSeconds <= 0) return 0;
-  const raw = (Math.abs(seconds) / nominalDurationSeconds) * 100;
-  return Math.min(OFFSET_OVERSHOOT_CAP_PCT, Math.max(OFFSET_OVERSHOOT_FLOOR_PCT, raw));
-}
+// geometry can be reasoned about (and sanity-checked) on its own.
+//
+// Model: one continuous real-content bar, laid out at a single literal
+// seconds-per-pixel scale, with the segment's nominal/configured length as a
+// reference line falling somewhere *inside* it rather than a separate region:
+//   - Content blocks are positioned by their own real durations, starting at
+//     the segment's actual start (position 0), not the nominal/scheduled
+//     start — those coincide only when boundary drift is zero.
+//   - boundary_drift_seconds < 0 means real content genuinely began before
+//     the nominal start (the previous segment came up short and this one's
+//     content started early to cover it). That stretch is real audio.
+//   - Real content extending past the nominal end is overshoot.
+// Either way, the hash texture is applied directly to whichever individual
+// block(s) overlap the boundary — never as one blanket region spanning to
+// the bar's edge. The assembler only ever lets ONE track cross a boundary
+// (a single greedy placement decision, D72) — an overshoot spanning several
+// blocks would mean several unrelated tracks got hashed as if they were one
+// continuous anomaly, which misrepresents what actually happened. Found
+// 2026-07-15: an early version overlaid one rectangle from the nominal line
+// to 100%, which — combined with a stale/inconsistent planned_overshoot_
+// seconds value — hashed eight unrelated blocks at once.
+//
+// Overshoot/gap classification is derived purely from real data (sum of
+// actual item durations vs. nominal length), not from planned_overshoot_
+// seconds — that field is a one-time snapshot frozen at plan activation and
+// can diverge from what's actually been assembled since (see plan_internal_
+// drift_seconds for that comparison instead). Deriving from real items keeps
+// the bar always internally consistent with what it's actually drawing.
+//
+// intentional_offset_seconds (the deliberate pre-assembly target-sizing
+// correction) is deliberately NOT represented on this bar — it's a planning
+// decision, not a fact about real audio, and doesn't have a stable location
+// to point to. It's surfaced as a header stat instead (see SupervisorPage).
 
 export interface TimelineContentInput {
   durationSeconds: number;
@@ -106,26 +122,37 @@ export interface TimelineContentInput {
 export interface TimelineContentBlock extends TimelineContentInput {
   leftPct: number;
   widthPct: number;
+  // How much of THIS block's own width (0-100) falls before the nominal
+  // start or past the nominal end — hash the corresponding edge of this
+  // block only, never a separate region spanning multiple blocks.
+  leadHashPctOfBlock: number;
+  trailHashPctOfBlock: number;
 }
 
 export interface TimelineLayout {
-  // 0 when there's no intentional offset.
-  offsetPct: number;
-  offsetSide: 'lead' | 'bite' | null;
-  offsetSeconds: number;
-  // Where the "scheduled boundary" reference line sits — always the same
-  // position as offsetPct (the boundary between the offset region and
-  // content), kept as its own name for clarity at call sites.
-  scheduledBoundaryPct: number;
+  // Width of the leading "real content, started early" span — 0 unless
+  // boundary drift is negative. Purely a reference value now; the hash
+  // itself lives on whichever content block(s) it overlaps.
+  leadingPct: number;
+  leadingSeconds: number;
+  // Reference positions marking the segment's nominal/configured length on
+  // this bar's real-seconds scale. nominalStartPct is always equal to
+  // leadingPct (kept as its own name for clarity at call sites).
+  nominalStartPct: number;
+  nominalEndPct: number;
   contentBlocks: TimelineContentBlock[];
-  contentPct: number;
-  // 0 when there's no gap/overshoot.
-  trailingPct: number;
+  // Where real content ends — may fall before or after nominalEndPct.
+  contentEndPct: number;
+  // The separately-rendered Gap region (real content short of nominal) —
+  // 0 width when there's no shortfall. This one genuinely has no content to
+  // attach to, so it stays its own region rather than a per-block overlay.
+  gapPct: number;
+  gapLeftPct: number;
   trailingKind: 'gap' | 'overshoot' | null;
   trailingSeconds: number;
   totalContentSeconds: number;
-  // Position a plan-consumed-seconds value (measured from the start of
-  // content, i.e. right at the scheduled-boundary line) onto the bar.
+  // Position a plan-consumed-seconds value (measured from the real start of
+  // content, position 0) onto the bar.
   planPositionToPct: (planConsumedSeconds: number) => number;
   // Position a wall-clock-elapsed-since-nominal-start value onto the bar.
   wallClockToPct: (calendarElapsedSeconds: number) => number;
@@ -133,59 +160,65 @@ export interface TimelineLayout {
 
 export function computeTimelineLayout(
   nominalDurationSeconds: number,
-  intentionalOffsetSeconds: number,
+  boundaryDriftSeconds: number,
   items: TimelineContentInput[],
-  plannedOvershootSeconds: number,
 ): TimelineLayout {
-  const offsetSeconds = intentionalOffsetSeconds;
-  const offsetSide: 'lead' | 'bite' | null =
-    offsetSeconds === 0 ? null : offsetSeconds < 0 ? 'lead' : 'bite';
-  const offsetPct = hybridRegionPct(offsetSeconds, nominalDurationSeconds);
+  const leadingSeconds = boundaryDriftSeconds < 0 ? -boundaryDriftSeconds : 0;
+  const totalContentSeconds = items.reduce((sum, it) => sum + it.durationSeconds, 0);
 
-  const trailingSeconds = plannedOvershootSeconds;
+  const nominalEndSeconds = leadingSeconds + nominalDurationSeconds;
+  // Derived from real, always-consistent data — never from planned_
+  // overshoot_seconds (see module header comment for why).
+  const trailingSeconds = totalContentSeconds - nominalEndSeconds;
   const trailingKind: 'gap' | 'overshoot' | null =
     trailingSeconds === 0 ? null : trailingSeconds > 0 ? 'overshoot' : 'gap';
-  const trailingPct = hybridRegionPct(trailingSeconds, nominalDurationSeconds);
 
-  const contentPct = Math.max(0, 100 - offsetPct - trailingPct);
-  const totalContentSeconds = items.reduce((sum, it) => sum + it.durationSeconds, 0);
+  // At least one of these two is always the true extent of the bar — real
+  // content when overshooting, the nominal reference when it falls short
+  // (so there's still room to draw the Gap region and the reference line).
+  const containerTotalSeconds = Math.max(totalContentSeconds, nominalEndSeconds, 1);
+
+  const pct = (seconds: number): number => (seconds / containerTotalSeconds) * 100;
+
+  const leadingPct = pct(leadingSeconds);
+  const nominalEndPct = pct(nominalEndSeconds);
+  const contentEndPct = pct(totalContentSeconds);
 
   let cursor = 0;
   const contentBlocks: TimelineContentBlock[] = items.map((item) => {
-    const widthPct =
-      totalContentSeconds > 0 ? (item.durationSeconds / totalContentSeconds) * contentPct : 0;
-    const block: TimelineContentBlock = { ...item, leftPct: offsetPct + cursor, widthPct };
-    cursor += widthPct;
+    const widthPct = pct(item.durationSeconds);
+    const blockStart = cursor;
+    const blockEnd = cursor + widthPct;
+    const leadOverlapPct = Math.max(0, Math.min(blockEnd, leadingPct) - blockStart);
+    const trailOverlapPct = Math.max(0, blockEnd - Math.max(blockStart, nominalEndPct));
+    const block: TimelineContentBlock = {
+      ...item,
+      leftPct: blockStart,
+      widthPct,
+      leadHashPctOfBlock: widthPct > 0 ? (leadOverlapPct / widthPct) * 100 : 0,
+      trailHashPctOfBlock: widthPct > 0 ? (trailOverlapPct / widthPct) * 100 : 0,
+    };
+    cursor = blockEnd;
     return block;
   });
 
-  const planPositionToPct = (planConsumedSeconds: number): number => {
-    if (totalContentSeconds <= 0) return offsetPct;
-    if (planConsumedSeconds <= totalContentSeconds) {
-      return offsetPct + (planConsumedSeconds / totalContentSeconds) * contentPct;
-    }
-    // Past all known content — ease into the trailing overshoot region (if
-    // any); a gap has no further seconds to represent, so just sit at its end.
-    const intoTrailing = planConsumedSeconds - totalContentSeconds;
-    const trailingSpanSeconds = trailingKind === 'overshoot' ? Math.abs(trailingSeconds) : 0;
-    const frac = trailingSpanSeconds > 0 ? Math.min(1, intoTrailing / trailingSpanSeconds) : 1;
-    return offsetPct + contentPct + frac * trailingPct;
-  };
+  const gapPct = trailingKind === 'gap' ? Math.max(0, nominalEndPct - contentEndPct) : 0;
 
-  const wallClockToPct = (calendarElapsedSeconds: number): number => {
-    if (nominalDurationSeconds <= 0) return offsetPct;
-    const frac = Math.min(1, Math.max(0, calendarElapsedSeconds / nominalDurationSeconds));
-    return offsetPct + frac * (100 - offsetPct);
-  };
+  const planPositionToPct = (planConsumedSeconds: number): number =>
+    pct(Math.min(Math.max(0, planConsumedSeconds), totalContentSeconds));
+
+  const wallClockToPct = (calendarElapsedSeconds: number): number =>
+    pct(leadingSeconds + Math.max(0, calendarElapsedSeconds));
 
   return {
-    offsetPct,
-    offsetSide,
-    offsetSeconds,
-    scheduledBoundaryPct: offsetPct,
+    leadingPct,
+    leadingSeconds,
+    nominalStartPct: leadingPct,
+    nominalEndPct,
     contentBlocks,
-    contentPct,
-    trailingPct,
+    contentEndPct,
+    gapPct,
+    gapLeftPct: contentEndPct,
     trailingKind,
     trailingSeconds,
     totalContentSeconds,

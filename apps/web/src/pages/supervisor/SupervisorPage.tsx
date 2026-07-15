@@ -3,8 +3,6 @@ import {
   Activity,
   AlertTriangle,
   CheckCircle,
-  ChevronsLeft,
-  ChevronsRight,
   Circle,
   Clock,
   Mic2,
@@ -172,7 +170,6 @@ function SegmentTimeline({
   planItems,
   expectedCurrentItemEndMs,
   intentionalOffsetSeconds,
-  plannedOvershootSeconds,
   boundaryDriftSeconds,
   planInternalDriftSeconds,
   driftRecoveryCapSeconds,
@@ -183,7 +180,6 @@ function SegmentTimeline({
   planItems: SupervisorV2PlanItem[];
   expectedCurrentItemEndMs: number | null;
   intentionalOffsetSeconds: number;
-  plannedOvershootSeconds: number;
   boundaryDriftSeconds: number;
   planInternalDriftSeconds: number | null;
   driftRecoveryCapSeconds: number;
@@ -213,7 +209,7 @@ function SegmentTimeline({
   const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
   const layout = computeTimelineLayout(
     segmentDurationSeconds,
-    intentionalOffsetSeconds,
+    boundaryDriftSeconds,
     planItems.map((item) => {
       const meta = CONTENT_TYPE_META[item.content_type] ?? { barColor: 'bg-zinc-500', label: item.content_type };
       return {
@@ -226,7 +222,6 @@ function SegmentTimeline({
         statusLabel: item.status.replace(/_/g, ' '),
       };
     }),
-    plannedOvershootSeconds,
   );
 
   const calendarCursorLeft = layout.wallClockToPct(calendarElapsed);
@@ -235,14 +230,6 @@ function SegmentTimeline({
     expectedCurrentItemEndMs != null
       ? layout.wallClockToPct((expectedCurrentItemEndMs - segmentStartedAtMs) / 1000)
       : null;
-  const trailingLeftPct = layout.scheduledBoundaryPct + layout.contentPct;
-
-  const offsetLabel =
-    layout.offsetSide === 'lead'
-      ? `Fired ${fmtMmSs(Math.abs(layout.offsetSeconds))} early`
-      : layout.offsetSide === 'bite'
-        ? `Fired ${fmtMmSs(Math.abs(layout.offsetSeconds))} late`
-        : null;
 
   const hoverHandlers = (key: string) => ({
     onMouseEnter: () => setHoveredKey(key),
@@ -294,13 +281,13 @@ function SegmentTimeline({
               <span className="font-mono font-semibold text-zinc-300">{fmtDriftSign(boundaryDriftSeconds)}</span>
             </span>
           )}
-          {layout.offsetSeconds !== 0 && (
+          {intentionalOffsetSeconds !== 0 && (
             <span
-              className={layout.offsetSide === 'lead' ? 'text-sky-400' : 'text-amber-400'}
-              title={`How much of the measured drift was intentionally corrected for when this segment was sized. Corrections are capped at ±${driftRecoveryCapSeconds}s per transition — the rest carries over to the next one.`}
+              className={intentionalOffsetSeconds < 0 ? 'text-sky-400' : 'text-amber-400'}
+              title={`How much of the measured drift was intentionally corrected for when this segment's target was sized (a planning decision, not a fact about real audio — that's why it isn't drawn on the bar below). Corrections are capped at ±${driftRecoveryCapSeconds}s per transition — the rest carries over to the next one.`}
             >
               offset{' '}
-              <span className="font-mono font-semibold">{fmtDriftSign(layout.offsetSeconds)}</span>
+              <span className="font-mono font-semibold">{fmtDriftSign(intentionalOffsetSeconds)}</span>
             </span>
           )}
           {layout.trailingKind && (
@@ -314,71 +301,81 @@ function SegmentTimeline({
         {/* Timeline bar — outer wrapper stays unclipped so tooltips can float above it */}
         <div className="relative h-12">
           <div className="absolute inset-0 bg-zinc-800 rounded overflow-hidden">
-            {/* Offset region (fired early/late) */}
-            {layout.offsetPct > 0 && (
-              <div
-                className={`absolute top-0 bottom-0 flex items-center justify-center cursor-default ${
-                  layout.offsetSide === 'lead' ? 'bg-sky-900/40' : 'bg-amber-900/40'
-                }`}
-                style={{ left: 0, width: `${layout.offsetPct}%` }}
-                {...hoverHandlers('offset')}
-              >
-                {layout.offsetSide === 'lead' ? (
-                  <ChevronsLeft className="w-4 h-4 text-sky-400" />
-                ) : (
-                  <ChevronsRight className="w-4 h-4 text-amber-400" />
-                )}
-              </div>
-            )}
-
-            {/* Scheduled-boundary reference line — always at the offset/content border */}
-            <div
-              className="absolute top-0 bottom-0 w-2 -ml-1 cursor-default border-l border-dashed border-zinc-400 opacity-50 z-10"
-              style={{ left: `${layout.scheduledBoundaryPct}%` }}
-              {...hoverHandlers('boundary')}
-            />
-
-            {/* Plan item blocks, chiseled dividers between them */}
-            {layout.contentBlocks.map((block, i) => (
-              <div
-                key={i}
-                className="absolute top-1 bottom-1 cursor-default"
-                style={{ left: `${block.leftPct}%`, width: `${Math.max(0.3, block.widthPct)}%` }}
-                {...hoverHandlers(`content-${i}`)}
-              >
+            {/* Plan item blocks, chiseled dividers between them — real content,
+                own color, positioned at the segment's actual (real) start */}
+            {layout.contentBlocks.map((block, i) => {
+              // Hash lives on the individual block(s) that actually overlap the
+              // boundary — never a region spanning multiple blocks (D72's
+              // assembler only ever lets ONE track cross a boundary; an
+              // overshoot/early-start "region" spanning several blocks would
+              // misrepresent several unrelated tracks as one anomaly).
+              const hoverKey =
+                block.leadHashPctOfBlock > 0 ? 'leading' : block.trailHashPctOfBlock > 0 ? 'trailing' : `content-${i}`;
+              return (
                 <div
-                  className={`absolute inset-0 rounded-sm ${block.barColor} ${block.isTerminal ? 'opacity-30' : 'opacity-70'}`}
-                  style={
-                    i < layout.contentBlocks.length - 1
-                      ? { boxShadow: 'inset -1px 0 0 0 rgba(0,0,0,0.5), inset -2px 0 0 0 rgba(255,255,255,0.08)' }
-                      : undefined
-                  }
-                />
-                {block.isPlaying && (
-                  <div className="absolute -inset-0.5 border-2 border-white rounded-sm pointer-events-none" />
-                )}
-              </div>
-            ))}
+                  key={i}
+                  className="absolute top-1 bottom-1 cursor-default"
+                  style={{ left: `${block.leftPct}%`, width: `${Math.max(0.3, block.widthPct)}%` }}
+                  {...hoverHandlers(hoverKey)}
+                >
+                  <div
+                    className={`absolute inset-0 rounded-sm ${block.barColor} ${block.isTerminal ? 'opacity-30' : 'opacity-70'}`}
+                    style={
+                      i < layout.contentBlocks.length - 1
+                        ? { boxShadow: 'inset -1px 0 0 0 rgba(0,0,0,0.5), inset -2px 0 0 0 rgba(255,255,255,0.08)' }
+                        : undefined
+                    }
+                  />
+                  {block.leadHashPctOfBlock > 0 && (
+                    <div
+                      className="absolute inset-y-0 left-0 rounded-l-sm"
+                      style={{
+                        width: `${block.leadHashPctOfBlock}%`,
+                        backgroundImage:
+                          'repeating-linear-gradient(45deg, rgba(0,0,0,0.35) 0, rgba(0,0,0,0.35) 4px, transparent 4px, transparent 8px)',
+                      }}
+                    />
+                  )}
+                  {block.trailHashPctOfBlock > 0 && (
+                    <div
+                      className="absolute inset-y-0 right-0 rounded-r-sm"
+                      style={{
+                        width: `${block.trailHashPctOfBlock}%`,
+                        backgroundImage:
+                          'repeating-linear-gradient(45deg, rgba(0,0,0,0.35) 0, rgba(0,0,0,0.35) 4px, transparent 4px, transparent 8px)',
+                      }}
+                    />
+                  )}
+                  {block.isPlaying && (
+                    <div className="absolute -inset-0.5 border-2 border-white rounded-sm pointer-events-none" />
+                  )}
+                </div>
+              );
+            })}
 
-            {/* Trailing region: gap or overshoot */}
-            {layout.trailingPct > 0 && (
+            {/* Gap region — content falls short of nominal. Nothing real ever
+                occupied this stretch, so it's a distinct region, not an overlay. */}
+            {layout.trailingKind === 'gap' && layout.gapPct > 0 && (
               <div
-                className={`absolute top-0 bottom-0 flex items-center justify-center cursor-default text-xs font-mono uppercase tracking-wide ${
-                  layout.trailingKind === 'overshoot' ? 'text-red-300' : 'text-zinc-500'
-                }`}
+                className="absolute top-0 bottom-0 flex items-center justify-center cursor-default text-xs font-mono uppercase tracking-wide text-zinc-500"
                 style={{
-                  left: `${trailingLeftPct}%`,
-                  width: `${layout.trailingPct}%`,
+                  left: `${layout.gapLeftPct}%`,
+                  width: `${layout.gapPct}%`,
                   backgroundImage:
-                    layout.trailingKind === 'overshoot'
-                      ? 'repeating-linear-gradient(45deg, rgba(248,113,113,0.25) 0, rgba(248,113,113,0.25) 4px, transparent 4px, transparent 8px)'
-                      : 'repeating-linear-gradient(45deg, rgba(113,113,122,0.2) 0, rgba(113,113,122,0.2) 3px, transparent 3px, transparent 9px)',
+                    'repeating-linear-gradient(45deg, rgba(113,113,122,0.2) 0, rgba(113,113,122,0.2) 3px, transparent 3px, transparent 9px)',
                 }}
                 {...hoverHandlers('trailing')}
               >
-                {layout.trailingKind === 'gap' ? 'Gap' : ''}
+                Gap
               </div>
             )}
+
+            {/* Nominal/configured length reference line */}
+            <div
+              className="absolute top-0 bottom-0 w-2 -ml-1 cursor-default border-l border-dashed border-zinc-400 opacity-50 z-10"
+              style={{ left: `${layout.nominalEndPct}%` }}
+              {...hoverHandlers('boundary')}
+            />
 
             {/* Plan cursor (colored by drift) */}
             <div
@@ -409,13 +406,14 @@ function SegmentTimeline({
           </div>
 
           {/* Tooltips — rendered outside the clipped inner div so they never get cut off */}
-          {layout.offsetPct > 0 && (
-            <TimelineTooltip active={hoveredKey === 'offset'} leftPct={layout.offsetPct / 2}>
-              <div className="font-semibold">{offsetLabel}</div>
+          {layout.leadingPct > 0 && (
+            <TimelineTooltip active={hoveredKey === 'leading'} leftPct={layout.leadingPct / 2}>
+              <div className="font-semibold">Started {fmtMmSs(layout.leadingSeconds)} early</div>
+              <div className="text-zinc-400 text-xs mt-0.5">Real content — the previous segment came up short</div>
             </TimelineTooltip>
           )}
-          <TimelineTooltip active={hoveredKey === 'boundary'} leftPct={layout.scheduledBoundaryPct}>
-            Scheduled boundary
+          <TimelineTooltip active={hoveredKey === 'boundary'} leftPct={layout.nominalEndPct}>
+            Nominal length: {fmtMmSs(segmentDurationSeconds)}
           </TimelineTooltip>
           {layout.contentBlocks.map((block, i) => (
             <TimelineTooltip key={i} active={hoveredKey === `content-${i}`} leftPct={block.leftPct + block.widthPct / 2}>
@@ -425,11 +423,17 @@ function SegmentTimeline({
               </div>
             </TimelineTooltip>
           ))}
-          {layout.trailingPct > 0 && (
-            <TimelineTooltip active={hoveredKey === 'trailing'} leftPct={trailingLeftPct + layout.trailingPct / 2}>
-              {layout.trailingKind === 'overshoot'
-                ? `Overshoot: +${fmtMmSs(Math.abs(layout.trailingSeconds))}`
-                : `Gap: ${fmtMmSs(Math.abs(layout.trailingSeconds))}`}
+          {layout.trailingKind === 'overshoot' && (
+            <TimelineTooltip
+              active={hoveredKey === 'trailing'}
+              leftPct={(layout.nominalEndPct + 100) / 2}
+            >
+              Overshoot: +{fmtMmSs(Math.abs(layout.trailingSeconds))}
+            </TimelineTooltip>
+          )}
+          {layout.trailingKind === 'gap' && layout.gapPct > 0 && (
+            <TimelineTooltip active={hoveredKey === 'trailing'} leftPct={layout.gapLeftPct + layout.gapPct / 2}>
+              Gap: {fmtMmSs(Math.abs(layout.trailingSeconds))}
             </TimelineTooltip>
           )}
           <TimelineTooltip active={hoveredKey === 'plan-cursor'} leftPct={planCursorLeft}>
@@ -449,7 +453,7 @@ function SegmentTimeline({
         <div className="flex items-center gap-4 mt-2 text-xs text-zinc-500 flex-wrap">
           <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-white inline-block" />wall clock</span>
           <span className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${driftCursorColor} inline-block`} />plan position</span>
-          <span className="flex items-center gap-1"><span className="w-2 h-2 border-l border-dashed border-zinc-400 inline-block" />scheduled boundary</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 border-l border-dashed border-zinc-400 inline-block" />nominal length</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 border-2 border-white rounded-sm inline-block" />now playing</span>
         </div>
       </div>
@@ -969,7 +973,6 @@ export function SupervisorPage() {
         planItems={data?.plan_items ?? []}
         expectedCurrentItemEndMs={data?.expected_current_item_end_ms ?? null}
         intentionalOffsetSeconds={data?.current_segment?.intentional_offset_seconds ?? 0}
-        plannedOvershootSeconds={data?.current_segment?.planned_overshoot_seconds ?? 0}
         boundaryDriftSeconds={data?.current_segment?.boundary_drift_seconds ?? 0}
         planInternalDriftSeconds={data?.plan_internal_drift_seconds ?? null}
         driftRecoveryCapSeconds={data?.drift_recovery_cap_seconds ?? 300}
