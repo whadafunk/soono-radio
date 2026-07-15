@@ -620,12 +620,40 @@ export class SupervisorProcess {
   // been hardened through real incidents (D59-D80), just no longer forced
   // to re-evaluate unconditionally every 500ms regardless of relevance.
   private async realityCheckAndDispatch(nowMs: number): Promise<void> {
+    // Decision 89 diagnostic gap fix: every cycle emits exactly one summary
+    // line via logRealityCheck() below, whatever else happened. Before this,
+    // the routine "ground truth matches belief, nothing to do" case — the
+    // common outcome of most cycles — left no trace at all, and even the
+    // divergent cases had no single line naming what this specific check
+    // observed and decided. `outcome` starts at 'ok' and gets overwritten by
+    // whichever branch below actually fires; the closure captures it (and
+    // the other locals) by reference so the final call reports whatever was
+    // last set, however the function exits.
+    let outcome = 'ok';
+    let resolvedSegmentId: number | null = null;
+    let playheadConfidence: 'ground_truth' | 'wall_clock_only' | null = null;
+    let expectedEndMsForLog: number | null = null;
+    const logRealityCheck = (finalOutcome: string): void => {
+      const level: 'debug' | 'info' = finalOutcome === 'ok' ? 'debug' : 'info';
+      this.logger?.[level]({
+        process: 'supervisor', event: 'REALITY_CHECK', outcome: finalOutcome,
+        ls_pid: nowPlaying?.ls_pid ?? null,
+        now_playing_request_id: nowPlaying?.current?.request_id ?? null,
+        queue_depth: nowPlaying?.queue_depth ?? null,
+        resolved_segment_id: resolvedSegmentId,
+        active_plan_id: this.activePlanId,
+        playhead_confidence: playheadConfidence,
+        expected_end_ms: expectedEndMsForLog,
+      }, `supervisor: reality check — ${finalOutcome}`);
+    };
+
     this.tickOperation = 'now_playing_check';
     let nowPlaying: NowPlayingResponse | null = null;
     try {
       nowPlaying = await HarborClient.getNowPlaying();
     } catch (err) {
       this.logger?.warn({ err, process: 'supervisor', event: 'NOW_PLAYING_CHECK_FAILED' }, 'supervisor: /now-playing check failed this cycle — proceeding on stored state alone');
+      outcome = 'now_playing_check_failed';
     }
     if (nowPlaying) {
       await this.checkLsPid(nowPlaying.ls_pid, nowMs);
@@ -633,7 +661,8 @@ export class SupervisorProcess {
 
     this.tickOperation = 'segment_resolve';
     const resolved = await this.getCachedSegment(nowMs);
-    if (!resolved) return;
+    if (!resolved) { logRealityCheck('segment_unresolved'); return; }
+    resolvedSegmentId = resolved.segment.id;
 
     // ── Cold start ───────────────────────────────────────────────────────────
     // No active plan and no next plan building — the only case here with no
@@ -645,6 +674,7 @@ export class SupervisorProcess {
     this.tickOperation = 'cold_start';
     if (this.activePlanId == null && this.nextPlanId == null && !this.coldStartFinalizeSent) {
       await this.requestColdStartDraft(resolved, nowMs);
+      logRealityCheck('cold_start');
       return;
     }
 
@@ -667,6 +697,7 @@ export class SupervisorProcess {
     if (this.activePlanId == null) {
       const orphaned = await this.findOrphanedFinalizedPlan(resolved.segment.id, resolved.clockInstanceStartedAt);
       if (orphaned) {
+        outcome = 'orphan_recovered';
         this.logger?.warn({
           process: 'supervisor', event: 'ORPHANED_PLAN_RECOVERED',
           plan_id: orphaned.id, segment_id: resolved.segment.id,
@@ -675,7 +706,7 @@ export class SupervisorProcess {
       }
     }
 
-    if (this.activePlanId == null) return;
+    if (this.activePlanId == null) { logRealityCheck('no_active_plan'); return; }
 
     // ── Plan playhead (for push timing) ─────────────────────────────────────
     // Decision 83/89: resolvePlayhead is now the source of truth — one
@@ -685,6 +716,8 @@ export class SupervisorProcess {
     this.tickOperation = 'playhead_calc';
     const playhead = await resolvePlayhead(nowMs, this.db);
     const expectedEndMs = playhead.expectedSegmentEndMs;
+    playheadConfidence = playhead.confidence;
+    expectedEndMsForLog = expectedEndMs;
 
     // Decision 84: a plan stuck in Transitioning too long gets marked Invalid
     // and a fresh plan gets requested for its segment. Cheap check (in-memory
@@ -728,6 +761,7 @@ export class SupervisorProcess {
     if (expectedEndMs == null || isStale) {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
+        outcome = 'pushed';
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
         this.resetStillOpenWait(nowMs);
       } else {
@@ -741,6 +775,7 @@ export class SupervisorProcess {
           // D79: this branch used to be completely silent — throttled entry/
           // ongoing logging below so a sustained wait is visible in logs
           // instead of indistinguishable from normal idling.
+          outcome = 'still_open_wait';
           if (this.stillOpenWaitSince == null) {
             this.stillOpenWaitSince = nowMs;
             this.lastStillOpenLogMs = nowMs;
@@ -759,11 +794,13 @@ export class SupervisorProcess {
             }, 'supervisor: still waiting on current play_history to close');
           }
         } else {
+          outcome = 'exhausted_plan';
           this.resetStillOpenWait(nowMs);
           await this.handleExhaustedPlan(nowMs);
         }
       }
     } else if (expectedEndMs - nowMs <= this.PUSH_LEAD_MS) {
+      outcome = 'pushed';
       this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
       this.resetStillOpenWait(nowMs);
     }
@@ -776,6 +813,8 @@ export class SupervisorProcess {
     // between track boundaries.
     this.tickOperation = 'hard_start_gate';
     await this.maybeHandleHardStartGate(nowMs);
+
+    logRealityCheck(outcome);
   }
 
   // Counts played/skipped items in a plan for SEGMENT_SUMMARY.
@@ -2093,6 +2132,21 @@ export class SupervisorProcess {
         process: 'supervisor', event: 'PLAN_TRANSITIONING',
         plan_id: this.nextPlanId,
       }, 'supervisor: next plan\'s first item pushed — Transitioning until ground-truth confirmation');
+    } else {
+      // The conditional UPDATE above only matches a plan still 'finalized' —
+      // if it didn't match, this plan's PUSH_SENT arrived for a plan that had
+      // already moved past 'finalized' by some other path (e.g. invalidated
+      // by an LS-restart reconcile between the push and this handler running).
+      // Previously silent; log the actual status so a stuck-lifecycle
+      // incident shows this attempt instead of a gap in the timeline.
+      const [current] = await this.db
+        .select({ status: plansTable.status })
+        .from(plansTable)
+        .where(eq(plansTable.id, this.nextPlanId));
+      this.logger?.warn({
+        process: 'supervisor', event: 'PLAN_TRANSITIONING_NOOP',
+        plan_id: this.nextPlanId, actual_status: current?.status ?? null,
+      }, 'supervisor: first-item push observed for next plan, but it was no longer \'finalized\' — Transitioning promotion skipped');
     }
   }
 
@@ -2112,7 +2166,22 @@ export class SupervisorProcess {
       .where(and(eq(plansTable.id, staleTransitioningPlanId), eq(plansTable.status, 'Transitioning')))
       .returning({ id: plansTable.id });
     this.nextPlanTransitioningSinceMs = null;
-    if (result.length === 0) return;
+    if (result.length === 0) {
+      // The conditional UPDATE only matches a plan still 'Transitioning' —
+      // if it didn't match, the stuck-timeout fired for a plan some other
+      // path already moved off Transitioning (e.g. an LS-restart reconcile
+      // already invalidated or activated it). Previously silent; log the
+      // actual status so this attempt is visible instead of a gap.
+      const [current] = await this.db
+        .select({ status: plansTable.status })
+        .from(plansTable)
+        .where(eq(plansTable.id, staleTransitioningPlanId));
+      this.logger?.warn({
+        process: 'supervisor', event: 'PLAN_INVALIDATE_NOOP',
+        plan_id: staleTransitioningPlanId, actual_status: current?.status ?? null,
+      }, 'supervisor: stuck-Transitioning timeout fired, but plan had already left Transitioning — invalidation skipped');
+      return;
+    }
 
     this.logger?.warn({
       process: 'supervisor', event: 'PLAN_INVALIDATED',
