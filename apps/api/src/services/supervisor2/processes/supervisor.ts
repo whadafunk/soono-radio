@@ -743,6 +743,7 @@ export class SupervisorProcess {
         active_plan_id: this.activePlanId,
         current_play_history_id: this.currentPlayHistoryId,
         still_open_wait_seconds: this.stillOpenWaitSince != null ? Math.round((nowMs - this.stillOpenWaitSince) / 1000) : null,
+        playhead_confidence: playheadConfidence,
       }, `supervisor: no push sent for ${Math.floor(stallSeconds)}s — station may be silent`);
     }
 
@@ -761,9 +762,9 @@ export class SupervisorProcess {
     if (expectedEndMs == null || isStale) {
       const hasPending = await this.hasPendingItems(this.activePlanId);
       if (hasPending) {
-        outcome = 'pushed';
+        outcome = 'push_requested';
         this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
-        this.resetStillOpenWait(nowMs);
+        this.resetStillOpenWait(nowMs, playheadConfidence);
       } else {
         const stillOpenCheck = await this.isCurrentPlayHistoryStillOpen(nowMs);
         if (stillOpenCheck.stillOpen) {
@@ -783,6 +784,7 @@ export class SupervisorProcess {
               process: 'supervisor', event: 'STILL_OPEN_WAIT', wait_phase: 'entry',
               active_plan_id: this.activePlanId, current_play_history_id: this.currentPlayHistoryId,
               expected_end_ms: stillOpenCheck.expectedEndMs, corroborated: stillOpenCheck.corroborated,
+              playhead_confidence: playheadConfidence,
             }, 'supervisor: active plan has nothing pending, but current play_history is still open — waiting');
           } else if (nowMs - this.lastStillOpenLogMs >= STILL_OPEN_WAIT_LOG_THROTTLE_MS) {
             this.lastStillOpenLogMs = nowMs;
@@ -791,18 +793,19 @@ export class SupervisorProcess {
               active_plan_id: this.activePlanId, current_play_history_id: this.currentPlayHistoryId,
               expected_end_ms: stillOpenCheck.expectedEndMs, corroborated: stillOpenCheck.corroborated,
               waited_seconds: Math.round((nowMs - this.stillOpenWaitSince) / 1000),
+              playhead_confidence: playheadConfidence,
             }, 'supervisor: still waiting on current play_history to close');
           }
         } else {
           outcome = 'exhausted_plan';
-          this.resetStillOpenWait(nowMs);
+          this.resetStillOpenWait(nowMs, playheadConfidence);
           await this.handleExhaustedPlan(nowMs);
         }
       }
     } else if (expectedEndMs - nowMs <= this.PUSH_LEAD_MS) {
-      outcome = 'pushed';
+      outcome = 'push_requested';
       this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'clock_lead' });
-      this.resetStillOpenWait(nowMs);
+      this.resetStillOpenWait(nowMs, playheadConfidence);
     }
 
     // ── Hard-start gate ────────────────────────────────────────────────────
@@ -1060,11 +1063,12 @@ export class SupervisorProcess {
   // progress, then clears the tracking fields. Called from every tick() path
   // that isn't the "still open, waiting" branch itself, so the wait's end is
   // as visible in logs as its start and continuation.
-  private resetStillOpenWait(nowMs: number): void {
+  private resetStillOpenWait(nowMs: number, playheadConfidence: 'ground_truth' | 'wall_clock_only' | null = null): void {
     if (this.stillOpenWaitSince != null) {
       this.logger?.info({
         process: 'supervisor', event: 'STILL_OPEN_WAIT', wait_phase: 'exit',
         waited_seconds: Math.round((nowMs - this.stillOpenWaitSince) / 1000),
+        playhead_confidence: playheadConfidence,
       }, 'supervisor: still-open wait resolved');
     }
     this.stillOpenWaitSince = null;
