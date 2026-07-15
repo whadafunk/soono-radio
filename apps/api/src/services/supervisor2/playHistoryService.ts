@@ -65,6 +65,25 @@ export async function insertPushed(
   return id;
 }
 
+// Removes a row insertPushed created for a push attempt that then failed
+// (HarborClient.push() threw — LS unreachable, network error). The row has
+// to be created before the push, since the push payload embeds its id — but
+// if the push never actually reached LS, this row was never linked to a
+// plan_item (that link is set after a successful push) and doesn't
+// represent a real play. Left in place, it would sit forever as an
+// unconfirmed, never-closed row that every other play_history consumer
+// still reads unfiltered — recent_plays only checks started_at IS NOT NULL
+// (never true for these rows) and would show a track as having aired when
+// it never did; the rotation/separation-window queries in music.ts and
+// campaign.ts would count it toward that track's cooldown the same way.
+// Found 2026-07-15 while reviewing harbor push-failure handling.
+export async function deleteFailedPushAttempt(
+  db: typeof defaultDb,
+  id: number,
+): Promise<void> {
+  await db.delete(playHistoryTable).where(eq(playHistoryTable.id, id));
+}
+
 // Overwrites started_at with the real on-air time once LS confirms playback,
 // and marks the row confirmed — the only signal consumers have that this
 // started_at is ground truth rather than insertPushed's push-time placeholder.

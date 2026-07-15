@@ -29,7 +29,7 @@ import {
 import { lsMediaPathForSha } from '../../ingest/paths.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
-import { insertPushed } from '../playHistoryService.js';
+import { deleteFailedPushAttempt, insertPushed } from '../playHistoryService.js';
 
 export class QueueFeederProcess {
   private readonly unsubscribers: Array<() => void> = [];
@@ -241,6 +241,15 @@ export class QueueFeederProcess {
       // Leave the plan_item as 'pending' so it will be retried on the
       // next push trigger. Dropping it would inflate consumedSeconds with
       // 0-airtime content and trigger a runaway coasting replan spiral.
+      //
+      // But the play_history row created above was never linked to the
+      // plan_item (that link only happens after a successful push, below)
+      // and never represented a real play — left in place it would sit
+      // forever as an unconfirmed, never-closed row that recent_plays and
+      // the rotation/separation-window queries in music.ts/campaign.ts
+      // still read unfiltered, making a failed attempt look like the track
+      // actually aired. Clean it up so only a real push ever leaves a trace.
+      await deleteFailedPushAttempt(this.db, playHistoryId);
       this.logger?.error(
         {
           err,
