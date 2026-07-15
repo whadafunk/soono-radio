@@ -1054,6 +1054,40 @@ export class SupervisorProcess {
     this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'plan_exhausted_advance' });
   }
 
+  // Retires a plan that is being abandoned before it ever activates — either
+  // because it finalized with zero items (D77, skipEmptyNextPlan below) or
+  // because an upcoming hard segment's collapsed runway forces retargeting
+  // past it (D69, the NEXT_PLAN_RETARGETED_TO_HARD_BOUNDARY branch in
+  // maybeRequestFinalization). Either way this plan's segment will never
+  // consume real air time, and activatePlanById — the only other place
+  // plannedOvershootSeconds gets set — never runs for it, so its nominal
+  // duration would otherwise silently vanish from the drift-correction math
+  // that sizes whatever gets planned next. Persisted immediately (not just
+  // held in memory): boundary_drift_seconds/planned_overshoot_seconds
+  // otherwise only ever get written to supervisor_state at activation, so a
+  // restart between this retirement and whatever activates next would
+  // silently lose the credit. Found 2026-07-15 while tracing why drift kept
+  // growing across a station whose stop-sets are consistently empty.
+  private async retirePlanWithoutActivating(planId: number, nominalSeconds: number): Promise<void> {
+    await this.db.update(plansTable)
+      .set({ status: 'completed' })
+      .where(and(eq(plansTable.id, planId), inArray(plansTable.status, ['draft', 'finalized'])));
+
+    this.plannedOvershootSeconds += nominalSeconds;
+
+    this.nextPlanId = null;
+    this.nextPlanSegmentId = null;
+    this.nextPlanScheduledEndMs = null;
+    await this.db.update(supervisorStateTable)
+      .set({
+        next_plan_id: null,
+        next_plan_draft_drift_seconds: null,
+        next_plan_drift_delta_seconds: null,
+        planned_overshoot_seconds: this.plannedOvershootSeconds,
+      })
+      .where(eq(supervisorStateTable.id, 1));
+  }
+
   // Decision 77 — retires a finalized-but-empty next plan and resolves past
   // its own segment, reusing the same reconcileNext/reconcileOccurrence path
   // that already handles "active plan exhausted, nothing lined up." Anchored
@@ -1064,20 +1098,16 @@ export class SupervisorProcess {
     if (emptyPlanId == null) return;
 
     const emptySegment = await resolveActivePlanSegment(this.db, emptyPlanId);
+    const nominalSeconds = emptySegment?.segment.duration_seconds ?? 0;
 
-    await this.db.update(plansTable).set({ status: 'completed' }).where(eq(plansTable.id, emptyPlanId));
+    await this.retirePlanWithoutActivating(emptyPlanId, nominalSeconds);
 
     this.logger?.warn({
       process: 'supervisor', event: 'PLAN_SKIPPED_EMPTY',
       plan_id: emptyPlanId, segment_id: emptySegment?.segment.id ?? null,
+      credited_overshoot_seconds: nominalSeconds,
+      planned_overshoot_seconds: this.plannedOvershootSeconds,
     }, 'supervisor: next plan finalized with zero items — skipping to the segment after it');
-
-    this.nextPlanId = null;
-    this.nextPlanSegmentId = null;
-    this.nextPlanScheduledEndMs = null;
-    await this.db.update(supervisorStateTable)
-      .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
-      .where(eq(supervisorStateTable.id, 1));
 
     if (emptySegment) {
       await this.reconcileNext(emptySegment.segmentEndMs, nowMs);
@@ -2510,18 +2540,10 @@ export class SupervisorProcess {
         const cappedTarget = Math.min(nominal, realRemainingSeconds);
 
         if (cappedTarget < RUNWAY_WORTH_IT_THRESHOLD_S) {
-          await this.db.update(plansTable)
-            .set({ status: 'completed' })
-            .where(and(eq(plansTable.id, this.nextPlanId), inArray(plansTable.status, ['draft', 'finalized'])));
           const retiredPlanId = this.nextPlanId;
-          this.nextPlanId = null;
-          this.nextPlanSegmentId = null;
-          this.nextPlanScheduledEndMs = null;
+          await this.retirePlanWithoutActivating(retiredPlanId, nominal);
           this.finalizationRequestedForPlanId = null;
           this.finalizeInFlightForPlanId = null;
-          await this.db.update(supervisorStateTable)
-            .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
-            .where(eq(supervisorStateTable.id, 1));
           // Still tracked as a backup: if the fresh hard-segment draft below
           // also comes up short (e.g. the same empty-pool problem), the
           // active plan's own fill/trim gate can still stretch toward this
@@ -2540,6 +2562,8 @@ export class SupervisorProcess {
             process: 'supervisor', event: 'NEXT_PLAN_RETARGETED_TO_HARD_BOUNDARY',
             retired_plan_id: retiredPlanId, drafted_segment_id: plan.segment_id,
             hard_segment_id: lookahead.hard.segment.id, capped_target_seconds: cappedTarget,
+            credited_overshoot_seconds: nominal,
+            planned_overshoot_seconds: this.plannedOvershootSeconds,
           }, 'supervisor: runway to hard segment collapsed — retargeting directly at the hard segment instead of leaving the active plan to fill toward it alone');
           await this.reconcileOccurrence(lookahead.hard, nowMs, {
             allowActivate: false,
