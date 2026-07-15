@@ -92,14 +92,20 @@ export async function resolvePlayhead(
   };
 }
 
-// Same accounting as supervisor.ts's computePlanPlayhead: sum the planned
-// duration of every terminal-status item, then add elapsed time in whatever
-// item is currently 'playing' (resolved from its play_history.started_at,
-// falling back to a 5s-ago estimate when the row/timestamp is missing).
-// Duplicated rather than imported because computePlanPlayhead is a private
-// method on SupervisorProcess and Phase 2 is deliberately shadow-mode only —
-// Phase 6 replaces computePlanPlayhead's callers with this module outright,
-// at which point this becomes the one implementation, not two.
+// Sum the planned duration of every terminal-status item, then add elapsed
+// time in whatever item is currently 'playing' — but only once its
+// play_history row is confirmed. insertPushed writes started_at as a
+// push-time placeholder (the column is NOT NULL, so it can't stay empty
+// until confirmation); stampStarted overwrites it with the real on-air time
+// and sets confirmed=true once LS_TRACK_STARTED lands. Until then, this
+// item's real start is genuinely unknown — crediting elapsed time against
+// the placeholder would count time that hasn't necessarily been consumed
+// yet (queue-ahead pushes can sit unconfirmed for as long as whatever's
+// still genuinely playing takes to finish). So the playhead holds at the
+// last confirmed point instead of advancing on a guess; it jumps forward for
+// real the moment confirmation lands. Found and fixed 2026-07-15 — this was
+// the exact cause of the Supervisor UI's drift figure appearing to grow
+// then snap to a stable value after a fresh plan activation.
 async function consumedSecondsForPlan(
   db: typeof defaultDb,
   planId: number,
@@ -118,18 +124,17 @@ async function consumedSecondsForPlan(
     if (TERMINAL_STATUSES.has(item.status)) {
       consumedSeconds += item.planned_duration_seconds ?? 0;
     } else if (item.status === 'playing') {
-      let startedAtMs: number;
       if (item.play_history_id != null) {
         const [ph] = await db
-          .select({ started_at: playHistoryTable.started_at })
+          .select({ started_at: playHistoryTable.started_at, confirmed: playHistoryTable.confirmed })
           .from(playHistoryTable)
           .where(eq(playHistoryTable.id, item.play_history_id));
-        startedAtMs = ph?.started_at ? new Date(ph.started_at).getTime() : nowMs - 5_000;
-      } else {
-        startedAtMs = nowMs - 5_000;
+        if (ph?.confirmed && ph.started_at) {
+          const startedAtMs = new Date(ph.started_at).getTime();
+          consumedSeconds += (nowMs - startedAtMs) / 1000;
+          expectedEndMs = startedAtMs + (item.planned_duration_seconds ?? 0) * 1_000;
+        }
       }
-      consumedSeconds += (nowMs - startedAtMs) / 1000;
-      expectedEndMs = startedAtMs + (item.planned_duration_seconds ?? 0) * 1_000;
       break;
     } else {
       break;

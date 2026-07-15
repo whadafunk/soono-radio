@@ -46,6 +46,7 @@ export async function insertPushed(
     media_id: fields.media_id,
     source: fields.source,
     started_at: placeholder,
+    confirmed: false,
     ended_at: null,
     aborted: false,
     pick_reason: fields.pick_reason,
@@ -64,7 +65,9 @@ export async function insertPushed(
   return id;
 }
 
-// Overwrites started_at with the real on-air time once LS confirms playback.
+// Overwrites started_at with the real on-air time once LS confirms playback,
+// and marks the row confirmed — the only signal consumers have that this
+// started_at is ground truth rather than insertPushed's push-time placeholder.
 export async function stampStarted(
   db: typeof defaultDb,
   id: number,
@@ -72,7 +75,7 @@ export async function stampStarted(
 ): Promise<void> {
   await db
     .update(playHistoryTable)
-    .set({ started_at: new Date(startedAtMs) })
+    .set({ started_at: new Date(startedAtMs), confirmed: true })
     .where(eq(playHistoryTable.id, id));
 }
 

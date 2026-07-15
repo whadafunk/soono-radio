@@ -198,12 +198,21 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
             planConsumedSeconds += item.planned_duration_seconds ?? 0;
           } else if (item.status === 'playing' && item.play_history_id != null) {
             const [ph] = await db
-              .select({ started_at: playHistory.started_at })
+              .select({ started_at: playHistory.started_at, confirmed: playHistory.confirmed })
               .from(playHistory)
               .where(eq(playHistory.id, item.play_history_id));
-            const startedMs = ph?.started_at ? new Date(ph.started_at).getTime() : nowMs - 5000;
-            planConsumedSeconds += (nowMs - startedMs) / 1000;
-            expectedCurrentItemEndMs = startedMs + (item.planned_duration_seconds ?? 0) * 1000;
+            // Same guard as playhead.ts's consumedSecondsForPlan: insertPushed
+            // writes started_at as a push-time placeholder (NOT NULL column,
+            // so it can't stay empty) until LS_TRACK_STARTED confirms the
+            // real on-air time. Crediting elapsed time against the
+            // placeholder is exactly what made the drift figure appear to
+            // grow then snap after a fresh activation (found 2026-07-15) —
+            // hold at the last confirmed point instead until it's real.
+            if (ph?.confirmed && ph.started_at) {
+              const startedMs = new Date(ph.started_at).getTime();
+              planConsumedSeconds += (nowMs - startedMs) / 1000;
+              expectedCurrentItemEndMs = startedMs + (item.planned_duration_seconds ?? 0) * 1000;
+            }
             break;
           } else {
             break;

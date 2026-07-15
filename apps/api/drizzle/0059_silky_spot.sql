@@ -1,0 +1,1 @@
+ALTER TABLE `play_history` ADD `confirmed` integer DEFAULT false NOT NULL;

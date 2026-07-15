@@ -910,21 +910,44 @@ export class SupervisorProcess {
       // instead of trying to fill a gap nothing can fit.
       if (this.exhaustedPlanReconciledFor !== this.activePlanId) {
         this.exhaustedPlanReconciledFor = this.activePlanId;
-        const exhaustedSegmentEndMs = await this.exhaustedActivePlanSegmentEndMs();
-        if (exhaustedSegmentEndMs != null) {
-          this.logger?.info({
-            process: 'supervisor', event: 'EXHAUSTED_PLAN_RECONCILE',
-            active_plan_id: this.activePlanId, segment_end_ms: exhaustedSegmentEndMs,
-          }, 'supervisor: reconciling from the exhausted plan\'s own segment instead of wall clock');
-          await this.reconcileNext(exhaustedSegmentEndMs, nowMs);
-        } else {
-          // Unexpected: couldn't resolve the exhausted plan's own segment.
-          // Fall back to the old wall-clock cold-start as a last resort.
-          const resolved = await this.getCachedSegment(nowMs);
-          if (resolved) {
-            this.coldStartFinalizeSent = false;
-            await this.requestColdStartDraft(resolved, nowMs);
+        try {
+          const exhaustedSegmentEndMs = await this.exhaustedActivePlanSegmentEndMs();
+          if (exhaustedSegmentEndMs != null) {
+            this.logger?.info({
+              process: 'supervisor', event: 'EXHAUSTED_PLAN_RECONCILE',
+              active_plan_id: this.activePlanId, segment_end_ms: exhaustedSegmentEndMs,
+            }, 'supervisor: reconciling from the exhausted plan\'s own segment instead of wall clock');
+            await this.reconcileNext(exhaustedSegmentEndMs, nowMs);
+          } else {
+            // Unexpected: couldn't resolve the exhausted plan's own segment.
+            // Fall back to the old wall-clock cold-start as a last resort.
+            const resolved = await this.getCachedSegment(nowMs);
+            if (resolved) {
+              this.coldStartFinalizeSent = false;
+              await this.requestColdStartDraft(resolved, nowMs);
+            }
           }
+        } finally {
+          // This guard means "an attempt is currently in flight for this
+          // plan," not "never try again for this plan" — it used to only
+          // clear on the NEXT plan's activation (activatePlanById), so a
+          // reconcile attempt that didn't itself lead to an activation (e.g.
+          // its draft got retired again for colliding with a hard boundary,
+          // D69) left the station stuck logging PLAN_STALL forever, with no
+          // further attempt ever made. Clearing it here instead — once this
+          // specific attempt concludes, success or not — lets the next
+          // reality-check cycle retry if still exhausted. Safe to retry
+          // that often: reconcileNext/reconcileOccurrence already dedupe
+          // against an existing plan for the same segment+clock-instance
+          // (D84) before requesting anything new, so this can't spam
+          // duplicate drafts under normal (sub-second Planner response)
+          // conditions — and the rare slow-Planner overlap this permits is
+          // the same duplicate-draft-row case reconcileOccurrence's own
+          // comment already tolerates by design. Confirmed live 2026-07-15:
+          // found genuinely stuck this way — 18+ minutes of frozen drift,
+          // zero recovery attempts — on a dev instance recovering from an
+          // extended LiquidSoap outage.
+          this.exhaustedPlanReconciledFor = null;
         }
       }
       return;
@@ -1203,13 +1226,42 @@ export class SupervisorProcess {
     if (this.activePlanId == null || this.currentSegmentEndMs == null) return;
     if (this.activePlanHardBoundary == null) return;
 
-    const boundaryStartMs = this.activePlanHardBoundary.startMs;
-
-    const estimatedRemainingSec = await this.computeEstimatedRemaining(nowMs);
+    let boundaryStartMs = this.activePlanHardBoundary.startMs;
     // boundaryStartMs, not this.currentSegmentEndMs: those coincide when the
     // hard segment is genuinely the immediate next one, but not once
     // skip-ahead put several hops between here and there.
-    const timeToHardBoundarySec = (boundaryStartMs - nowMs) / 1000;
+    let timeToHardBoundarySec = (boundaryStartMs - nowMs) / 1000;
+
+    // The tracked boundary has already passed (past tolerance) with nothing
+    // having transitioned into it. activatePlanById clears
+    // activePlanHardBoundary the moment ANY new plan activates, so reaching
+    // this means that never happened (e.g. its draft got retired again for
+    // colliding with a still-further-out hard segment, D69, or the fill
+    // trigger below never closed the gap in time). Both triggers below need
+    // a still-future boundary to compare against — left as-is, a missed
+    // boundary would silently disable this gate for the rest of the segment,
+    // since neither condition can ever become true again once time_to_
+    // boundary goes negative. Re-derive a fresh target from current nowMs
+    // instead, same self-correcting principle as the rest of this rewrite
+    // (D83). Confirmed live 2026-07-15: found stuck exactly this way on a
+    // dev instance recovering from an extended LiquidSoap outage.
+    if (timeToHardBoundarySec < -HARD_START_TOLERANCE_S) {
+      const staleSegmentId = this.activePlanHardBoundary.segmentId;
+      const lookahead = await resolveNextHardSegment(nowMs, this.db);
+      this.activePlanHardBoundary = lookahead
+        ? { segmentId: lookahead.hard.segment.id, startMs: lookahead.hard.segmentStartMs }
+        : null;
+      this.logger?.warn({
+        process: 'supervisor', event: 'HARD_BOUNDARY_STALE_REDERIVED',
+        stale_segment_id: staleSegmentId, missed_by_seconds: Math.round(-timeToHardBoundarySec),
+        new_segment_id: this.activePlanHardBoundary?.segmentId ?? null,
+      }, 'supervisor: tracked hard boundary already passed with nothing transitioned into it — re-deriving fresh target');
+      if (this.activePlanHardBoundary == null) return;
+      boundaryStartMs = this.activePlanHardBoundary.startMs;
+      timeToHardBoundarySec = (boundaryStartMs - nowMs) / 1000;
+    }
+
+    const estimatedRemainingSec = await this.computeEstimatedRemaining(nowMs);
     const gapSec = timeToHardBoundarySec - estimatedRemainingSec;
 
     // Fill trigger: plan is running short, gap exceeds tolerance.
@@ -1268,11 +1320,17 @@ export class SupervisorProcess {
       if (item.status === 'playing') {
         if (item.play_history_id != null) {
           const [ph] = await this.db
-            .select({ started_at: playHistoryTable.started_at })
+            .select({ started_at: playHistoryTable.started_at, confirmed: playHistoryTable.confirmed })
             .from(playHistoryTable)
             .where(eq(playHistoryTable.id, item.play_history_id));
-          const startedAtMs = ph?.started_at ? new Date(ph.started_at).getTime() : nowMs;
-          const elapsed = (nowMs - startedAtMs) / 1000;
+          // Same guard as playhead.ts's consumedSecondsForPlan: until
+          // LS_TRACK_STARTED confirms it, started_at is only insertPushed's
+          // push-time placeholder, not real elapsed time — crediting elapsed
+          // against it would under-count remaining runway on a guess. Count
+          // the item's full duration as still ahead until confirmed.
+          const elapsed = (ph?.confirmed && ph.started_at)
+            ? (nowMs - new Date(ph.started_at).getTime()) / 1000
+            : 0;
           remaining += Math.max(0, (item.planned_duration_seconds ?? 0) - elapsed);
         } else {
           remaining += (item.planned_duration_seconds ?? 0) * 0.5;
@@ -1761,9 +1819,26 @@ export class SupervisorProcess {
     afterMs: number,
     nowMs: number,
   ): Promise<{ resolved: ResolvedSegment | null; lookahead: HardSegmentLookahead | null }> {
-    const lookahead = await resolveNextHardSegment(afterMs, this.db);
+    // Callers pass afterMs as "wherever the active plan's own bookkeeping
+    // thinks content resumes" — usually its current segment's nominal end.
+    // That's fine while real content is still genuinely flowing (afterMs
+    // trails nowMs by a normal, bounded drift amount). But once the active
+    // plan is genuinely exhausted and stuck (handleExhaustedPlan's recovery
+    // loop, or a stale finalize re-check), that reference can freeze far
+    // behind real time while retries keep hammering it — the hard-segment
+    // walk below then structurally lands on whatever's next AFTER that
+    // stale point, which can already be behind nowMs by minutes. That
+    // produces a negative "real runway" reading and a false collision
+    // against a hard segment that isn't actually imminent — confirmed live
+    // 2026-07-15 (an already-passed ad-break segment kept getting reported
+    // "coming up in -135s", then -138s, -145s... retiring a perfectly good
+    // freshly-drafted plan every single retry). Clamping to nowMs costs
+    // nothing in the normal case (afterMs is essentially never behind nowMs
+    // there) and removes the failure mode in the stuck case.
+    const effectiveAfterMs = Math.max(afterMs, nowMs);
+    const lookahead = await resolveNextHardSegment(effectiveAfterMs, this.db);
     if (!lookahead || lookahead.skipped.length === 0) {
-      const resolved = await resolveCurrentSegment(afterMs, this.db);
+      const resolved = await resolveCurrentSegment(effectiveAfterMs, this.db);
       return { resolved, lookahead: lookahead ?? null };
     }
 
@@ -1775,7 +1850,7 @@ export class SupervisorProcess {
     if (realRemainingSeconds >= nominalRemainingSeconds) {
       // Enough real runway (for now) to let the intervening segments air at
       // nominal length — proceed normally.
-      const resolved = await resolveCurrentSegment(afterMs, this.db);
+      const resolved = await resolveCurrentSegment(effectiveAfterMs, this.db);
       return { resolved, lookahead };
     }
 
@@ -2430,10 +2505,7 @@ export class SupervisorProcess {
       if (lookahead && lookahead.hard.segment.id === freshNext.segment.id) {
         // Now says skip-to-hard where this draft was for the structural-next
         // segment. Cap to whatever real runway is actually left before the
-        // hard boundary; if even that shrunk amount isn't worth it, retire
-        // this draft entirely and make the ACTIVE plan responsible for
-        // reaching the hard segment instead (same mechanism as the
-        // first-pass skip-ahead path — D66's activePlanHardBoundary).
+        // hard boundary.
         const realRemainingSeconds = (lookahead.hard.segmentStartMs - nowMs) / 1000;
         const cappedTarget = Math.min(nominal, realRemainingSeconds);
 
@@ -2450,12 +2522,29 @@ export class SupervisorProcess {
           await this.db.update(supervisorStateTable)
             .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
             .where(eq(supervisorStateTable.id, 1));
+          // Still tracked as a backup: if the fresh hard-segment draft below
+          // also comes up short (e.g. the same empty-pool problem), the
+          // active plan's own fill/trim gate can still stretch toward this
+          // boundary as a fallback lever. But it's no longer the primary
+          // plan — request an actual plan for the hard segment itself
+          // directly, sized to whatever real runway is left, reusing the
+          // same idempotent "ensure a plan exists for this occurrence"
+          // machinery the first-pass skip-ahead path already uses (D69),
+          // rather than leaving the active plan as the only thing responsible
+          // for reaching the boundary. Retiring-without-retargeting used to
+          // leave the station coasting on drift alone until the active
+          // plan's fill happened to close the gap — confirmed live
+          // 2026-07-15 this could take 50+ seconds of repeated retries.
           this.activePlanHardBoundary = { segmentId: lookahead.hard.segment.id, startMs: lookahead.hard.segmentStartMs };
           this.logger?.warn({
-            process: 'supervisor', event: 'NEXT_PLAN_RETIRED_FOR_HARD_BOUNDARY',
+            process: 'supervisor', event: 'NEXT_PLAN_RETARGETED_TO_HARD_BOUNDARY',
             retired_plan_id: retiredPlanId, drafted_segment_id: plan.segment_id,
             hard_segment_id: lookahead.hard.segment.id, capped_target_seconds: cappedTarget,
-          }, 'supervisor: runway to hard segment collapsed below worth-it threshold — retiring draft, active plan will fill to hard boundary');
+          }, 'supervisor: runway to hard segment collapsed — retargeting directly at the hard segment instead of leaving the active plan to fill toward it alone');
+          await this.reconcileOccurrence(lookahead.hard, nowMs, {
+            allowActivate: false,
+            targetDurationSeconds: Math.max(cappedTarget, 0),
+          });
           return;
         }
         hardOverrideTarget = cappedTarget;

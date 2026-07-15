@@ -151,6 +151,15 @@ export const playHistory = sqliteTable(
     started_at: integer('started_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
+    // True once LS_TRACK_STARTED confirms this row's started_at is the real
+    // on-air time. insertPushed has to write a placeholder (push time) here
+    // at push time, since the column is NOT NULL — this flag is the only way
+    // to tell "confirmed real timestamp" apart from "still just a guess"
+    // without relying on nullable-timestamp semantics. stampStarted sets it
+    // true when the real time lands; consumers reading a 'playing' item's
+    // started_at must check this first, or they'll compute drift against a
+    // guess instead of ground truth.
+    confirmed: integer('confirmed', { mode: 'boolean' }).notNull().default(false),
     ended_at: integer('ended_at', { mode: 'timestamp' }),
     aborted: integer('aborted', { mode: 'boolean' }).notNull().default(false),
     live_listener_count: integer('live_listener_count'),

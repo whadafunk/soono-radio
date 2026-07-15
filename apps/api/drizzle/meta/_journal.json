@@ -414,6 +414,13 @@
       "when": 1784062423499,
       "tag": "0058_secret_rocket_raccoon",
       "breakpoints": true
+    },
+    {
+      "idx": 59,
+      "version": "6",
+      "when": 1784122614414,
+      "tag": "0059_silky_spot",
+      "breakpoints": true
     }
   ]
 }
