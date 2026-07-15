@@ -131,12 +131,30 @@ const SILENCE_ALERT_ESCALATE_S = 300;              // past this many seconds, es
 // read fresh each call, same pattern as spotBudget.ts's getPromoMargin. No
 // caching needed: a single indexed row lookup, called at most a few times a
 // minute from draft-request sites, never from the 500ms tick loop itself.
-export async function getDriftRecoveryCapSeconds(db: typeof defaultDb): Promise<number> {
+// Module-level, not per-instance: these track "what did we last read," purely
+// to log when an operator edit takes effect — there's only ever one
+// SupervisorProcess per Node process, so this doesn't need instance scoping.
+// Only updated when a logger is passed in — the /supervisor/v2/status route
+// also calls this (no logger, polled far more often than the Supervisor's
+// own draft/finalize call sites) and must NOT be allowed to silently consume
+// a transition before the Supervisor's own tracked call gets to see it.
+let lastLoggedDriftRecoveryCapS: number | null = null;
+export async function getDriftRecoveryCapSeconds(db: typeof defaultDb, logger?: SLogger | null): Promise<number> {
   const [row] = await db
     .select({ drift_recovery_cap_seconds: stationSettingsTable.drift_recovery_cap_seconds })
     .from(stationSettingsTable)
     .where(eq(stationSettingsTable.id, 1));
-  return row?.drift_recovery_cap_seconds ?? DEFAULT_DRIFT_RECOVERY_CAP_S;
+  const value = row?.drift_recovery_cap_seconds ?? DEFAULT_DRIFT_RECOVERY_CAP_S;
+  if (logger) {
+    if (lastLoggedDriftRecoveryCapS != null && lastLoggedDriftRecoveryCapS !== value) {
+      logger.info({
+        process: 'supervisor', event: 'CONFIG_CHANGED', field: 'drift_recovery_cap_seconds',
+        previous_value: lastLoggedDriftRecoveryCapS, new_value: value,
+      }, `supervisor: drift_recovery_cap_seconds changed ${lastLoggedDriftRecoveryCapS}s -> ${value}s`);
+    }
+    lastLoggedDriftRecoveryCapS = value;
+  }
+  return value;
 }
 
 // Decision 89: how often the collapsed tick loop's reality check runs.
@@ -144,12 +162,23 @@ export async function getDriftRecoveryCapSeconds(db: typeof defaultDb): Promise<
 // this is now the ONLY thing gating tick()'s cadence, so it's called at most
 // once every few seconds, never in a hot loop.
 const DEFAULT_REALITY_CHECK_INTERVAL_S = 3;
-export async function getRealityCheckIntervalSeconds(db: typeof defaultDb): Promise<number> {
+let lastLoggedRealityCheckIntervalS: number | null = null;
+export async function getRealityCheckIntervalSeconds(db: typeof defaultDb, logger?: SLogger | null): Promise<number> {
   const [row] = await db
     .select({ reality_check_interval_seconds: stationSettingsTable.reality_check_interval_seconds })
     .from(stationSettingsTable)
     .where(eq(stationSettingsTable.id, 1));
-  return row?.reality_check_interval_seconds ?? DEFAULT_REALITY_CHECK_INTERVAL_S;
+  const value = row?.reality_check_interval_seconds ?? DEFAULT_REALITY_CHECK_INTERVAL_S;
+  if (logger) {
+    if (lastLoggedRealityCheckIntervalS != null && lastLoggedRealityCheckIntervalS !== value) {
+      logger.info({
+        process: 'supervisor', event: 'CONFIG_CHANGED', field: 'reality_check_interval_seconds',
+        previous_value: lastLoggedRealityCheckIntervalS, new_value: value,
+      }, `supervisor: reality_check_interval_seconds changed ${lastLoggedRealityCheckIntervalS}s -> ${value}s`);
+    }
+    lastLoggedRealityCheckIntervalS = value;
+  }
+  return value;
 }
 
 export class SupervisorProcess {
@@ -603,7 +632,7 @@ export class SupervisorProcess {
     // gated concerns each re-evaluated every 500ms regardless of whether
     // anything changed.
     this.tickOperation = 'reality_check_gate';
-    const intervalSeconds = await getRealityCheckIntervalSeconds(this.db);
+    const intervalSeconds = await getRealityCheckIntervalSeconds(this.db, this.logger);
     if (nowMs - this.lastRealityCheckMs < intervalSeconds * 1_000) return;
     this.lastRealityCheckMs = nowMs;
 
@@ -718,6 +747,21 @@ export class SupervisorProcess {
     const expectedEndMs = playhead.expectedSegmentEndMs;
     playheadConfidence = playhead.confidence;
     expectedEndMsForLog = expectedEndMs;
+
+    // resolvePlayhead() falls back to a wall-clock guess when activePlanId is
+    // set but its segment/clock instance no longer resolves (deleted segment,
+    // corrupt row) — the same low-confidence territory as no-active-plan, but
+    // silently so, since resolvePlayhead() itself has no logger and its own
+    // comment defers surfacing this to the caller. We're past the
+    // activePlanId==null return above, so wall_clock_only here can only mean
+    // that fallback fired.
+    if (playheadConfidence === 'wall_clock_only') {
+      outcome = 'playhead_unresolved';
+      this.logger?.warn({
+        process: 'supervisor', event: 'PLAYHEAD_ACTIVE_PLAN_UNRESOLVED',
+        active_plan_id: this.activePlanId,
+      }, 'supervisor: active plan set but its segment/clock instance no longer resolves — playhead fell back to wall clock');
+    }
 
     // Decision 84: a plan stuck in Transitioning too long gets marked Invalid
     // and a fresh plan gets requested for its segment. Cheap check (in-memory
@@ -912,7 +956,7 @@ export class SupervisorProcess {
       this.logger?.info({
         process: 'supervisor', event: 'ACTIVATION_DEFERRED_FINALIZE_IN_FLIGHT',
         next_plan_id: this.nextPlanId,
-      }, 'supervisor: next plan has a finalize in flight — deferring activation to the next tick');
+      }, 'supervisor: next plan\'s finalize/reassembly hasn\'t completed yet — deferring activation by design (this guard is intentionally retained post-D84, not leftover tech debt; see D78) to avoid snapshotting an empty item count mid-reassembly, retrying next tick');
       return;
     }
 
@@ -1325,6 +1369,17 @@ export class SupervisorProcess {
       return;
     }
     if (this.lastSeenLsPid !== pid) {
+      // this.lastSeenLsPid can only be null here (any non-null mismatch was
+      // already caught and returned above) — the one-time baseline-establish
+      // case: no prior pid to compare against (fresh DB row, or a Supervisor
+      // restart that inherited a null ls_pid). Previously silent, same as
+      // every steady-state confirmation; unlike those, this is a genuine
+      // one-off worth a trace — the REALITY_CHECK summary (added alongside
+      // this) already reports the current pid every cycle, so this is only
+      // about the moment tracking starts, not ongoing confirmation.
+      this.logger?.debug({
+        process: 'supervisor', event: 'LS_PID_ESTABLISHED', pid,
+      }, 'supervisor: LiquidSoap pid observed for the first time this process lifetime — baseline set');
       this.lastSeenLsPid = pid;
       await this.db.update(supervisorStateTable).set({ ls_pid: pid }).where(eq(supervisorStateTable.id, 1));
     }
@@ -2223,7 +2278,7 @@ export class SupervisorProcess {
   // forward as accumulated drift for whatever flexible segment comes next.
   private async computeFirstPassTarget(segment: { type: string; duration_seconds: number }): Promise<number> {
     // D78: cap is operator-configurable (Scheduling settings), read fresh.
-    const cap = await getDriftRecoveryCapSeconds(this.db);
+    const cap = await getDriftRecoveryCapSeconds(this.db, this.logger);
     // Decision 85/86: one shared formula for both first-pass and finalize —
     // see requestPlan.ts for why the two used to diverge and what that cost.
     const { targetSeconds, appliedCorrectionSeconds } = computeDriftAdjustedTarget(segment, {
@@ -2427,7 +2482,7 @@ export class SupervisorProcess {
     // finalize branch used to skip both the D71 cap and the plannedOvershoot
     // term, and clamped to different bounds). Calling the same function here
     // means there's no second implementation left to drift out of sync.
-    const cap = await getDriftRecoveryCapSeconds(this.db);
+    const cap = await getDriftRecoveryCapSeconds(this.db, this.logger);
     const { targetSeconds: driftAdjustedTarget, appliedCorrectionSeconds } = computeDriftAdjustedTarget(
       segment ?? { type: 'music', duration_seconds: nominal },
       {

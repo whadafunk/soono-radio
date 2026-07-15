@@ -73,10 +73,11 @@ export async function resolvePlayhead(
     }
     // Active plan id set but its segment/clock instance no longer resolves
     // (deleted segment, corrupt row) — fall through to wall-clock, same as
-    // genuinely having no active plan. Worth knowing about if it happens;
-    // left as a plain fall-through rather than a special log line here,
-    // since the caller (Phase 6's reality check) is where a divergence like
-    // this actually needs to be surfaced.
+    // genuinely having no active plan. No logger here by design (this
+    // function is a pure resolver); the caller (realityCheckAndDispatch)
+    // logs PLAYHEAD_ACTIVE_PLAN_UNRESOLVED when it sees activePlanId set
+    // alongside a 'wall_clock_only' result, since only it knows activePlanId
+    // was actually set going in.
   }
 
   const wallClock = await resolveCurrentSegment(nowMs, db);
