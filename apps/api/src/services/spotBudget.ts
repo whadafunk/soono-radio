@@ -188,21 +188,47 @@ async function computeInventory(
   const effectiveStartStr = dateToString(effectiveStart);
   const endStr = dateToString(period.end);
 
-  // ── Load all stop_set segments (we'll map by clock_id) ───────────────────
-  const stopSetRows = await db
+  // ── Load full clock layouts (Decision 95) ─────────────────────────────────
+  // The old projection counted each stop-set ONCE per schedule entry,
+  // regardless of the entry's window length — undercounting every multi-tile
+  // window and attributing every break to the entry's start time for
+  // interval matching. Inventory now uses the same entry-anchored tiling as
+  // the resolver: a window tiles its clock at the clock's own period, and
+  // each tile contributes its stop-sets at their real offsets.
+  const allSegRows = await db
     .select({
       id: clockSegmentsTable.id,
       clock_id: clockSegmentsTable.clock_id,
       duration_seconds: clockSegmentsTable.duration_seconds,
+      type: clockSegmentsTable.type,
+      sort_order: clockSegmentsTable.sort_order,
     })
-    .from(clockSegmentsTable)
-    .where(eq(clockSegmentsTable.type, 'stop_set'));
+    .from(clockSegmentsTable);
 
-  const stopSetByClockId = new Map<number, { id: number; duration_seconds: number }[]>();
-  for (const seg of stopSetRows) {
-    const list = stopSetByClockId.get(seg.clock_id) ?? [];
-    list.push({ id: seg.id, duration_seconds: seg.duration_seconds });
-    stopSetByClockId.set(seg.clock_id, list);
+  interface ClockLayout {
+    periodSec: number;
+    stopSets: Array<{ id: number; offsetSec: number; durationSec: number }>;
+  }
+  const layoutByClockId = new Map<number, ClockLayout>();
+  {
+    const segsByClock = new Map<number, typeof allSegRows>();
+    for (const seg of allSegRows) {
+      const list = segsByClock.get(seg.clock_id) ?? [];
+      list.push(seg);
+      segsByClock.set(seg.clock_id, list);
+    }
+    for (const [clockId, segs] of segsByClock) {
+      segs.sort((a, b) => a.sort_order - b.sort_order);
+      let offset = 0;
+      const stopSets: ClockLayout['stopSets'] = [];
+      for (const seg of segs) {
+        if (seg.type === 'stop_set') {
+          stopSets.push({ id: seg.id, offsetSec: offset, durationSec: seg.duration_seconds });
+        }
+        offset += seg.duration_seconds;
+      }
+      layoutByClockId.set(clockId, { periodSec: offset, stopSets });
+    }
   }
 
   // ── Collect calendar entries for the period ───────────────────────────────
@@ -307,6 +333,39 @@ async function computeInventory(
   const periodEnd = new Date(period.end);
   periodEnd.setHours(23, 59, 59, 999);
 
+  // Decision 95: tile a coverage window with its clock and emit each tile's
+  // stop-sets at their real offsets, truncated by the window end. `timeStart`
+  // is the break's ACTUAL start time — interval attribution now matches
+  // where the break really airs, not the entry's start.
+  const pushTiledOccurrences = (
+    dateStr: string,
+    dow: number,
+    clockId: number,
+    showId: number | null,
+    timeStart: string,
+    timeEnd: string,
+  ): void => {
+    const layout = layoutByClockId.get(clockId);
+    if (!layout || layout.periodSec <= 0 || layout.stopSets.length === 0) return;
+    const winStartSec = timeToMin(timeStart) * 60;
+    const rawEndSec = timeToMin(timeEnd) * 60;
+    const winEndSec = rawEndSec > winStartSec ? rawEndSec : 24 * 3600;
+    for (let tileStartSec = winStartSec; tileStartSec < winEndSec; tileStartSec += layout.periodSec) {
+      for (const ss of layout.stopSets) {
+        const occStartSec = tileStartSec + ss.offsetSec;
+        if (occStartSec >= winEndSec) break;
+        occurrences.push({
+          date: dateStr,
+          dow,
+          timeStart: minToTime(Math.floor(occStartSec / 60)),
+          durationSeconds: Math.min(ss.durationSec, winEndSec - occStartSec),
+          showId,
+          clockSegmentId: ss.id,
+        });
+      }
+    }
+  };
+
   while (current <= periodEnd) {
     const dateStr = dateToString(current);
     const dow = isoDay(current);
@@ -316,20 +375,7 @@ async function computeInventory(
     if (calEntries && calEntries.length > 0) {
       for (const ce of calEntries) {
         if (!ce.clock_id) continue;
-        // Live mode: skip entries whose time-window is entirely in the past.
-        // (Conservative: include entries that overlap with now)
-        const stopSets = stopSetByClockId.get(ce.clock_id);
-        if (!stopSets) continue;
-        for (const seg of stopSets) {
-          occurrences.push({
-            date: dateStr,
-            dow,
-            timeStart: ce.time_start,
-            durationSeconds: seg.duration_seconds,
-            showId: ce.show_id,
-            clockSegmentId: seg.id,
-          });
-        }
+        pushTiledOccurrences(dateStr, dow, ce.clock_id, ce.show_id, ce.time_start, ce.time_end);
       }
     } else {
       // Fall back to template for this day.
@@ -341,18 +387,7 @@ async function computeInventory(
         const slots = expandTemplateEntry(te, clockOverrides);
         for (const slot of slots) {
           if (!slot.clock_id) continue;
-          const stopSets = stopSetByClockId.get(slot.clock_id);
-          if (!stopSets) continue;
-          for (const seg of stopSets) {
-            occurrences.push({
-              date: dateStr,
-              dow,
-              timeStart: slot.time_start,
-              durationSeconds: seg.duration_seconds,
-              showId: slot.show_id,
-              clockSegmentId: seg.id,
-            });
-          }
+          pushTiledOccurrences(dateStr, dow, slot.clock_id, slot.show_id, slot.time_start, slot.time_end);
         }
       }
     }

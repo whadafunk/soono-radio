@@ -1582,7 +1582,7 @@ export class PlannerProcess {
     showId: number,
   ): Promise<{ isShowStart: boolean; isShowEnd: boolean }> {
     const orderedSegs = await this.db
-      .select({ id: clockSegments.id, sort_order: clockSegments.sort_order })
+      .select({ id: clockSegments.id, sort_order: clockSegments.sort_order, duration_seconds: clockSegments.duration_seconds })
       .from(clockSegments)
       .where(eq(clockSegments.clock_id, clockId));
     orderedSegs.sort((a, b) => a.sort_order - b.sort_order);
@@ -1591,21 +1591,25 @@ export class PlannerProcess {
 
     const firstId = orderedSegs[0]!.id;
     const lastId = orderedSegs[orderedSegs.length - 1]!.id;
+    // Decision 95: clock instances are tiles with the clock's OWN period —
+    // "the next instance" starts one clock-duration after this one, not one
+    // wall-clock hour.
+    const clockDurationMs = orderedSegs.reduce((sum, s) => sum + s.duration_seconds, 0) * 1000;
 
     // is_show_start: first segment of clock AND the previous moment belongs
-    // to a different show (or silence), i.e. this is the first clock instance
-    // of the show block.
+    // to a different show (or silence), i.e. this is the first tile of the
+    // show block.
     let isShowStart = false;
     if (segmentId === firstId) {
       const prevSeg = await resolveCurrentSegment(clockInstanceStartedAt - 1, this.db);
       isShowStart = !prevSeg || prevSeg.show_id !== showId;
     }
 
-    // is_show_end: last segment of clock AND the next clock instance belongs
-    // to a different show (or silence).
+    // is_show_end: last segment of clock AND the next tile belongs to a
+    // different show (or silence).
     let isShowEnd = false;
     if (segmentId === lastId) {
-      const nextSeg = await resolveCurrentSegment(clockInstanceStartedAt + 3_600_000 + 1, this.db);
+      const nextSeg = await resolveCurrentSegment(clockInstanceStartedAt + clockDurationMs + 1, this.db);
       isShowEnd = !nextSeg || nextSeg.show_id !== showId;
     }
 
