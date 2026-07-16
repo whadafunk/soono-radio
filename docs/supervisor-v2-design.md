@@ -2506,6 +2506,66 @@ No drift bookkeeping accompanies the skip (Decision 91): the next draft's own pr
 
 ---
 
+### Decision 95 — The schedule grid is entry-anchored tiling, not hour-anchored wheels
+
+**Status: direction decided 2026-07-16, with the operator. Not yet implemented — this entry locks the model before any code moves. Supersedes the "enforce clocks to sum to 60:00" remediation idea from the 2026-07-16 audit (that idea fixed the wrong side of a model disagreement).**
+
+#### The finding
+
+The schedule editor and the resolver implement two different models of where segment boundaries fall, and the editor's is the spec (per CLAUDE.md's standing rule):
+
+- **Editor (the spec):** a calendar/template entry's clock tiles **from the entry's own start**, with a period equal to **the clock's own total duration**, boundaries at cumulative segment sums. Verified in code: `SchedulePage.tsx`'s resize-end snap computes candidate boundaries as `tileStart = entryStart + tile × clockDuration`, then cumulative sums within each tile. Non-60-minute clocks are first-class citizens — they tile at their own period. Entry edges snap to these boundaries by design.
+- **Resolver (current engine):** every clock instance is laid from the top of the wall-clock hour, period fixed at 60 minutes, for every tier (`resolveSegmentWithinClock`).
+
+The two agree **only** when an entry starts exactly on the hour AND its clock sums to exactly 3600s — which describes the current live configuration, which is why the divergence has never visibly fired. Off-hour entry starts or odd-length clocks make the editor and the engine disagree about the position of every boundary; the previously-catalogued "sub-60-minute clock weaknesses" (mid-hour fall-through to a lower tier, unreachable overflow segments) are artifacts of the hour-anchored resolver, not defects of such clocks.
+
+#### The canonical model
+
+One uniform rule: **a schedule source defines a coverage window; its clock tiles from the window's start, repeating at the clock's own total duration, truncated by the window's end.**
+
+- **Calendar entry** — window `[time_start, time_end)` on its date; tiling anchors at `time_start`.
+- **Template entry** — same, anchored at its own `time_start` on its weekday.
+- **Template-clock entry (per-hour override)** — its window IS the hour, so it anchors at the hour top by construction; a shorter clock re-tiles within the hour and the window truncates the last tile. No fall-through: the window is always fully tiled.
+- **Default clock (coverage gap)** — the gap between two coverage windows is itself the window; tiling anchors at **the gap's leading edge** (= the previous coverage window's end — a stored fact, not runtime history) and is truncated by the next coverage window's start. Degenerate case (no prior coverage at all within the lookback horizon): anchor at the most recent midnight.
+- **Resolution priority is unchanged** (calendar → template-clock → template → default), and every next-slot resolution still re-runs the full chain at the slot's absolute time — re-entry from a gap into calendar coverage truncates the gap's last tile at the entry's start, exactly as any window edge does.
+
+Consequences, deliberately accepted:
+- `clock_instance_started_at` changes meaning from "top of wall-clock hour" to "tile start" — still an absolute timestamp, still stateless: derivable from the entry row (or gap edge) plus `k × clockDuration`, never from what happened at runtime. Restart/reconcile re-derivation is preserved.
+- A window edge that doesn't land on a tile's segment boundary truncates the slot — resolution must return truncated bounds. The editor's snapping makes this rare; truncation is the graceful degradation, not the normal case.
+- The drift model (Decisions 90–93) is untouched: the grid stays absolute and derivable; only the anchor derivation changes. Drift through coverage gaps persists and keeps being corrected (no wall-clock snapping on fallback entry — confirmed with the operator 2026-07-16).
+- Clock-length validation is dropped as a goal. The ClocksPage 60-minute gauge becomes informational.
+
+#### Pre-implementation audit list (blast radius)
+
+1. `clockResolver.ts` — the rewrite itself (window resolution + tiling + truncation + gap-edge anchoring).
+2. Every hardcoded hour assumption: `getShowBoundaryFlags`' `+3_600_000` next-instance probe (planner.ts), any other `3600`/hour-top arithmetic keyed to clock instances.
+3. **Spot inventory / budget math** (`spotBudget.ts`, campaign delivery docs) — likely assumes hourly stop-set recurrence for monthly inventory counts; must derive from the same tiling or be consciously exempted. This is the one area that may push back on the model; audit before committing code.
+4. `resolveNextHardSegment`'s forward walk — conceptually unchanged (walks resolved slots), but must traverse window edges and gaps without aborting.
+5. Rundown assignments and anything else keyed by `clock_instance_started_at`.
+6. DST note: window starts are local times; the fall-back/spring-forward hour distorts window edges once a year exactly as it distorts hour tops today — no worse, document and move on.
+
+**Rollout property that makes this safe:** for on-hour entries with 60-minute clocks — the entire current production configuration — the new model produces bit-identical boundaries to the old one. Divergence activates only for configurations that today already misbehave silently.
+
+---
+
+### Decision 96 — Advertising semantics: budget / guarantees / restrictions (outline; full design deferred until after Decision 95 ships)
+
+**Status: direction discussed with the operator 2026-07-16. Outline only — same pattern as Decision 37. Depends on Decision 95: every guarantee is a promise against slot inventory, and the entry-anchored tiling is what makes that inventory deterministic.**
+
+The campaign fields sort into three classes the current implementation conflates:
+
+1. **Budget** — `plays_per_month` is the sold quantity and a **hard monthly wall** (the 2026-07 incident delivered 2,563 plays against a 90/month quota because nothing enforced it). Daily pacing is **derived**: `daily_target = remaining_plays ÷ remaining_days_in_month` — self-correcting (missed days redistribute forward, built-in make-goods). `max_plays_per_day` stays as the operator's smoothing ceiling *on top of* the auto-pace, no longer the only brake.
+2. **Guarantees** — minimums, never fences; priced as boosts. Interval + plays/day = "at least N plays inside this window daily." Show association = "at least N plays inside this show." First-in-slot = "opens the break," with `once_daily` as the default flavor and `every_play` as a premium that consumes exclusive inventory (slot-1 inventory is exactly one per stop-set — every-play is sellable only while the overlapping every-play set fits, validated at sale time, not fought over at air time). **Guaranteed plays count WITHIN `plays_per_month`, not on top of it.**
+3. **Restrictions** (new field, additive) — **allowed airtime**: a list of allowed day/time windows the spot may air in at all, default "any time," checked first in eligibility. Without it the fill logic will air a client at 04:00.
+
+**`priority` is dropped** (operator's call, 2026-07-16). It existed to arbitrate oversubscription; the replacement is *guarantees-first selling*: at campaign save, validate sold volume + guarantees against computed slot inventory in the allowed windows (the `stop_set_estimates` machinery already computes this shape) and warn/refuse an unkeepable sale — never accept a promise the schedule cannot keep.
+
+**Per-campaign delivery ledger** (same philosophy as the drift ledger, Decision 93): sold / delivered / projected, per-day guarantee compliance, surfaced on the campaign page — doubles as billing evidence (rate card = duration bracket × plays, guarantees as multipliers, per the roadmap's billing item).
+
+Out of scope for this outline: exact pacing-score formula, separation interactions, promo interplay — full design when the phase starts.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
