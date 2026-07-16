@@ -929,16 +929,32 @@ export class PlannerProcess {
       if (usedMusicIds.has(candidate.id)) continue;
 
       if (candidate.duration_seconds > remaining) {
-        const overshoot = candidate.duration_seconds - remaining;
+        // Decision 97 refinement of D72's single boundary decision: judge the
+        // MINIMUM-OVERSHOOT candidate among the remaining non-fitting pool,
+        // not just whichever candidate the rotation order happened to surface
+        // first. With small targets (a drift-shrunk 220s slot) the first
+        // candidate can be a 7-minute track whose overshoot fails the test
+        // while a 4-minute track sits unexamined right behind it — the exact
+        // birth mechanism of the zero-item music plans observed live
+        // 2026-07-16. Still ONE decision, still no hunting for later
+        // candidates that would fit cleanly (rotation order stays authoritative
+        // for ordinary placement); only the boundary pick widens its view,
+        // mirroring the rule stop-set assembly already uses.
+        let boundaryPick = candidate;
+        for (const alt of music.candidates) {
+          if (usedMusicIds.has(alt.id) || alt.duration_seconds <= remaining) continue;
+          if (alt.duration_seconds < boundaryPick.duration_seconds) boundaryPick = alt;
+        }
+        const overshoot = boundaryPick.duration_seconds - remaining;
         const gap = remaining;
         if (overshoot < gap) {
           // Force cut_allowed:true regardless of config — this function can't
           // know if the next segment is hard, so this is the safety net that
           // lets the hard-start gate trim it short if it ever matters; costs
           // nothing when it doesn't.
-          items.push({ ...withCutSkip(musicCandidateToItem(candidate), config), cut_allowed: true });
-          usedMusicIds.add(candidate.id);
-          remaining -= candidate.duration_seconds;
+          items.push({ ...withCutSkip(musicCandidateToItem(boundaryPick), config), cut_allowed: true });
+          usedMusicIds.add(boundaryPick.id);
+          remaining -= boundaryPick.duration_seconds;
           musicCount += 1;
         }
         break;

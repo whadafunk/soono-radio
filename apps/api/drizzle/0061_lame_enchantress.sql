@@ -1,0 +1,1 @@
+ALTER TABLE `station_settings` ADD `runway_worth_it_threshold_s` real DEFAULT 300 NOT NULL;

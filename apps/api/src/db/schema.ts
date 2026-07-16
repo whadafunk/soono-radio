@@ -1106,6 +1106,13 @@ export const stationSettings = sqliteTable('station_settings', {
   // (floor 30s) or grow (up to nominal + cap) so the boundary lands on time
   // within one transition.
   drift_full_authority_threshold_s: real('drift_full_authority_threshold_s').notNull().default(100),
+  // Decision 97 (was hardcoded RUNWAY_WORTH_IT_THRESHOLD_S, D85): minimum
+  // runway worth planning/riding a segment for. Below it: don't draft a plan
+  // for a squeezed segment before a hard boundary, don't trust an active
+  // plan's remaining content at reconcile, and retire-and-retarget at the
+  // T-30s hard-adjacency re-check. Default 300s ≈ one average track plus
+  // headroom (validated against live data 2026-07-03).
+  runway_worth_it_threshold_s: real('runway_worth_it_threshold_s').notNull().default(300),
 });
 
 export type StationSettings = typeof stationSettings.$inferSelect;

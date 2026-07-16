@@ -428,6 +428,13 @@
       "when": 1784190108937,
       "tag": "0060_tough_medusa",
       "breakpoints": true
+    },
+    {
+      "idx": 61,
+      "version": "6",
+      "when": 1784223892131,
+      "tag": "0061_lame_enchantress",
+      "breakpoints": true
     }
   ]
 }

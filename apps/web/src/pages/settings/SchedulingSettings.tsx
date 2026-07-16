@@ -11,6 +11,7 @@ export function SchedulingSettings() {
   const [localCap, setLocalCap] = useState(300);
   const [localRealityCheckInterval, setLocalRealityCheckInterval] = useState(3);
   const [localFullAuthority, setLocalFullAuthority] = useState(100);
+  const [localRunway, setLocalRunway] = useState(300);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['station-settings'],
@@ -32,6 +33,10 @@ export function SchedulingSettings() {
 
   useEffect(() => {
     if (data) setLocalFullAuthority(data.drift_full_authority_threshold_s);
+  }, [data]);
+
+  useEffect(() => {
+    if (data) setLocalRunway(data.runway_worth_it_threshold_s);
   }, [data]);
 
   const mutation = useMutation({
@@ -199,6 +204,34 @@ export function SchedulingSettings() {
           </div>
           <p className="text-zinc-500 text-xs mt-1">
             Default 100s. Any predicted drift beyond this is corrected to near zero by the very next plan instead of being spread gently across several.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
+            Minimum worthwhile runway
+            <HelpTooltip text="The least amount of real time a segment needs before an upcoming hard-start segment to be worth planning at all. A segment squeezed below this is skipped, and its time is filled by extending the current plan up to the hard boundary instead. Also governs when a restart trusts the plan it found mid-flight." />
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={60}
+              max={900}
+              step={10}
+              value={localRunway}
+              onChange={(e) => setLocalRunway(Number(e.target.value))}
+              onBlur={() => {
+                if (!Number.isFinite(localRunway)) { setLocalRunway(data.runway_worth_it_threshold_s); return; }
+                const clamped = Math.max(60, Math.min(900, localRunway));
+                setLocalRunway(clamped);
+                if (clamped !== data.runway_worth_it_threshold_s) mutation.mutate({ runway_worth_it_threshold_s: clamped });
+              }}
+              className="w-28 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+            />
+            <span className="text-zinc-400 text-sm">seconds</span>
+          </div>
+          <p className="text-zinc-500 text-xs mt-1">
+            Default 300s — roughly one average song plus headroom. Lower values plan more squeezed segments; higher values skip to hard boundaries earlier.
           </p>
         </div>
       </div>

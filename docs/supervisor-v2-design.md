@@ -2566,6 +2566,20 @@ Out of scope for this outline: exact pacing-score formula, separation interactio
 
 ---
 
+### Decision 97 — Boundary and runway refinements: greedy prefix, min-overshoot boundary pick, runway threshold as a setting
+
+**Status: decided & implemented 2026-07-16 after an operator review of the hard-segment/runway mechanics. Refines Decisions 62, 72, and 85.**
+
+**1. Greedy prefix in the hard-segment lookahead (refines D62).** The old rule summed the nominals of ALL segments between here and the next hard boundary and, on any shortfall, skipped everything — 600s of runway before segments of 500+400 skipped both and filled 600s with anonymous top-up. The operator's model is better radio: plan the structural next segment whenever *its own* nominal fits the real runway; each planned segment re-evaluates at its own activation, so the chain naturally ends with the last fitting segment holding the fill duty toward the boundary (500 airs properly with its envelopes and identity; only the unfittable 100s remainder becomes boundary fill). Deliberately prefix-only: a later, smaller intervening segment is never aired ahead of an unfittable earlier one — omission keeps schedule order, no reordering surprises.
+
+**2. Minimum-overshoot boundary pick in music assembly (refines D72).** The single boundary decision used to judge only the first non-fitting candidate the rotation order surfaced; with drift-shrunk targets (69s, 220s) a 7-minute first candidate failed the overshoot-vs-gap test while a 4-minute track sat unexamined behind it — the confirmed birth mechanism of the zero-item music plans. The boundary decision now considers the minimum-duration candidate among the remaining *non-fitting* pool (mirroring the rule stop-set assembly already uses). Still one decision, still no hunting for later candidates that would fit cleanly — rotation order stays authoritative for ordinary placement.
+
+**3. `runway_worth_it_threshold_s` becomes a station setting** (Scheduling page, default 300 — the value D85 earmarked, validated 2026-07-03 against a 254.8s average track length). Governs all three of its semantic uses: the reconcile cutover gate, the active-plan trust check at restart, and the T-30s hard-adjacency retarget.
+
+Also confirmed in the same review, no change needed: the ≤30s gap-ride / ≤30s hard-start delay / cut-the-boundary-item tolerances (Decision 66's gate); skipped-segment accounting needs no notifications — play_history is ground truth (Decision 63) and rotation/pacing read it; advertising inventory reacts to calendar edits (cache invalidation hooks verified in schedule/clocks/customers/settings routes) and to playhead advancement via remaining-mode clamping — with one improvement filed for Decision 96: filter out the current day's already-aired breaks now that D95 tiling gives every break its real air time.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

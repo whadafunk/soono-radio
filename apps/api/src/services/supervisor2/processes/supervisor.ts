@@ -110,8 +110,10 @@ const SILENCE_ALERT_THRESHOLD_S = 30;         // seconds of no pushes before WAR
 // Runway model for reconcile() (validated against live data 2026-07-03: 369
 // music tracks average 254.8s, so 300s is ~one song plus headroom; measured
 // draft+finalize latency is 15-70ms, negligible, so there's no separate
-// build-time margin).
-const RUNWAY_WORTH_IT_THRESHOLD_S = 300;      // below this, not worth riding the current plan further
+// build-time margin). Decision 97: the worth-it threshold is now a station
+// setting (runway_worth_it_threshold_s, default 300) — see
+// getRunwayWorthItThresholdSeconds below.
+const DEFAULT_RUNWAY_WORTH_IT_THRESHOLD_S = 300;
 const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offset dance entirely
 const DEFAULT_DRIFT_RECOVERY_CAP_S = 300;     // fallback only — real value is station_settings.drift_recovery_cap_seconds
 const STILL_OPEN_GRACE_MS = 5_000;            // D77 — same grace window as tick()'s isStale check
@@ -175,6 +177,28 @@ export async function getDriftFullAuthorityThresholdSeconds(db: typeof defaultDb
       }, `supervisor: drift_full_authority_threshold_s changed ${lastLoggedFullAuthorityThresholdS}s -> ${value}s`);
     }
     lastLoggedFullAuthorityThresholdS = value;
+  }
+  return value;
+}
+
+// Decision 97: minimum runway worth planning/riding a segment for — governs
+// the reconcile cutover gate, the active-plan trust check, and the T-30s
+// hard-adjacency retarget. Same read-fresh pattern as the caps above.
+let lastLoggedRunwayThresholdS: number | null = null;
+export async function getRunwayWorthItThresholdSeconds(db: typeof defaultDb, logger?: SLogger | null): Promise<number> {
+  const [row] = await db
+    .select({ runway_worth_it_threshold_s: stationSettingsTable.runway_worth_it_threshold_s })
+    .from(stationSettingsTable)
+    .where(eq(stationSettingsTable.id, 1));
+  const value = row?.runway_worth_it_threshold_s ?? DEFAULT_RUNWAY_WORTH_IT_THRESHOLD_S;
+  if (logger) {
+    if (lastLoggedRunwayThresholdS != null && lastLoggedRunwayThresholdS !== value) {
+      logger.info({
+        process: 'supervisor', event: 'CONFIG_CHANGED', field: 'runway_worth_it_threshold_s',
+        previous_value: lastLoggedRunwayThresholdS, new_value: value,
+      }, `supervisor: runway_worth_it_threshold_s changed ${lastLoggedRunwayThresholdS}s -> ${value}s`);
+    }
+    lastLoggedRunwayThresholdS = value;
   }
   return value;
 }
@@ -1940,14 +1964,18 @@ export class SupervisorProcess {
       return { resolved, lookahead: lookahead ?? null };
     }
 
-    const nominalRemainingSeconds = lookahead.skipped.reduce(
-      (sum, seg) => sum + seg.segment.duration_seconds,
-      0,
-    );
+    // Decision 97 — greedy prefix, not aggregate: the structural next segment
+    // is planned whenever ITS OWN nominal fits in the real runway before the
+    // hard boundary. Each planned segment re-evaluates this at its own
+    // activation, so a chain naturally ends with the last fitting segment
+    // holding the fill duty toward the boundary. The old rule summed ALL
+    // intervening nominals and skipped everything on a shortfall — e.g. 600s
+    // of runway before segments of 500+400 skipped BOTH and filled 600s with
+    // anonymous top-up, when the 500s segment could have aired properly and
+    // left only the 100s remainder as boundary fill.
+    const nominalNextSeconds = lookahead.skipped[0].segment.duration_seconds;
     const realRemainingSeconds = (lookahead.hard.segmentStartMs - nowMs) / 1000;
-    if (realRemainingSeconds >= nominalRemainingSeconds) {
-      // Enough real runway (for now) to let the intervening segments air at
-      // nominal length — proceed normally.
+    if (realRemainingSeconds >= nominalNextSeconds) {
       const resolved = await resolveCurrentSegment(effectiveAfterMs, this.db);
       return { resolved, lookahead };
     }
@@ -1956,8 +1984,8 @@ export class SupervisorProcess {
       process: 'supervisor', event: 'HARD_SEGMENT_LOOKAHEAD_TRIGGERED',
       hard_segment_id: lookahead.hard.segment.id, hard_segment_start_ms: lookahead.hard.segmentStartMs,
       skipped_segment_ids: lookahead.skipped.map((s) => s.segment.id),
-      nominal_remaining_seconds: nominalRemainingSeconds, real_remaining_seconds: realRemainingSeconds,
-    }, 'supervisor: not enough real runway before upcoming hard segment — skipping intervening segments');
+      nominal_next_seconds: nominalNextSeconds, real_remaining_seconds: realRemainingSeconds,
+    }, 'supervisor: next segment cannot fit in the runway before the upcoming hard segment — skipping to it');
     for (const seg of lookahead.skipped) {
       this.logger?.info({
         process: 'supervisor', event: 'SEGMENT_SKIPPED',
@@ -1993,9 +2021,10 @@ export class SupervisorProcess {
     // runs every tick. The <3s floor still applies regardless: at that
     // point there's nothing meaningful left to distinguish "early" from
     // "at," and it's well within the gate's own 30s tolerance.
+    const runwayThreshold = await getRunwayWorthItThresholdSeconds(this.db, this.logger);
     const cutoverAllowed =
       remainingSeconds < RUNWAY_FLOOR_S ||
-      (remainingSeconds < RUNWAY_WORTH_IT_THRESHOLD_S && !nextIsHard);
+      (remainingSeconds < runwayThreshold && !nextIsHard);
 
     const sizing = await this.computeTargetFor(next, nowMs);
     this.nextPlanDraftDriftSeconds = sizing.predictedDriftSeconds;
@@ -2053,7 +2082,7 @@ export class SupervisorProcess {
     if (!(await this.hasPendingOrPlayingItems(this.activePlanId))) {
       return null;
     }
-    if ((await this.computeEstimatedRemaining(nowMs)) < RUNWAY_WORTH_IT_THRESHOLD_S) {
+    if ((await this.computeEstimatedRemaining(nowMs)) < await getRunwayWorthItThresholdSeconds(this.db, this.logger)) {
       return null;
     }
     const bounds = await segmentBoundsWithinClock(this.db, plan.clock_id, plan.segment_id, resolved.clockInstanceStartedAt);
@@ -2672,7 +2701,7 @@ export class SupervisorProcess {
         const realRemainingSeconds = (lookahead.hard.segmentStartMs - nowMs) / 1000;
         const cappedTarget = Math.min(nominal, realRemainingSeconds);
 
-        if (cappedTarget < RUNWAY_WORTH_IT_THRESHOLD_S) {
+        if (cappedTarget < await getRunwayWorthItThresholdSeconds(this.db, this.logger)) {
           const retiredPlanId = this.nextPlanId;
           await this.retirePlanWithoutActivating(retiredPlanId);
           this.finalizationRequestedForPlanId = null;

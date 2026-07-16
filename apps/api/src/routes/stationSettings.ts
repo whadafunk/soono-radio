@@ -14,6 +14,7 @@ async function ensureRow() {
       drift_recovery_cap_seconds: 300,
       reality_check_interval_seconds: 3,
       drift_full_authority_threshold_s: 100,
+      runway_worth_it_threshold_s: 300,
     });
     return {
       id: 1,
@@ -22,6 +23,7 @@ async function ensureRow() {
       drift_recovery_cap_seconds: 300,
       reality_check_interval_seconds: 3,
       drift_full_authority_threshold_s: 100,
+      runway_worth_it_threshold_s: 300,
     };
   }
   return row;

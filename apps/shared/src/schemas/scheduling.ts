@@ -1010,6 +1010,11 @@ export const StationSettingsSchema = z.object({
   // inside the 0.6-1.4x comfort band; above it the plan gets full authority
   // to shrink or grow so the boundary lands on time within one transition.
   drift_full_authority_threshold_s: z.number().min(30).max(600),
+  // Decision 97: minimum runway worth planning/riding a segment for —
+  // squeezed segments before a hard boundary with less runway than this are
+  // skipped and their time becomes boundary fill. Default 300s ≈ one average
+  // track plus headroom.
+  runway_worth_it_threshold_s: z.number().min(60).max(900),
 });
 export type StationSettings = z.infer<typeof StationSettingsSchema>;
 
