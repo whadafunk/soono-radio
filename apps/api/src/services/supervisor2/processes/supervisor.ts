@@ -117,6 +117,11 @@ const DEFAULT_RUNWAY_WORTH_IT_THRESHOLD_S = 300;
 const RUNWAY_FLOOR_S = 3;                     // below this, skip the early-offset dance entirely
 const DEFAULT_DRIFT_RECOVERY_CAP_S = 300;     // fallback only — real value is station_settings.drift_recovery_cap_seconds
 const STILL_OPEN_GRACE_MS = 5_000;            // D77 — same grace window as tick()'s isStale check
+// Decision 98: how long a finalize/replan request may stay unanswered (no
+// completion AND no failure event) before the watchdog force-clears its
+// guards. Generous: the planner's own pool timeout is 10s and assembly runs
+// sub-second, so a healthy request can't take anywhere near this long.
+const IN_FLIGHT_TIMEOUT_MS = 60_000;
 
 // ── Logging cadence (D79 — candidates for a future Logging settings tab) ──────
 // All throttled to fire well below the 500ms tick rate; none add new DB
@@ -296,6 +301,13 @@ export class SupervisorProcess {
   // handlePlanFinalized when the matching PLAN_FINALIZED arrives. Used
   // exclusively by handleExhaustedPlan's activation-race guard.
   private finalizeInFlightForPlanId: number | null = null;
+  // Decision 98: when the in-flight guard above was set — the watchdog in
+  // realityCheckAndDispatch force-clears a request that neither completed
+  // nor reported failure within IN_FLIGHT_TIMEOUT_MS (a lost event, a
+  // planner death mid-request), so no guard can latch until restart.
+  private finalizeInFlightSinceMs: number | null = null;
+  // Decision 98: same watchdog timestamp for pendingReplanForPlanId.
+  private pendingReplanSinceMs: number | null = null;
   // Set whenever resolveNextOccurrence resolves to a hard-start segment —
   // either because it genuinely is the immediate next one, or because there
   // wasn't enough runway to justify drafting the intervening segments
@@ -434,7 +446,42 @@ export class SupervisorProcess {
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PLAN_REPLANNED' }>('PLAN_REPLANNED', (msg) => {
         this.logger?.info({ process: 'supervisor', event: 'PLAN_REPLANNED_OBSERVED', plan_id: msg.plan_id }, 'supervisor: planner returned replan');
-        if (this.pendingReplanForPlanId === msg.plan_id) this.pendingReplanForPlanId = null;
+        if (this.pendingReplanForPlanId === msg.plan_id) {
+          this.pendingReplanForPlanId = null;
+          this.pendingReplanSinceMs = null;
+        }
+      }),
+    );
+    // Decision 98: failure is as loud as success. The planner emits these
+    // when a finalize/replan request throws — the plan itself is untouched
+    // (build-then-swap), so the correct reaction is to unlatch the guards
+    // and let the next gate evaluation retry. Clearing the finalize DE-DUP
+    // guard here is safe, unlike clearing it on COMPLETION (the D79/D80
+    // regression): after a failure the plan is still 'draft' and no request
+    // is in flight, so a re-request is exactly what's wanted, not a loop.
+    this.unsubscribers.push(
+      this._bus.on<BusMessage & { type: 'PLAN_FINALIZE_FAILED' }>('PLAN_FINALIZE_FAILED', (msg) => {
+        this.logger?.warn({
+          process: 'supervisor', event: 'PLAN_FINALIZE_FAILED_OBSERVED', plan_id: msg.plan_id,
+        }, 'supervisor: finalize request failed in the planner — unlatching guards so the next cycle retries');
+        if (this.finalizeInFlightForPlanId === msg.plan_id) {
+          this.finalizeInFlightForPlanId = null;
+          this.finalizeInFlightSinceMs = null;
+        }
+        if (this.finalizationRequestedForPlanId === msg.plan_id) {
+          this.finalizationRequestedForPlanId = null;
+        }
+      }),
+    );
+    this.unsubscribers.push(
+      this._bus.on<BusMessage & { type: 'PLAN_REPLAN_FAILED' }>('PLAN_REPLAN_FAILED', (msg) => {
+        this.logger?.warn({
+          process: 'supervisor', event: 'PLAN_REPLAN_FAILED_OBSERVED', plan_id: msg.plan_id,
+        }, 'supervisor: replan request failed in the planner — unlatching guard so the fill/top-up levers can fire again');
+        if (this.pendingReplanForPlanId === msg.plan_id) {
+          this.pendingReplanForPlanId = null;
+          this.pendingReplanSinceMs = null;
+        }
       }),
     );
     // Track last push for silence alerting (Phase F).
@@ -753,6 +800,42 @@ export class SupervisorProcess {
       await this.requestColdStartDraft(resolved, nowMs);
       logRealityCheck('cold_start');
       return;
+    }
+
+    // ── In-flight watchdog (Decision 98) ────────────────────────────────────
+    // Backstop for the failure events: a finalize/replan request that neither
+    // completed nor reported failure within the timeout (a lost event, a
+    // planner death mid-request) gets its guards force-cleared so the next
+    // cycle can retry — no guard may latch until restart. A healthy request
+    // resolves in well under a second (pool timeout 10s worst case), so a
+    // 60s-stale guard is unambiguous.
+    this.tickOperation = 'inflight_watchdog';
+    if (
+      this.finalizeInFlightForPlanId != null &&
+      this.finalizeInFlightSinceMs != null &&
+      nowMs - this.finalizeInFlightSinceMs > IN_FLIGHT_TIMEOUT_MS
+    ) {
+      this.logger?.error({
+        process: 'supervisor', event: 'PLANNER_REQUEST_TIMED_OUT', kind: 'finalize',
+        plan_id: this.finalizeInFlightForPlanId,
+        waited_seconds: Math.round((nowMs - this.finalizeInFlightSinceMs) / 1000),
+      }, 'supervisor: finalize request never completed nor failed — force-clearing guards');
+      this.finalizeInFlightForPlanId = null;
+      this.finalizeInFlightSinceMs = null;
+      this.finalizationRequestedForPlanId = null;
+    }
+    if (
+      this.pendingReplanForPlanId != null &&
+      this.pendingReplanSinceMs != null &&
+      nowMs - this.pendingReplanSinceMs > IN_FLIGHT_TIMEOUT_MS
+    ) {
+      this.logger?.error({
+        process: 'supervisor', event: 'PLANNER_REQUEST_TIMED_OUT', kind: 'replan',
+        plan_id: this.pendingReplanForPlanId,
+        waited_seconds: Math.round((nowMs - this.pendingReplanSinceMs) / 1000),
+      }, 'supervisor: replan request never completed nor failed — force-clearing guard');
+      this.pendingReplanForPlanId = null;
+      this.pendingReplanSinceMs = null;
     }
 
     // ── T-30s finalization gate (D31) ──────────────────────────────────────
@@ -1104,6 +1187,7 @@ export class SupervisorProcess {
         const fromPosition = await this.nextAppendPosition(this.activePlanId);
         const requestId = randomUUID();
         this.pendingReplanForPlanId = this.activePlanId;
+        this.pendingReplanSinceMs = nowMs;
         this.logger?.info({
           process: 'supervisor', event: 'EXHAUSTED_PLAN_TOPUP',
           plan_id: this.activePlanId, next_plan_id: this.nextPlanId,
@@ -1374,6 +1458,7 @@ export class SupervisorProcess {
       const fromPosition = await this.nextAppendPosition(this.activePlanId);
       const requestId = randomUUID();
       this.pendingReplanForPlanId = this.activePlanId;
+      this.pendingReplanSinceMs = nowMs;
       this.logger?.info({
         process: 'supervisor', event: 'HARD_START_FILL',
         plan_id: this.activePlanId,
@@ -1762,6 +1847,7 @@ export class SupervisorProcess {
     this.planActivatedAtMs = nowMs;
     this.finalizationRequestedForPlanId = null;
     this.finalizeInFlightForPlanId = null;
+    this.finalizeInFlightSinceMs = null;
     this.activePlanHardBoundary = null;
     this.exhaustedPlanReconciledFor = null;
     this.nextPlanTransitioningSinceMs = null;
@@ -2181,6 +2267,7 @@ export class SupervisorProcess {
       if (this.finalizationRequestedForPlanId !== best.id) {
         this.finalizationRequestedForPlanId = best.id;
         this.finalizeInFlightForPlanId = best.id;
+        this.finalizeInFlightSinceMs = nowMs;
         const requestId = randomUUID();
         // adjusted_target_seconds must reflect what's actually planned, not a
         // placeholder — finalizePlan's reassembly trigger now also fires on
@@ -2280,6 +2367,7 @@ export class SupervisorProcess {
         const fromPosition = await this.nextAppendPosition(this.activePlanId);
         const requestId = randomUUID();
         this.pendingReplanForPlanId = this.activePlanId;
+        this.pendingReplanSinceMs = nowMs;
         this._bus.emit({
           type: 'PLAN_REPLAN_REQUESTED',
           request_id: requestId,
@@ -2339,6 +2427,7 @@ export class SupervisorProcess {
       this.coldStartFinalizeSent = true;
       this.finalizationRequestedForPlanId = msg.plan_id;
       this.finalizeInFlightForPlanId = msg.plan_id;
+      this.finalizeInFlightSinceMs = Date.now();
       const requestId = randomUUID();
       // See the matching comment in reconcileOccurrence: adjusted_target_seconds
       // must reflect the plan's actual content, not a 0 placeholder, now that
@@ -2376,6 +2465,7 @@ export class SupervisorProcess {
     // conflating the two caused a real ~18-minute dead-air regression.
     if (this.finalizeInFlightForPlanId === msg.plan_id) {
       this.finalizeInFlightForPlanId = null;
+      this.finalizeInFlightSinceMs = null;
     }
 
     // Decision 94: a plan that FINALIZES with zero items has no future — the
@@ -2706,6 +2796,7 @@ export class SupervisorProcess {
           await this.retirePlanWithoutActivating(retiredPlanId);
           this.finalizationRequestedForPlanId = null;
           this.finalizeInFlightForPlanId = null;
+          this.finalizeInFlightSinceMs = null;
           // Still tracked as a backup: if the fresh hard-segment draft below
           // also comes up short (e.g. the same empty-pool problem), the
           // active plan's own fill/trim gate can still stretch toward this
@@ -2772,6 +2863,7 @@ export class SupervisorProcess {
 
     this.finalizationRequestedForPlanId = this.nextPlanId;
     this.finalizeInFlightForPlanId = this.nextPlanId;
+    this.finalizeInFlightSinceMs = nowMs;
     const requestId = randomUUID();
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_FINALIZE_REQUESTED',

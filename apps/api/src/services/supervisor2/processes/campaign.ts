@@ -69,7 +69,18 @@ export class CampaignProcess {
         'REQUEST_CANDIDATES',
         (msg) => {
           if (msg.process !== PROCESS_NAME) return;
-          void this.handleRequest(msg);
+          // Decision 98/99: without this catch, a transient throw inside the
+          // pool build (DB hiccup) became an unhandled promise rejection and
+          // crashed the whole API process (Node default). The planner's own
+          // request timeout + failure signalling handle the missing
+          // CANDIDATES response; this guard's only job is keeping the
+          // process alive.
+          void this.handleRequest(msg).catch((err) => {
+            this.logger?.error(
+              { err, process: 'campaign', event: 'CANDIDATES_REQUEST_FAILED', request_id: msg.request_id, segment_id: msg.segment_id },
+              'campaign: REQUEST_CANDIDATES handler failed',
+            );
+          });
         },
       ),
     );

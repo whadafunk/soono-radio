@@ -176,9 +176,13 @@ export class PlannerProcess {
         (msg) => {
           void this.handleFinalizeRequested(msg).catch((err) => {
             this.logger?.error(
-              { err, event: 'PLAN_FINALIZE_FAILED', request_id: msg.request_id },
+              { err, event: 'PLAN_FINALIZE_FAILED', request_id: msg.request_id, plan_id: msg.plan_id },
               'planner: finalize request failed',
             );
+            // Decision 98: a failure must be as loud on the bus as a success —
+            // the Supervisor's in-flight guard latches until it hears back,
+            // and a silent failure used to latch it until process restart.
+            this._bus.emit({ type: 'PLAN_FINALIZE_FAILED', request_id: msg.request_id, plan_id: msg.plan_id });
           });
         },
       ),
@@ -189,9 +193,11 @@ export class PlannerProcess {
         (msg) => {
           void this.handleReplanRequested(msg).catch((err) => {
             this.logger?.error(
-              { err, event: 'PLAN_REPLAN_FAILED', request_id: msg.request_id },
+              { err, event: 'PLAN_REPLAN_FAILED', request_id: msg.request_id, plan_id: msg.plan_id },
               'planner: replan request failed',
             );
+            // Decision 98: see the finalize handler above.
+            this._bus.emit({ type: 'PLAN_REPLAN_FAILED', request_id: msg.request_id, plan_id: msg.plan_id });
           });
         },
       ),
@@ -475,8 +481,46 @@ export class PlannerProcess {
     let substitutions = 0;
 
     if (needsFullReassembly) {
-      // Full re-assembly: drop all pending items, rebuild from scratch with
-      // the drift-adjusted target (D31).
+      // Full re-assembly with the drift-adjusted target (D31).
+      //
+      // Decision 98 — BUILD THEN SWAP: assembly runs FIRST, while the plan's
+      // existing pending items are still untouched. Assembly is the only part
+      // of this path that can realistically throw (a content-process pool
+      // timeout, a DB hiccup) — the old order deleted the pending items
+      // before assembling, so a throw left the plan gutted with no completion
+      // event ever emitted, latching the Supervisor's in-flight guard until
+      // process restart (the last remaining "dead air until restart" class).
+      // Assembling first has no side effects: REQUEST_CANDIDATES/CANDIDATES
+      // change no content-process state (Decision 11) — commitment only
+      // happens in notifyContentProcesses below, after the swap succeeds.
+
+      // Re-derive show context from the calendar at the plan's clock instance.
+      const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
+      const showId = showResolved?.show_id ?? null;
+      const showName = showResolved?.show_name ?? null;
+      let isShowStart = false;
+      let isShowEnd = false;
+      if (showId != null) {
+        const flags = await this.getShowBoundaryFlags(
+          segment.id,
+          segment.clock_id,
+          plan.clock_instance_started_at,
+          showId,
+        );
+        isShowStart = flags.isShowStart;
+        isShowEnd = flags.isShowEnd;
+      }
+
+      const showCtx: ShowContext = { showId, showName, isShowStart, isShowEnd, config };
+      const result = await this.assembleForSegment(
+        segment,
+        plan.clock_instance_started_at,
+        effectiveTargetSeconds,
+        nowMs,
+        showCtx,
+      );
+
+      // ── Swap: only now do the old pending items get released and removed ──
       const dropMusic: number[] = [];
       const dropBranding: number[] = [];
       const dropCampaign: number[] = [];
@@ -504,32 +548,6 @@ export class PlannerProcess {
           .delete(planItemsTable)
           .where(inArray(planItemsTable.id, pendingItems.map((it) => it.id)));
       }
-
-      // Re-derive show context from the calendar at the plan's clock instance.
-      const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
-      const showId = showResolved?.show_id ?? null;
-      const showName = showResolved?.show_name ?? null;
-      let isShowStart = false;
-      let isShowEnd = false;
-      if (showId != null) {
-        const flags = await this.getShowBoundaryFlags(
-          segment.id,
-          segment.clock_id,
-          plan.clock_instance_started_at,
-          showId,
-        );
-        isShowStart = flags.isShowStart;
-        isShowEnd = flags.isShowEnd;
-      }
-
-      const showCtx: ShowContext = { showId, showName, isShowStart, isShowEnd, config };
-      const result = await this.assembleForSegment(
-        segment,
-        plan.clock_instance_started_at,
-        effectiveTargetSeconds,
-        nowMs,
-        showCtx,
-      );
 
       await this.persistPlanItems(planId, result.items);
       await this.notifyContentProcesses(result, planId, nowMs);
@@ -682,8 +700,36 @@ export class PlannerProcess {
         ),
       );
 
-    // Bucket dropped items by content process so we can send a single
-    // DROP_COMMITTED per process with all the affected ids.
+    // Decision 98 — BUILD THEN SWAP (same rationale as finalizePlan): assemble
+    // the replacement tail FIRST, while the existing tail is untouched. The
+    // old order deleted the tail before assembling, so an assembly throw
+    // (pool timeout, DB error) gutted the plan's remainder with no completion
+    // event, permanently latching the Supervisor's pending-replan guard —
+    // which blocks the hard-start fill and exhausted-top-up levers exactly
+    // when they're needed.
+    const config = await this.loadSupervisorConfig();
+
+    // For mid-segment replanning, the show context is unchanged (show
+    // envelopes played at the start/end are not re-inserted). Pass show_id
+    // for branding pool selection but disable envelope insertion.
+    const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
+    const showCtx: ShowContext = {
+      showId: showResolved?.show_id ?? null,
+      showName: showResolved?.show_name ?? null,
+      isShowStart: false,
+      isShowEnd: false,
+      config,
+    };
+
+    const result = await this.assembleForSegment(
+      segment,
+      plan.clock_instance_started_at,
+      remainingSeconds,
+      nowMs,
+      showCtx,
+    );
+
+    // ── Swap: release and remove the superseded tail, then insert the new ──
     const dropMusic: number[] = [];
     const dropBranding: number[] = [];
     const dropCampaign: number[] = [];
@@ -714,35 +760,11 @@ export class PlannerProcess {
     if (dropCampaign.length > 0) this.emitDrop('campaign', dropCampaign);
     if (dropRundown.length > 0) this.emitDrop('rundown', dropRundown);
 
-    // Delete superseded items before re-assembling so the replacement
-    // positions are reserved cleanly and rows don't accumulate in the DB.
     if (dropping.length > 0) {
       await this.db
         .delete(planItemsTable)
         .where(inArray(planItemsTable.id, dropping.map((it) => it.id)));
     }
-
-    const config = await this.loadSupervisorConfig();
-
-    // For mid-segment replanning, the show context is unchanged (show
-    // envelopes played at the start/end are not re-inserted). Pass show_id
-    // for branding pool selection but disable envelope insertion.
-    const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
-    const showCtx: ShowContext = {
-      showId: showResolved?.show_id ?? null,
-      showName: showResolved?.show_name ?? null,
-      isShowStart: false,
-      isShowEnd: false,
-      config,
-    };
-
-    const result = await this.assembleForSegment(
-      segment,
-      plan.clock_instance_started_at,
-      remainingSeconds,
-      nowMs,
-      showCtx,
-    );
 
     // Re-insert from fromPosition.
     let pos = fromPosition;
@@ -1117,10 +1139,24 @@ export class PlannerProcess {
     }
 
     // (c) Fill remaining break.
+    // Decision 99: iteration cap + a ≥1s duration floor on spots. Campaign
+    // repeats within a break are legal (Decision 22), so this loop's only
+    // termination guarantee is remainingSeconds shrinking — a zero-duration
+    // spot (corrupt ingest; nothing upstream rejects it) would spin this
+    // synchronous loop forever and freeze the entire API process. The cap is
+    // a backstop far above any real break's item count.
+    let fillIterations = 0;
     while (remainingSeconds > MIN_VIABLE_SPOT_DURATION_SECONDS) {
+      if (++fillIterations > 200) {
+        this.logger?.error({
+          event: 'STOP_SET_FILL_RUNAWAY', segment_id: segment.id,
+          remaining_seconds: remainingSeconds, placed_count: placed.length,
+        }, 'planner: stop-set fill exceeded the iteration cap — aborting fill (zero-duration spot in a pool?)');
+        break;
+      }
       let eligible = pool.candidates.filter((c) => {
         if (excluded.has(c.id)) return false;
-        return c.spot_pool.some((s) => s.duration_seconds <= remainingSeconds);
+        return c.spot_pool.some((s) => s.duration_seconds >= 1 && s.duration_seconds <= remainingSeconds);
       });
 
       if (eligible.length === 0) break;
@@ -1345,10 +1381,40 @@ export class PlannerProcess {
       usedBrandingIds.add(branding.segment_start.id);
     }
 
-    // (b) Rundown items in position order (mandatory).
+    // (b) Rundown items in position order (mandatory), within budget.
+    // Decision 35/99: the planner owns compression — clips that don't fit the
+    // target are dropped from the tail with a RUNDOWN_OVERFLOW log. Without
+    // this check, a long fallback playlist got placed IN FULL as mandatory
+    // items (a 40-minute playlist on a 5-minute news slot would blow through
+    // every downstream segment with content nothing may skip or cut). The
+    // first clip is always placed even if it alone overruns the budget — a
+    // news segment airing its lead story long beats airing nothing; the
+    // overrun is absorbed by the next plan's sizing like any other overshoot.
+    const rundownBudgetSeconds = Math.max(
+      0,
+      targetDurationSeconds
+        - showStartDur
+        - (branding.segment_start?.duration_seconds ?? 0)
+        - segEndReserve
+        - showEndReserve,
+    );
     let totalRundownDuration = 0;
+    let droppedRundownCount = 0;
+    let droppedRundownSeconds = 0;
     const orderedRundown = rundown.items.slice().sort((a, b) => a.position - b.position);
-    for (const item of orderedRundown) {
+    for (let i = 0; i < orderedRundown.length; i++) {
+      const item = orderedRundown[i];
+      const wouldTotal = totalRundownDuration + item.duration_seconds;
+      if (totalRundownDuration > 0 && wouldTotal > rundownBudgetSeconds) {
+        // Strict tail drop (D35): rundown order is editorial — once a clip
+        // doesn't fit, everything after it is dropped too, never reordered
+        // around by omission.
+        for (let j = i; j < orderedRundown.length; j++) {
+          droppedRundownCount += 1;
+          droppedRundownSeconds += orderedRundown[j].duration_seconds;
+        }
+        break;
+      }
       const ct: PlanItemContentType =
         segment.type === 'voice_track' ? 'voice_track' : 'rundown';
       items.push({
@@ -1364,7 +1430,16 @@ export class PlannerProcess {
         rundown_candidate_id: item.id,
       });
       usedRundownIds.add(item.id);
-      totalRundownDuration += item.duration_seconds;
+      totalRundownDuration = wouldTotal;
+    }
+    if (droppedRundownCount > 0) {
+      this.logger?.warn({
+        event: 'RUNDOWN_OVERFLOW', segment_id: segment.id,
+        budget_seconds: Math.round(rundownBudgetSeconds),
+        placed_seconds: Math.round(totalRundownDuration),
+        dropped_count: droppedRundownCount,
+        dropped_seconds: Math.round(droppedRundownSeconds),
+      }, 'planner: rundown content exceeds the segment budget — tail clips dropped (D35)');
     }
 
     const startEnvDur = (branding.segment_start?.duration_seconds ?? 0) + showStartDur;
@@ -1989,7 +2064,10 @@ function pickLongestSpotThatFits(
   pool: SpotCandidate[],
   remainingSeconds: number,
 ): SpotCandidate | null {
-  const fits = pool.filter((s) => s.duration_seconds <= remainingSeconds);
+  // Decision 99: the ≥1s floor keeps a zero-duration spot (corrupt ingest)
+  // from being "placed" without consuming any break time — the fill loop's
+  // termination depends on every placement shrinking the remainder.
+  const fits = pool.filter((s) => s.duration_seconds >= 1 && s.duration_seconds <= remainingSeconds);
   if (fits.length === 0) return null;
   fits.sort((a, b) => b.duration_seconds - a.duration_seconds);
   return fits[0] ?? null;

@@ -182,6 +182,16 @@ export type BusMessage =
       plan_id: number;
     }
   | {
+      // Planner → Supervisor (Decision 98): the finalize request threw before
+      // completing (pool timeout, DB error). The plan is untouched (build-
+      // then-swap: nothing is deleted until assembly succeeds), so the
+      // Supervisor must unlatch its in-flight/de-dup guards and let the next
+      // gate evaluation retry.
+      type: 'PLAN_FINALIZE_FAILED';
+      request_id: string;
+      plan_id: number;
+    }
+  | {
       // Supervisor → Planner: replan the remaining items in an active plan
       // (drift correction). Items at positions ≥ from_position are eligible
       // for replacement; everything before is already played or in-flight.
@@ -195,6 +205,14 @@ export type BusMessage =
   | {
       // Planner → Supervisor: replan complete.
       type: 'PLAN_REPLANNED';
+      request_id: string;
+      plan_id: number;
+    }
+  | {
+      // Planner → Supervisor (Decision 98): the replan request threw before
+      // completing. Same contract as PLAN_FINALIZE_FAILED — plan untouched,
+      // guards must unlatch so the fill/top-up levers can fire again.
+      type: 'PLAN_REPLAN_FAILED';
       request_id: string;
       plan_id: number;
     }

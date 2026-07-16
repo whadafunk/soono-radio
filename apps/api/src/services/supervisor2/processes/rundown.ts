@@ -43,6 +43,7 @@ import {
   type ClockSegmentType,
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
+import type { SLogger } from '../supervisorLogger.js';
 import type { RundownCandidatePool, RundownItem } from '../types.js';
 
 const PROCESS_NAME: ContentProcessName = 'rundown';
@@ -58,6 +59,7 @@ export class RundownProcess {
   constructor(
     private readonly _bus: typeof bus,
     private readonly db: typeof defaultDb = defaultDb,
+    private readonly logger: SLogger | null = null,
   ) {}
 
   start(): void {
@@ -66,7 +68,18 @@ export class RundownProcess {
         'REQUEST_CANDIDATES',
         (msg) => {
           if (msg.process !== PROCESS_NAME) return;
-          void this.handleRequest(msg);
+          // Decision 98/99: without this catch, a transient throw inside the
+          // pool build (DB hiccup) became an unhandled promise rejection and
+          // crashed the whole API process (Node default). The planner's own
+          // request timeout + failure signalling handle the missing
+          // CANDIDATES response; this guard's only job is keeping the
+          // process alive.
+          void this.handleRequest(msg).catch((err) => {
+            this.logger?.error(
+              { err, process: 'rundown', event: 'CANDIDATES_REQUEST_FAILED', request_id: msg.request_id, segment_id: msg.segment_id },
+              'rundown: REQUEST_CANDIDATES handler failed',
+            );
+          });
         },
       ),
     );

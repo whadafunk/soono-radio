@@ -2580,6 +2580,30 @@ Also confirmed in the same review, no change needed: the ≤30s gap-ride / ≤30
 
 ---
 
+### Decision 98 — Planner requests cannot fail silently: build-then-swap, failure events, in-flight watchdog
+
+**Status: decided & implemented 2026-07-16. Closes the last "dead air until restart" class from the 2026-07-16 audit.**
+
+Three layers, each sufficient alone for its slice of the failure space:
+
+1. **Build-then-swap.** Finalize's full reassembly and replan both used to DELETE the plan's pending items *before* assembling replacements — so an assembly throw (content-process pool timeout, DB hiccup) gutted the plan and emitted no completion event. Assembly now runs first, against the untouched plan; the swap (release old items to content processes, delete, insert new) happens only after assembly succeeded. Safe to reorder because REQUEST_CANDIDATES/CANDIDATES changes no content-process state (Decision 11) — commitment happens only in notifyContentProcesses, after the swap.
+2. **Failure events.** The planner's catch handlers now emit `PLAN_FINALIZE_FAILED` / `PLAN_REPLAN_FAILED` alongside the error log. The Supervisor subscribes and unlatches the matching guards — including the finalize de-dup guard, which is safe to clear on *failure* (the plan is still 'draft', no request is in flight, a retry is wanted) even though clearing it on *completion* caused the D79/D80 18-minute regression.
+3. **In-flight watchdog.** Both guards now carry a set-timestamp; the reality check force-clears any request that neither completed nor failed within 60s (lost event, planner death mid-request) with a PLANNER_REQUEST_TIMED_OUT error log. A healthy request resolves in well under a second (10s pool timeout worst case), so a 60s-stale guard is unambiguous.
+
+Draft requests need no equivalent: a failed draft leaves no latched guard, and the existing exhaustion/reconcile machinery re-requests idempotently (with an empty stuck draft ultimately cleaned up by Decision 94).
+
+---
+
+### Decision 99 — Assembly guards: content-process crash guards, rundown budget enforcement, zero-duration spot floor
+
+**Status: decided & implemented 2026-07-16, same hardening pass as Decision 98.**
+
+1. **Content-process crash guards.** All four content processes ran their REQUEST_CANDIDATES handlers fire-and-forget with no catch — a transient throw inside a pool build (DB hiccup) became an unhandled promise rejection and killed the entire API process (Node default). Each handler now catches and logs `CANDIDATES_REQUEST_FAILED`; the planner's request timeout plus Decision 98's failure signalling handle the missing response. The rundown process also gained the supervisor logger it never had (the audit's "fully silent process").
+2. **Rundown budget enforcement (implements what Decision 35 always specified).** Rundown items were placed IN FULL as mandatory regardless of the segment budget — a long fallback playlist on a short news slot produced tens of minutes of unskippable, uncuttable overrun. Clips are now placed in editorial order within the budget (target minus envelope reserves); on the first clip that doesn't fit, it and everything after are dropped — strict tail order, never reordering by omission — with a `RUNDOWN_OVERFLOW` log. The first clip is always placed even if it alone overruns: a news segment airing its lead story long beats airing nothing, and the overrun is absorbed like any other overshoot.
+3. **Zero-duration spot floor + fill-loop cap.** Campaign repeats within a break are legal (Decision 22), so the stop-set fill loop's only termination guarantee is the remainder shrinking — a zero-duration spot (corrupt ingest; nothing upstream rejects it) would spin the synchronous loop forever and freeze the API. Spots under 1s are now invisible to eligibility and placement, and the loop carries a 200-iteration backstop with a `STOP_SET_FILL_RUNAWAY` error log.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

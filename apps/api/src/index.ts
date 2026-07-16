@@ -185,7 +185,7 @@ const start = async () => {
     const musicProcess = new MusicProcess(bus, db, supervisorLog);
     const campaignProcess = new CampaignProcess(bus, db, supervisorLog);
     const brandingProcess = new BrandingProcess(bus, db, supervisorLog);
-    const rundownProcess = new RundownProcess(bus, db);
+    const rundownProcess = new RundownProcess(bus, db, supervisorLog);
     const plannerProcess = new PlannerProcess(bus, db, supervisorLog);
     const queueFeederProcess = new QueueFeederProcess(bus, db, supervisorLog);
     const supervisorProcess = new SupervisorProcess(bus, db, supervisorLog);
