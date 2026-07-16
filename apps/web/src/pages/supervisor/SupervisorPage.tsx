@@ -225,9 +225,13 @@ function SegmentTimeline({
   const arrowDir: 'left' | 'right' = drift > 0 ? 'right' : 'left';
 
   const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
+  // Grammar v3 (operator spec 2026-07-17): the bar is a LENGTH diagram —
+  // front region from the applied drift correction, tail from assembled
+  // content vs the requested length. Wall-clock facts (started, drift) live
+  // only in the header numbers and the playhead arrow.
   const layout = computeTimelineLayout(
     segmentDurationSeconds,
-    boundaryDriftSeconds,
+    intentionalOffsetSeconds,
     planItems.map((item) => {
       const meta = CONTENT_TYPE_META[item.content_type] ?? { barColor: 'bg-zinc-500', label: item.content_type };
       return {
@@ -242,11 +246,13 @@ function SegmentTimeline({
     }),
   );
 
-  const calendarCursorLeft = layout.wallClockToPct(calendarElapsed);
   const planCursorLeft = layout.planPositionToPct(planConsumedSeconds);
+  // Expected end of the current item, in content space: the right edge of
+  // the block that's playing.
+  const playingBlock = layout.contentBlocks.find((b) => b.isPlaying);
   const expectedEndLeft =
-    expectedCurrentItemEndMs != null
-      ? layout.wallClockToPct((expectedCurrentItemEndMs - segmentStartedAtMs) / 1000)
+    expectedCurrentItemEndMs != null && playingBlock != null
+      ? playingBlock.leftPct + playingBlock.widthPct
       : null;
 
   const hoverHandlers = (key: string) => ({
@@ -273,6 +279,10 @@ function SegmentTimeline({
           <span title="The segment's nominal, scheduled duration">
             scheduled{' '}
             <span className="text-zinc-300 font-mono">{fmtMmSs(segmentDurationSeconds)}</span>
+          </span>
+          <span title="The length the supervisor requested from the planner — scheduled length adjusted by the drift correction">
+            requested{' '}
+            <span className="text-zinc-300 font-mono">{fmtMmSs(layout.targetSeconds)}</span>
           </span>
           <span title="Sum of the active plan's item durations — what's actually been assembled to fill this segment">
             planned{' '}
@@ -374,20 +384,20 @@ function SegmentTimeline({
               );
             })}
 
-            {/* Late start — schedule time consumed before content began. The
-                marker line sits where content actually starts; its distance
-                from the bar's start is exactly how much the segment was
-                shortened by. */}
-            {layout.lateStartSeconds > 0.5 && (
+            {/* Front gap — the drift-correction SHORTENING: the part of the
+                scheduled length this plan deliberately does not provide. The
+                marker line sits where content begins; its distance from the
+                bar's start is exactly the shortening. */}
+            {layout.shorteningSeconds > 0.5 && (
               <>
                 <div
                   className="absolute top-0 bottom-0 left-0 cursor-default"
                   style={{
-                    width: `${layout.lateStartPct}%`,
+                    width: `${layout.shorteningPct}%`,
                     backgroundImage:
                       'repeating-linear-gradient(45deg, rgba(113,113,122,0.2) 0, rgba(113,113,122,0.2) 3px, transparent 3px, transparent 9px)',
                   }}
-                  {...hoverHandlers('late-start')}
+                  {...hoverHandlers('front-gap')}
                 />
                 <div
                   className="absolute top-0 bottom-0 w-0.5 bg-zinc-300 opacity-70 z-10 pointer-events-none"
@@ -413,10 +423,12 @@ function SegmentTimeline({
               </div>
             )}
 
-            {/* Nominal/configured length reference line */}
+            {/* Requested-length end — which is also the scheduled length's
+                end by construction (front region + scheduled = target end).
+                One dashed line, both meanings. */}
             <div
               className="absolute top-0 bottom-0 w-2 -ml-1 cursor-default border-l border-dashed border-zinc-400 opacity-50 z-10"
-              style={{ left: `${layout.nominalEndPct}%` }}
+              style={{ left: `${layout.targetEndPct}%` }}
               {...hoverHandlers('boundary')}
             />
 
@@ -456,13 +468,14 @@ function SegmentTimeline({
           </div>
 
           {/* Tooltips — rendered outside the clipped inner div so they never get cut off */}
-          <TimelineTooltip active={hoveredKey === 'boundary'} leftPct={layout.nominalEndPct}>
-            Nominal length: {fmtMmSs(segmentDurationSeconds)}
+          <TimelineTooltip active={hoveredKey === 'boundary'} leftPct={layout.targetEndPct}>
+            <div className="font-semibold">Requested length: {fmtMmSs(layout.targetSeconds)}</div>
+            <div className="text-zinc-400 text-xs mt-0.5">Scheduled {fmtMmSs(segmentDurationSeconds)}{Math.abs(intentionalOffsetSeconds) >= 1 ? ` ${intentionalOffsetSeconds < 0 ? '+' : '−'} ${fmtMmSs(Math.abs(intentionalOffsetSeconds))} drift correction` : ''} — scheduled and requested end together here</div>
           </TimelineTooltip>
-          {layout.lateStartSeconds > 0.5 && (
-            <TimelineTooltip active={hoveredKey === 'late-start'} leftPct={layout.lateStartPct / 2}>
-              <div className="font-semibold">Started {fmtMmSs(layout.lateStartSeconds)} late</div>
-              <div className="text-zinc-400 text-xs mt-0.5">Schedule time consumed before this segment's content began — the segment was shortened by this much</div>
+          {layout.shorteningSeconds > 0.5 && (
+            <TimelineTooltip active={hoveredKey === 'front-gap'} leftPct={layout.shorteningPct / 2}>
+              <div className="font-semibold">Shortened by {fmtMmSs(layout.shorteningSeconds)}</div>
+              <div className="text-zinc-400 text-xs mt-0.5">Drift correction — this part of the scheduled length is deliberately not provided by this plan</div>
             </TimelineTooltip>
           )}
           {layout.contentBlocks.map((block, i) => (
@@ -480,8 +493,8 @@ function SegmentTimeline({
                 active={hoveredKey === `lead-${i}`}
                 leftPct={block.leftPct + (block.widthPct * block.leadHashPctOfBlock) / 200}
               >
-                <div className="font-semibold">Started {fmtMmSs(layout.leadingSeconds)} early ({block.label})</div>
-                <div className="text-zinc-400 text-xs mt-0.5">Real content airing before the scheduled start</div>
+                <div className="font-semibold">Start early — extended by {fmtMmSs(layout.extensionSeconds)} ({block.label})</div>
+                <div className="text-zinc-400 text-xs mt-0.5">Drift correction — real content added ahead of the scheduled length</div>
               </TimelineTooltip>
             ) : null
           ))}
@@ -493,19 +506,20 @@ function SegmentTimeline({
                 leftPct={block.leftPct + block.widthPct - (block.widthPct * block.trailHashPctOfBlock) / 200}
               >
                 <div className="font-semibold">Overshoot by {fmtMmSs(Math.abs(layout.trailingSeconds))} ({block.label})</div>
-                <div className="text-zinc-400 text-xs mt-0.5">Real content extending past the nominal end</div>
+                <div className="text-zinc-400 text-xs mt-0.5">Assembled content extends past the requested length</div>
               </TimelineTooltip>
             ) : null
           ))}
           {layout.trailingKind === 'gap' && layout.gapPct > 0 && (
             <TimelineTooltip active={hoveredKey === 'trailing'} leftPct={layout.gapLeftPct + layout.gapPct / 2}>
-              Gap: {fmtMmSs(Math.abs(layout.trailingSeconds))}
+              <div className="font-semibold">Gap: {fmtMmSs(Math.abs(layout.trailingSeconds))}</div>
+              <div className="text-zinc-400 text-xs mt-0.5">Assembled short of the requested length — this time never plays under this plan</div>
             </TimelineTooltip>
           )}
           <TimelineTooltip active={hoveredKey === 'plan-cursor'} leftPct={planCursorLeft}>
             <div className="font-semibold">Playhead: {fmtMmSs(planConsumedSeconds)}</div>
             <div className="text-zinc-400 text-xs mt-0.5">
-              Wall clock at {calendarCursorLeft >= planCursorLeft ? '→' : '←'} {fmtMmSs(Math.abs(drift))} · drift {fmtDriftSign(drift)}
+              Wall clock {drift > 0 ? '→ ahead' : '← behind'} by {fmtMmSs(Math.abs(drift))} · drift {fmtDriftSign(drift)}
             </div>
           </TimelineTooltip>
           {expectedEndLeft != null && (
@@ -521,7 +535,7 @@ function SegmentTimeline({
           {showArrow && (
             <span className="flex items-center gap-1"><span className={`font-bold ${arrowColor}`}>{arrowDir === 'right' ? '→' : '←'}</span>wall clock {fmtMmSs(Math.abs(drift))} {arrowDir === 'right' ? 'ahead' : 'behind'}</span>
           )}
-          <span className="flex items-center gap-1"><span className="w-2 h-2 border-l border-dashed border-zinc-400 inline-block" />nominal length</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 border-l border-dashed border-zinc-400 inline-block" />requested / scheduled end</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 border-2 border-white rounded-sm inline-block" />now playing</span>
         </div>
       </div>

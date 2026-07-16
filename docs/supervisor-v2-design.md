@@ -2604,6 +2604,21 @@ Draft requests need no equivalent: a failed draft leaves no latched guard, and t
 
 ---
 
+### Decision 100 — Segment Timeline grammar v3: the bar is a length diagram, not a wall-clock diagram
+
+**Status: decided with the operator & implemented 2026-07-17. Supersedes the 2026-07-15 grammar round's wall-clock-anchored regions (and its "intentional offset never on the bar" rule — see below).**
+
+The previous bar mixed two reference frames — content anchored at its real start, overlaid with the scheduled window — producing regions ("started early" hash keyed to measured drift, a trailing "GAP" meaning schedule time the next plan would cover) that consistently read as missing audio. The operator's reframe: **the bar shows how planning and drift correction composed this plan's LENGTH; when anything happens on the wall clock lives exclusively in the header numbers and the playhead/wall-clock arrow.** One axis per instrument.
+
+- **Front of the bar = the applied drift correction** (`intentional_offset_seconds`): extension (target above nominal) drawn as a "start early" region — real content, hashed on the leading block(s); shortening (target below nominal) drawn as a front gap — the part of the scheduled length this plan deliberately does not provide, with a marker line where content begins. This resolves the long-argued negative-offset representation: shortening = gap at the segment's start.
+- **End of the bar = assembly vs the REQUESTED length** (planner vocabulary, exact): gap = assembled short of target, hatched, genuinely never plays under this plan; overshoot = assembled past target, hashed on the boundary block(s).
+- **By construction the requested end and the scheduled end coincide** (front region + scheduled length = target end): one dashed line carries both meanings. Header gains a `requested` stat.
+- **Measured wall-clock facts** (started, drift, the divergence between planned correction and measured boundary drift — e.g. a restart eating content between finalize and handoff) appear ONLY as numbers and the playhead arrow, never as bar regions.
+
+On reinstating the correction as a bar region: the 2026-07-15 round rejected it because "a sizing decision doesn't correspond to when real audio started" — a valid objection **against a wall-clock-anchored bar**. With the wall-clock claim removed from the bar entirely, the objection no longer applies. Per-block hash attachment (never blanket regions, D72) is unchanged.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

@@ -70,42 +70,44 @@ export function scheduleSourceMeta(sourceType: string): { label: string; cls: st
   }
 }
 
-// ─── Segment timeline layout ──────────────────────────────────────────────────
+// ─── Segment timeline layout (grammar v3, 2026-07-17 — operator spec) ────────
 //
 // Pure layout math for the Segment Timeline, kept independent of JSX so the
 // geometry can be reasoned about (and sanity-checked) on its own.
 //
-// Model: one continuous real-content bar, laid out at a single literal
-// seconds-per-pixel scale, with the segment's nominal/configured length as a
-// reference line falling somewhere *inside* it rather than a separate region:
-//   - Content blocks are positioned by their own real durations, starting at
-//     the segment's actual start (position 0), not the nominal/scheduled
-//     start — those coincide only when boundary drift is zero.
-//   - boundary_drift_seconds < 0 means real content genuinely began before
-//     the nominal start (the previous segment came up short and this one's
-//     content started early to cover it). That stretch is real audio.
-//   - Real content extending past the nominal end is overshoot.
-// Either way, the hash texture is applied directly to whichever individual
-// block(s) overlap the boundary — never as one blanket region spanning to
-// the bar's edge. The assembler only ever lets ONE track cross a boundary
-// (a single greedy placement decision, D72) — an overshoot spanning several
-// blocks would mean several unrelated tracks got hashed as if they were one
-// continuous anomaly, which misrepresents what actually happened. Found
-// 2026-07-15: an early version overlaid one rectangle from the nominal line
-// to 100%, which — combined with a stale/inconsistent planned_overshoot_
-// seconds value — hashed eight unrelated blocks at once.
+// THE BAR IS A LENGTH DIAGRAM, NOT A WALL-CLOCK DIAGRAM. It shows how
+// planning and drift correction composed this plan's span; WHEN anything
+// happens (start times, measured drift) lives exclusively in the header
+// numbers and the playhead/wall-clock arrow. One axis per instrument —
+// the previous grammar mixed both frames and its regions kept reading as
+// missing audio when they were schedule-shift bookkeeping.
 //
-// Overshoot/gap classification is derived purely from real data (sum of
-// actual item durations vs. nominal length), not from planned_overshoot_
-// seconds — that field is a one-time snapshot frozen at plan activation and
-// can diverge from what's actually been assembled since (see plan_internal_
-// drift_seconds for that comparison instead). Deriving from real items keeps
-// the bar always internally consistent with what it's actually drawing.
+//   Front of the bar = what drift correction did to this plan's length:
+//     - extension (correction < 0, target > nominal): a "start early"
+//       region of |correction| seconds — REAL content, hashed on the
+//       leading block(s). The scheduled length is everything after it.
+//     - shortening (correction > 0, target < nominal): a front GAP region —
+//       the part of the scheduled length this plan deliberately does not
+//       provide — with a marker line where content begins.
+//   End of the bar = what assembly did against the REQUESTED length
+//   (the target — planner vocabulary, exact):
+//     - gap: assembled short of target — hatched region that genuinely
+//       never plays under this plan;
+//     - overshoot: assembled past target — hashed on the boundary block(s)
+//       extending past the frame.
 //
-// intentional_offset_seconds (the deliberate pre-assembly target-sizing
-// correction) is deliberately NOT represented on this bar — it's a planning
-// decision, not a fact about real audio, and doesn't have a stable location
-// to point to. It's surfaced as a header stat instead (see SupervisorPage).
+//   By construction the requested end and the scheduled end coincide at one
+//   position (front region + scheduled = target end), so a single dashed
+//   line marks both.
+//
+// This deliberately REINSTATES the applied correction as a bar region — an
+// earlier round rejected that ("a sizing decision doesn't correspond to when
+// real audio started"), which was valid for a wall-clock-anchored bar; with
+// the wall-clock claim removed from the bar entirely, the objection no
+// longer applies (operator decision 2026-07-17, see Decision 100).
+//
+// The hash texture still attaches to individual blocks, never a blanket
+// region spanning several (D72: only one track crosses a boundary).
 
 export interface TimelineContentInput {
   durationSeconds: number;
@@ -130,88 +132,78 @@ export interface TimelineContentBlock extends TimelineContentInput {
 }
 
 export interface TimelineLayout {
-  // Width of the leading "real content, started early" span — 0 unless
-  // boundary drift is negative. Purely a reference value now; the hash
-  // itself lives on whichever content block(s) it overlaps.
-  leadingPct: number;
-  leadingSeconds: number;
-  // Late start (boundary drift > 0): schedule time that passed before this
-  // segment's content actually began. Rendered as an empty dark region at
-  // the front of the scheduled window with a marker line where content
-  // starts — the distance from bar start to that line is exactly how much
-  // the segment was shortened by.
-  lateStartPct: number;
-  lateStartSeconds: number;
-  // Where real content begins on the bar (0 unless late start).
+  // Front "start early" span: the drift-correction EXTENSION (target above
+  // nominal). Real content — the hash lives on the leading block(s).
+  extensionPct: number;
+  extensionSeconds: number;
+  // Front gap: the drift-correction SHORTENING (target below nominal) — the
+  // part of the scheduled length this plan deliberately does not provide.
+  // Empty hatched region with a marker line where content begins.
+  shorteningPct: number;
+  shorteningSeconds: number;
+  // Where content begins on the bar (0 unless shortened).
   contentStartPct: number;
-  // Reference positions marking the segment's nominal/configured window on
-  // this bar's real-seconds scale. nominalStartPct equals leadingPct in the
-  // early-start case and 0 in the late-start case.
-  nominalStartPct: number;
-  nominalEndPct: number;
+  // The requested length's end — which by construction is ALSO the scheduled
+  // length's end (front region + scheduled = target end). One dashed line,
+  // both meanings.
+  targetEndPct: number;
+  targetSeconds: number;
   contentBlocks: TimelineContentBlock[];
-  // Where real content ends — may fall before or after nominalEndPct.
   contentEndPct: number;
-  // The separately-rendered Gap region (real content short of nominal) —
-  // 0 width when there's no shortfall. This one genuinely has no content to
-  // attach to, so it stays its own region rather than a per-block overlay.
+  // Trailing planner gap (assembled short of requested): hatched region that
+  // genuinely never plays under this plan. 0 when none.
   gapPct: number;
   gapLeftPct: number;
   trailingKind: 'gap' | 'overshoot' | null;
   trailingSeconds: number;
   totalContentSeconds: number;
-  // Position a plan-consumed-seconds value (measured from the real start of
-  // content) onto the bar.
+  // Position a plan-consumed-seconds value onto the bar (content space).
   planPositionToPct: (planConsumedSeconds: number) => number;
-  // Position a wall-clock-elapsed-since-scheduled-start value onto the bar.
-  // Negative elapsed (wall clock hasn't reached the scheduled start yet —
-  // the early-start window) is valid and lands before nominalStartPct.
-  wallClockToPct: (calendarElapsedSeconds: number) => number;
 }
 
 export function computeTimelineLayout(
   nominalDurationSeconds: number,
-  boundaryDriftSeconds: number,
+  // nominal − target (the supervisor's applied correction): negative =
+  // extended plan, positive = shortened plan.
+  appliedCorrectionSeconds: number,
   items: TimelineContentInput[],
 ): TimelineLayout {
-  // Two anchor points on one seconds scale, whichever is earlier at 0:
-  //   early start (drift < 0): content at 0, scheduled start after it.
-  //   late start (drift > 0): scheduled start at 0, content after it.
-  const leadingSeconds = boundaryDriftSeconds < 0 ? -boundaryDriftSeconds : 0;
-  const lateStartSeconds = boundaryDriftSeconds > 0 ? boundaryDriftSeconds : 0;
-  const contentStartSeconds = lateStartSeconds;
-  const scheduledStartSeconds = leadingSeconds;
+  const extensionSeconds = appliedCorrectionSeconds < 0 ? -appliedCorrectionSeconds : 0;
+  const shorteningSeconds = appliedCorrectionSeconds > 0 ? appliedCorrectionSeconds : 0;
+  const targetSeconds = nominalDurationSeconds - appliedCorrectionSeconds;
 
   const totalContentSeconds = items.reduce((sum, it) => sum + it.durationSeconds, 0);
+  const contentStartSeconds = shorteningSeconds;
+  const contentEndSeconds = contentStartSeconds + totalContentSeconds;
 
-  const nominalEndSeconds = scheduledStartSeconds + nominalDurationSeconds;
-  // Derived from real, always-consistent data — never from planned_
-  // overshoot_seconds (see module header comment for why).
-  const trailingSeconds = contentStartSeconds + totalContentSeconds - nominalEndSeconds;
+  // Requested end == scheduled end, one position: front region + scheduled
+  // length. (Extended: extension + nominal = target. Shortened: nominal,
+  // with content occupying target inside it.)
+  const targetEndSeconds = nominalDurationSeconds + extensionSeconds;
+
+  // Assembly deviation vs the REQUESTED length — planner vocabulary, exact.
+  const trailingSeconds = contentEndSeconds - targetEndSeconds;
   const trailingKind: 'gap' | 'overshoot' | null =
     trailingSeconds === 0 ? null : trailingSeconds > 0 ? 'overshoot' : 'gap';
 
-  // At least one of these two is always the true extent of the bar — real
-  // content when overshooting, the nominal reference when it falls short
-  // (so there's still room to draw the Gap region and the reference line).
-  const containerTotalSeconds = Math.max(contentStartSeconds + totalContentSeconds, nominalEndSeconds, 1);
-
+  const containerTotalSeconds = Math.max(contentEndSeconds, targetEndSeconds, 1);
   const pct = (seconds: number): number => (seconds / containerTotalSeconds) * 100;
 
-  const leadingPct = pct(leadingSeconds);
-  const lateStartPct = pct(lateStartSeconds);
+  const extensionPct = pct(extensionSeconds);
+  const shorteningPct = pct(shorteningSeconds);
   const contentStartPct = pct(contentStartSeconds);
-  const nominalStartPct = pct(scheduledStartSeconds);
-  const nominalEndPct = pct(nominalEndSeconds);
-  const contentEndPct = pct(contentStartSeconds + totalContentSeconds);
+  const targetEndPct = pct(targetEndSeconds);
+  const contentEndPct = pct(contentEndSeconds);
 
   let cursor = contentStartPct;
   const contentBlocks: TimelineContentBlock[] = items.map((item) => {
     const widthPct = pct(item.durationSeconds);
     const blockStart = cursor;
     const blockEnd = cursor + widthPct;
-    const leadOverlapPct = Math.max(0, Math.min(blockEnd, nominalStartPct) - blockStart);
-    const trailOverlapPct = Math.max(0, blockEnd - Math.max(blockStart, nominalEndPct));
+    // Leading hash: the extension's worth of content at the front.
+    const leadOverlapPct = Math.max(0, Math.min(blockEnd, extensionPct) - blockStart);
+    // Trailing hash: content past the requested end.
+    const trailOverlapPct = Math.max(0, blockEnd - Math.max(blockStart, targetEndPct));
     const block: TimelineContentBlock = {
       ...item,
       leftPct: blockStart,
@@ -223,22 +215,19 @@ export function computeTimelineLayout(
     return block;
   });
 
-  const gapPct = trailingKind === 'gap' ? Math.max(0, nominalEndPct - contentEndPct) : 0;
+  const gapPct = trailingKind === 'gap' ? Math.max(0, targetEndPct - contentEndPct) : 0;
 
   const planPositionToPct = (planConsumedSeconds: number): number =>
     pct(contentStartSeconds + Math.min(Math.max(0, planConsumedSeconds), totalContentSeconds));
 
-  const wallClockToPct = (calendarElapsedSeconds: number): number =>
-    pct(Math.max(0, scheduledStartSeconds + calendarElapsedSeconds));
-
   return {
-    leadingPct,
-    leadingSeconds,
-    lateStartPct,
-    lateStartSeconds,
+    extensionPct,
+    extensionSeconds,
+    shorteningPct,
+    shorteningSeconds,
     contentStartPct,
-    nominalStartPct,
-    nominalEndPct,
+    targetEndPct,
+    targetSeconds,
     contentBlocks,
     contentEndPct,
     gapPct,
@@ -247,7 +236,6 @@ export function computeTimelineLayout(
     trailingSeconds,
     totalContentSeconds,
     planPositionToPct,
-    wallClockToPct,
   };
 }
 
