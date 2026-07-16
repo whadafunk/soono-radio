@@ -998,6 +998,7 @@ export class SupervisorProcess {
         segment_id: plansTable.segment_id,
         clock_instance_started_at: plansTable.clock_instance_started_at,
         start_policy: clockSegmentsTable.start_policy,
+        segment_type: clockSegmentsTable.type,
       })
       .from(plansTable)
       .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
@@ -1023,17 +1024,28 @@ export class SupervisorProcess {
       return;
     }
 
-    // Decision 77: a finalized plan can legitimately have zero items — e.g.
-    // every campaign/promo candidate excluded by Decision 74's ahead-of-pace
+    // Decision 77/94: a plan can legitimately have zero items — e.g. every
+    // campaign/promo candidate excluded by Decision 74's ahead-of-pace
     // filter, with no fallback filler (intentional; a stop-set has nothing to
     // say when nothing is behind pace). Activating it anyway would never
     // satisfy Decision 60's "confirmed on-air" activation gate — there's no
     // first item that could ever air — so it would sit "active" forever with
     // nothing pushed. Treat it as pre-exhausted instead: retire it and
     // resolve past its own segment, same as a plan that genuinely aired out.
-    // Only checked once finalized — an empty draft can still gain content at
-    // the T-30s second pass.
-    if (nextPlan.status === 'finalized') {
+    //
+    // Decision 94: checked for DRAFTS here too, not just finalized plans. An
+    // empty draft's second chance is the T-30s finalize pass — but we're at
+    // exhaustion: the active plan is out of content NOW, so waiting for that
+    // second pass means real dead air. (The finalize-in-flight guard above
+    // still wins when a reassembly is genuinely mid-flight — that's a
+    // completing action, not a future hope.) Observed live 2026-07-16: an
+    // empty draft dodged the old finalized-only check, got force-activated,
+    // and burned ~3s before self-resolving.
+    //
+    // Live segments are exempt: their plans are intentionally empty (the
+    // empty plan IS the live-suspension marker, see planner.buildPlan) —
+    // skipping one would skip the live show itself.
+    if (nextPlan.segment_type !== 'live') {
       const [itemCountRow] = await this.db
         .select({ c: count() })
         .from(planItemsTable)
@@ -2335,6 +2347,35 @@ export class SupervisorProcess {
     // conflating the two caused a real ~18-minute dead-air regression.
     if (this.finalizeInFlightForPlanId === msg.plan_id) {
       this.finalizeInFlightForPlanId = null;
+    }
+
+    // Decision 94: a plan that FINALIZES with zero items has no future — the
+    // T-30s second pass was its last chance to gain content (that chance is
+    // why empty DRAFTS are left alone until then, D77). Waiting further only
+    // moves the skip-and-redraft scramble to the exhaustion handoff moment;
+    // skipping now leaves the full remaining runway to draft what follows
+    // calmly. The drift accounting needs nothing here — the next draft's own
+    // prediction sees the early arrival automatically (D91). Live segments
+    // are exempt: their plans are intentionally empty (the empty plan IS the
+    // live-suspension marker, see planner.buildPlan).
+    if (this.nextPlanId === msg.plan_id) {
+      const [finalizedPlan] = await this.db
+        .select({ segment_type: clockSegmentsTable.type })
+        .from(plansTable)
+        .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
+        .where(eq(plansTable.id, msg.plan_id));
+      const [itemCountRow] = await this.db
+        .select({ c: count() })
+        .from(planItemsTable)
+        .where(eq(planItemsTable.plan_id, msg.plan_id));
+      if (finalizedPlan && finalizedPlan.segment_type !== 'live' && (itemCountRow?.c ?? 0) === 0) {
+        this.logger?.info({
+          process: 'supervisor', event: 'PLAN_FINALIZED_EMPTY',
+          plan_id: msg.plan_id,
+        }, 'supervisor: plan finalized with zero items — skipping it now rather than at exhaustion (D94)');
+        await this.skipEmptyNextPlan(Date.now());
+        return;
+      }
     }
 
     if (this.activePlanId == null && this.nextPlanId === msg.plan_id) {

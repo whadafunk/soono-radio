@@ -2491,6 +2491,21 @@ The Supervisor page gains a **Drift recovery panel**: measured boundary drift pe
 
 ---
 
+### Decision 94 — Empty plans are skipped at the earliest moment they have no future
+
+**Status: decided & implemented 2026-07-16. Refines Decision 77; closes the empty-draft force-activation gap observed live 2026-07-16.**
+
+Decision 77 skipped a zero-item plan only once it was *finalized* and only at the *exhaustion handoff* — the empty plan sat tracked for the whole remainder of the current segment, and the skip-plus-redraft of what follows happened in a scramble at the moment the active plan ran dry. Meanwhile a zero-item plan still in *draft* state at exhaustion dodged the check entirely and got force-activated (nothing could ever confirm on air, so it burned a few seconds before self-resolving — observed live).
+
+**The rule now: skip an empty plan the moment it provably has no future.**
+- **At PLAN_FINALIZED with zero items** → skip immediately. The T-30s second pass was the plan's last chance to gain content (a stop-set drafted empty can legitimately finalize with spots — campaign eligibility moves between draft and finalize; that chance is why empty *drafts* are still left alone until then). After an empty finalize there is nothing left to wait for, and skipping now leaves the full remaining runway to draft the following segment calmly.
+- **At exhaustion, drafts count too.** The active plan is out of content *now*; deferring to a second pass that hasn't fired yet means real dead air. (The Decision 78 finalize-in-flight guard still wins when a reassembly is genuinely mid-flight — that's a completing action, not a future hope.)
+- **Live segments are exempt from both checks**: their plans are intentionally empty — the empty plan *is* the live-suspension marker (see `planner.buildPlan`) — so an empty live plan must never be treated as skippable.
+
+No drift bookkeeping accompanies the skip (Decision 91): the next draft's own prediction sees the early arrival automatically.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
