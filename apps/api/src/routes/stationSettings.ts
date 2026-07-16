@@ -13,6 +13,7 @@ async function ensureRow() {
       promo_margin: 0.10,
       drift_recovery_cap_seconds: 300,
       reality_check_interval_seconds: 3,
+      drift_full_authority_threshold_s: 100,
     });
     return {
       id: 1,
@@ -20,6 +21,7 @@ async function ensureRow() {
       default_clock_id: null,
       drift_recovery_cap_seconds: 300,
       reality_check_interval_seconds: 3,
+      drift_full_authority_threshold_s: 100,
     };
   }
   return row;

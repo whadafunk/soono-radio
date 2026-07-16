@@ -31,6 +31,8 @@ import {
   SupervisorV2StatusSchema,
   SupervisorV2ControlResponse,
   SupervisorV2ControlResponseSchema,
+  SupervisorV2DriftLedger,
+  SupervisorV2DriftLedgerSchema,
 } from '@soono/shared';
 
 const API_BASE = '/api';
@@ -1310,6 +1312,12 @@ export async function fetchSupervisorV2Status(): Promise<SupervisorV2Status> {
   const res = await fetch(`${API_BASE}/supervisor/v2/status`);
   if (!res.ok) throw new Error(`Failed to fetch supervisor v2 status: ${res.statusText}`);
   return SupervisorV2StatusSchema.parse(await res.json());
+}
+
+export async function fetchSupervisorV2DriftLedger(limit = 48): Promise<SupervisorV2DriftLedger> {
+  const res = await fetch(`${API_BASE}/supervisor/v2/drift-ledger?limit=${limit}`);
+  if (!res.ok) throw new Error(`Failed to fetch drift ledger: ${res.statusText}`);
+  return SupervisorV2DriftLedgerSchema.parse(await res.json());
 }
 
 export async function postSupervisorSkip(): Promise<SupervisorV2ControlResponse> {

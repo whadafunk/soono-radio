@@ -14,7 +14,7 @@ import {
   shows,
 } from '../db/schema.js';
 import { resolveActivePlanSegment, resolveCurrentSegment, resolveNextHardSegment } from '../services/supervisor2/clockResolver.js';
-import { getDriftRecoveryCapSeconds } from '../services/supervisor2/processes/supervisor.js';
+import { getDriftFullAuthorityThresholdSeconds, getDriftRecoveryCapSeconds } from '../services/supervisor2/processes/supervisor.js';
 
 export async function supervisorStatusRoutes(fastify: FastifyInstance) {
   fastify.get('/supervisor/v2/status', async (_request, reply) => {
@@ -28,6 +28,7 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
       const stateRow = state[0] ?? null;
       const activePlanId = stateRow?.active_plan_id ?? null;
       const driftRecoveryCapSeconds = await getDriftRecoveryCapSeconds(db);
+      const driftFullAuthorityThresholdSeconds = await getDriftFullAuthorityThresholdSeconds(db);
 
       // Resolve plan items for the active plan (joined with media for title)
       let resolvedPlanItems: Array<{
@@ -177,6 +178,8 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
       // need to detect/compensate for a segment mismatch here anymore.
       let planConsumedSeconds = 0;
       let expectedCurrentItemEndMs: number | null = null;
+      // Decision 93: predicted lateness at the active plan's own boundary.
+      let predictedBoundaryLatenessSeconds: number | null = null;
       // Plan-internal drift: has the plan's own estimated end shifted since it
       // activated (a mid-flight replan/trim/fill changed its total content),
       // independent of wall-clock-vs-consumed drift. Computed here off the
@@ -224,6 +227,15 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
           .reduce((sum, item) => sum + (item.planned_duration_seconds ?? 0), 0);
         const baselineTotalPlannedSeconds = (segmentDurationSeconds ?? 0) + (stateRow?.planned_overshoot_seconds ?? 0);
         planInternalDriftSeconds = liveTotalPlannedSeconds - baselineTotalPlannedSeconds;
+
+        // Decision 93: live prediction — when will the active plan's content
+        // actually run out, vs when its segment is scheduled to end. Same
+        // arithmetic as the supervisor's own Decision 91 sizing input.
+        if (resolvedSegment) {
+          const remainingSeconds = Math.max(0, liveTotalPlannedSeconds - planConsumedSeconds);
+          predictedBoundaryLatenessSeconds =
+            Math.round(((nowMs + remainingSeconds * 1000 - resolvedSegment.segmentEndMs) / 1000) * 10) / 10;
+        }
       }
 
       // ── C1: current_segment ────────────────────────────────────────────────
@@ -267,7 +279,15 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
       let nextPlan = null;
       if (nextPlanId != null) {
         const [nextPlanRow] = await db
-          .select({ id: plans.id, status: plans.status, segment_id: plans.segment_id })
+          .select({
+            id: plans.id,
+            status: plans.status,
+            segment_id: plans.segment_id,
+            nominal_duration_seconds: plans.nominal_duration_seconds,
+            target_duration_seconds: plans.target_duration_seconds,
+            predicted_drift_seconds: plans.predicted_drift_seconds,
+            applied_correction_seconds: plans.applied_correction_seconds,
+          })
           .from(plans)
           .where(eq(plans.id, nextPlanId));
         if (nextPlanRow) {
@@ -286,7 +306,11 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
             segment_type: nextSeg?.type ?? 'unknown',
             segment_name: nextSeg?.name ?? '',
             item_count: cnt,
-            target_seconds: nextSeg?.duration_seconds ?? 0,
+            // Decision 93: the plan's real sizing, not the segment nominal.
+            target_seconds: nextPlanRow.target_duration_seconds ?? nextSeg?.duration_seconds ?? 0,
+            nominal_seconds: nextPlanRow.nominal_duration_seconds ?? nextSeg?.duration_seconds ?? 0,
+            predicted_drift_seconds: nextPlanRow.predicted_drift_seconds,
+            applied_correction_seconds: nextPlanRow.applied_correction_seconds,
           };
         }
       }
@@ -377,10 +401,45 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
         next_hard_segment: nextHardSegment,
         plan_internal_drift_seconds: planInternalDriftSeconds,
         drift_recovery_cap_seconds: driftRecoveryCapSeconds,
+        drift_full_authority_threshold_s: driftFullAuthorityThresholdSeconds,
+        predicted_boundary_lateness_seconds: predictedBoundaryLatenessSeconds,
       });
     } catch (err) {
       fastify.log.error(err, 'supervisor v2 status failed');
       return reply.status(500).send({ error: 'Failed to fetch supervisor status' });
+    }
+  });
+
+  // Decision 93 — the drift ledger: one row per activated plan telling the
+  // whole sizing story ("we predicted X, sized to nominal − Y, actually
+  // arrived Z late"). Newest first.
+  fastify.get('/supervisor/v2/drift-ledger', async (request, reply) => {
+    try {
+      const q = request.query as { limit?: string };
+      const limit = Math.min(200, Math.max(1, Number(q.limit) || 48));
+      const rows = await db
+        .select({
+          plan_id: plans.id,
+          segment_id: plans.segment_id,
+          segment_name: clockSegments.name,
+          segment_type: clockSegments.type,
+          status: plans.status,
+          activated_at: plans.activated_at,
+          nominal_duration_seconds: plans.nominal_duration_seconds,
+          target_duration_seconds: plans.target_duration_seconds,
+          predicted_drift_seconds: plans.predicted_drift_seconds,
+          applied_correction_seconds: plans.applied_correction_seconds,
+          boundary_drift_seconds: plans.boundary_drift_seconds,
+        })
+        .from(plans)
+        .innerJoin(clockSegments, eq(clockSegments.id, plans.segment_id))
+        .where(isNotNull(plans.activated_at))
+        .orderBy(desc(plans.activated_at))
+        .limit(limit);
+      return reply.send({ entries: rows });
+    } catch (err) {
+      fastify.log.error(err, 'supervisor v2 drift-ledger failed');
+      return reply.status(500).send({ error: 'Failed to fetch drift ledger' });
     }
   });
 }

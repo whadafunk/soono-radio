@@ -157,6 +157,28 @@ export async function getDriftRecoveryCapSeconds(db: typeof defaultDb, logger?: 
   return value;
 }
 
+// Decision 92: below this |predicted drift| the comfort band applies; above
+// it the next plan gets full authority to land the boundary in one
+// transition. Same read-fresh pattern as the cap above.
+let lastLoggedFullAuthorityThresholdS: number | null = null;
+export async function getDriftFullAuthorityThresholdSeconds(db: typeof defaultDb, logger?: SLogger | null): Promise<number> {
+  const [row] = await db
+    .select({ drift_full_authority_threshold_s: stationSettingsTable.drift_full_authority_threshold_s })
+    .from(stationSettingsTable)
+    .where(eq(stationSettingsTable.id, 1));
+  const value = row?.drift_full_authority_threshold_s ?? 100;
+  if (logger) {
+    if (lastLoggedFullAuthorityThresholdS != null && lastLoggedFullAuthorityThresholdS !== value) {
+      logger.info({
+        process: 'supervisor', event: 'CONFIG_CHANGED', field: 'drift_full_authority_threshold_s',
+        previous_value: lastLoggedFullAuthorityThresholdS, new_value: value,
+      }, `supervisor: drift_full_authority_threshold_s changed ${lastLoggedFullAuthorityThresholdS}s -> ${value}s`);
+    }
+    lastLoggedFullAuthorityThresholdS = value;
+  }
+  return value;
+}
+
 // Decision 89: how often the collapsed tick loop's reality check runs.
 // Read fresh each call — same no-caching rationale as the cap above, and
 // this is now the ONLY thing gating tick()'s cadence, so it's called at most
@@ -191,8 +213,9 @@ export class SupervisorProcess {
   // Segment the next plan was drafted for — used to guard against premature
   // advancement to a future segment when the active plan exhausts early.
   private nextPlanSegmentId: number | null = null;
-  // Boundary drift at the moment the first-pass draft for the next plan was
-  // requested. Compared against boundaryDrift at T-30s to compute drift_delta.
+  // Decision 91: predicted boundary lateness at the moment the first-pass
+  // draft for the next plan was requested. Compared against the fresh
+  // prediction at T-30s to compute drift_delta.
   private nextPlanDraftDriftSeconds = 0;
   // Planned overshoot of the active plan (D51). Accounted drift — subtracted
   // from nominal when computing the next plan's first-pass target.
@@ -208,13 +231,14 @@ export class SupervisorProcess {
   // drift-correct) and for any segment whose target needed no correction.
   private intentionalOffsetSeconds = 0;
 
-  // ── Boundary drift (new model) ───────────────────────────────────────────────
-  // Drift computed once at plan activation: how early/late the segment actually
-  // started vs its scheduled wall-clock start time.
+  // ── Boundary drift ───────────────────────────────────────────────────────────
+  // Drift computed once at plan activation: how early/late the segment
+  // actually started vs its scheduled wall-clock start time. Decision 90:
+  // derived from the activated plan's OWN resolved segment bounds — never
+  // from a remembered scalar (the old nextPlanScheduledEndMs field died
+  // there; its fallback chain manufactured +nominal phantom drift on every
+  // adoption/reconcile/restart activation path).
   private boundaryDriftSeconds = 0;
-  // segmentEndMs of the next plan's segment, set when requesting the draft.
-  // Used to compute boundaryDrift at activation.
-  private nextPlanScheduledEndMs: number | null = null;
 
   // ── Segment tracking ────────────────────────────────────────────────────────
   private currentSegmentId: number | null = null;
@@ -864,27 +888,43 @@ export class SupervisorProcess {
     logRealityCheck(outcome);
   }
 
-  // Counts played/skipped items in a plan for SEGMENT_SUMMARY.
+  // Counts played/skipped items in a plan for SEGMENT_SUMMARY. Decision 90:
+  // actual_duration_seconds sums REAL airtime from play_history (ended_at −
+  // started_at on confirmed rows), falling back to planned duration only
+  // where no confirmed history exists — the old version summed planned
+  // durations and called them actual, hiding exactly the planned-vs-real gap
+  // post-mortems need.
   private async computeSegmentSummary(planId: number): Promise<{
     items_played: number;
     items_skipped: number;
     actual_duration_seconds: number;
   }> {
     const items = await this.db
-      .select({ status: planItemsTable.status, planned_duration_seconds: planItemsTable.planned_duration_seconds })
+      .select({
+        status: planItemsTable.status,
+        planned_duration_seconds: planItemsTable.planned_duration_seconds,
+        ph_started_at: playHistoryTable.started_at,
+        ph_ended_at: playHistoryTable.ended_at,
+        ph_confirmed: playHistoryTable.confirmed,
+      })
       .from(planItemsTable)
+      .leftJoin(playHistoryTable, eq(playHistoryTable.id, planItemsTable.play_history_id))
       .where(eq(planItemsTable.plan_id, planId));
     const skippedStatuses = new Set(['supervisor_skipped', 'operator_skipped', 'dropped']);
-    let played = 0, skipped = 0, playedSeconds = 0;
+    let played = 0, skipped = 0, actualSeconds = 0;
     for (const item of items) {
       if (item.status === 'played') {
         played++;
-        playedSeconds += item.planned_duration_seconds ?? 0;
+        const startedMs = item.ph_confirmed && item.ph_started_at ? new Date(item.ph_started_at).getTime() : null;
+        const endedMs = item.ph_ended_at ? new Date(item.ph_ended_at).getTime() : null;
+        actualSeconds += startedMs != null && endedMs != null && endedMs > startedMs
+          ? (endedMs - startedMs) / 1000
+          : (item.planned_duration_seconds ?? 0);
       } else if (skippedStatuses.has(item.status)) {
         skipped++;
       }
     }
-    return { items_played: played, items_skipped: skipped, actual_duration_seconds: playedSeconds };
+    return { items_played: played, items_skipped: skipped, actual_duration_seconds: actualSeconds };
   }
 
   // Called when the active plan has no pending and no playing items. Activates
@@ -1058,32 +1098,29 @@ export class SupervisorProcess {
   // because it finalized with zero items (D77, skipEmptyNextPlan below) or
   // because an upcoming hard segment's collapsed runway forces retargeting
   // past it (D69, the NEXT_PLAN_RETARGETED_TO_HARD_BOUNDARY branch in
-  // maybeRequestFinalization). Either way this plan's segment will never
-  // consume real air time, and activatePlanById — the only other place
-  // plannedOvershootSeconds gets set — never runs for it, so its nominal
-  // duration would otherwise silently vanish from the drift-correction math
-  // that sizes whatever gets planned next. Persisted immediately (not just
-  // held in memory): boundary_drift_seconds/planned_overshoot_seconds
-  // otherwise only ever get written to supervisor_state at activation, so a
-  // restart between this retirement and whatever activates next would
-  // silently lose the credit. Found 2026-07-15 while tracing why drift kept
-  // growing across a station whose stop-sets are consistently empty.
-  private async retirePlanWithoutActivating(planId: number, nominalSeconds: number): Promise<void> {
+  // maybeRequestFinalization).
+  //
+  // Decision 91: no drift bookkeeping happens here anymore. A previous
+  // version credited the abandoned plan's nominal into
+  // plannedOvershootSeconds — with an inverted sign (skipping a segment
+  // makes the station arrive EARLY at what follows; the credit shrank the
+  // next plan as if it were arriving late). The prediction-based sizing
+  // derives the early arrival automatically: whatever gets drafted next is
+  // sized against ITS OWN scheduled start, and the active plan's remaining
+  // content ends ≈ where the skipped segment would have begun, so the
+  // prediction reads ≈ −nominal(skipped) with no ledger to maintain.
+  private async retirePlanWithoutActivating(planId: number): Promise<void> {
     await this.db.update(plansTable)
       .set({ status: 'completed' })
       .where(and(eq(plansTable.id, planId), inArray(plansTable.status, ['draft', 'finalized'])));
 
-    this.plannedOvershootSeconds += nominalSeconds;
-
     this.nextPlanId = null;
     this.nextPlanSegmentId = null;
-    this.nextPlanScheduledEndMs = null;
     await this.db.update(supervisorStateTable)
       .set({
         next_plan_id: null,
         next_plan_draft_drift_seconds: null,
         next_plan_drift_delta_seconds: null,
-        planned_overshoot_seconds: this.plannedOvershootSeconds,
       })
       .where(eq(supervisorStateTable.id, 1));
   }
@@ -1098,16 +1135,14 @@ export class SupervisorProcess {
     if (emptyPlanId == null) return;
 
     const emptySegment = await resolveActivePlanSegment(this.db, emptyPlanId);
-    const nominalSeconds = emptySegment?.segment.duration_seconds ?? 0;
 
-    await this.retirePlanWithoutActivating(emptyPlanId, nominalSeconds);
+    await this.retirePlanWithoutActivating(emptyPlanId);
 
     this.logger?.warn({
       process: 'supervisor', event: 'PLAN_SKIPPED_EMPTY',
       plan_id: emptyPlanId, segment_id: emptySegment?.segment.id ?? null,
-      credited_overshoot_seconds: nominalSeconds,
-      planned_overshoot_seconds: this.plannedOvershootSeconds,
-    }, 'supervisor: next plan finalized with zero items — skipping to the segment after it');
+      skipped_nominal_seconds: emptySegment?.segment.duration_seconds ?? null,
+    }, 'supervisor: next plan finalized with zero items — skipping to the segment after it (early arrival is picked up by the next draft\'s own prediction, D91)');
 
     if (emptySegment) {
       await this.reconcileNext(emptySegment.segmentEndMs, nowMs);
@@ -1395,9 +1430,22 @@ export class SupervisorProcess {
       for (const item of liveItems) {
         if (!types.includes(item.content_type)) continue;
         if (item.mandatory) continue;
-        const isPlaying = item.status === 'playing';
-        if (isPlaying && (!allowCut || !item.cut_allowed)) continue;
-        if (!isPlaying && !item.skip_allowed) continue;
+        // Decision 92: an item is ON AIR iff its play_history row is the one
+        // the supervisor has ground-truth confirmed as currently airing.
+        // Queue-ahead marks items 'playing' at PUSH time, so status alone
+        // can't distinguish "airing" from "pre-queued in LiquidSoap" — the
+        // old check could mark a pre-queued item skipped while queue.skip()
+        // cut whatever was genuinely playing (potentially a mandatory spot).
+        const isOnAir = item.status === 'playing'
+          && item.play_history_id != null
+          && item.play_history_id === this.currentPlayHistoryId;
+        // Pre-queued items are committed content — LiquidSoap's queue can't
+        // be unpushed — so the trim must leave them alone entirely.
+        const isPreQueued = item.status === 'playing' && !isOnAir;
+        if (isPreQueued) continue;
+        if (isOnAir && (!allowCut || !item.cut_allowed)) continue;
+        if (!isOnAir && !item.skip_allowed) continue;
+        const isPlaying = isOnAir;
 
         await this.db.update(planItemsTable)
           .set({ status: 'supervisor_skipped' })
@@ -1647,16 +1695,19 @@ export class SupervisorProcess {
     const previousSegmentId = this.currentSegmentId;
     const outgoingDriftAtExit = this.currentDriftSeconds;
 
-    // Compute boundary drift: how late/early this segment actually started
-    // vs its scheduled wall-clock start time.
-    //   scheduledStartMs = segmentEndMs - segment.duration_seconds * 1000
-    //   boundaryDrift = planActivatedAtMs - scheduledStartMs
-    //
-    // nextPlanScheduledEndMs is set by maybeRequestNextDraft; fall back to
-    // currentSegmentEndMs for cold-start and exhausted-plan paths.
-    const segEndMs = this.nextPlanScheduledEndMs ?? this.currentSegmentEndMs ?? nowMs;
-    const scheduledStartMs = segEndMs - nominal * 1000;
-    this.boundaryDriftSeconds = (nowMs - scheduledStartMs) / 1000;
+    // Decision 90: boundary drift is measured against the activated plan's
+    // OWN resolved segment bounds — by definition the schedule slot this
+    // plan was built for. The old approach (a remembered scalar set only on
+    // the ordinary draft path, falling back to the OUTGOING segment's end)
+    // inflated measured drift by exactly +nominal on every adoption/
+    // reconcile/restart/skip-cascade activation — the phantom +722…+1336
+    // readings observed live 2026-07-15.
+    const activeSegment = await resolveActivePlanSegment(this.db, planId);
+    if (activeSegment) {
+      this.boundaryDriftSeconds = (nowMs - activeSegment.segmentStartMs) / 1000;
+    }
+    // else: segment no longer resolves (deleted mid-flight) — keep the
+    // previous drift value; ACTIVATE_PLAN_SEGMENT_UNRESOLVED below covers it.
     this.currentDriftSeconds = this.boundaryDriftSeconds;
 
     // D78 (implements D45): carry over whatever correction was applied when
@@ -1671,7 +1722,6 @@ export class SupervisorProcess {
     if (opts.clearNextPlan) {
       this.nextPlanId = null;
       this.nextPlanSegmentId = null;
-      this.nextPlanScheduledEndMs = null;
     }
     this.planActivatedAtMs = nowMs;
     this.finalizationRequestedForPlanId = null;
@@ -1680,9 +1730,14 @@ export class SupervisorProcess {
     this.exhaustedPlanReconciledFor = null;
     this.nextPlanTransitioningSinceMs = null;
 
-    // DB writes.
+    // DB writes. Decision 93: activation stamps the measured half of the
+    // drift ledger onto the plan's own row.
     await this.db.update(plansTable)
-      .set({ status: 'active' })
+      .set({
+        status: 'active',
+        boundary_drift_seconds: this.boundaryDriftSeconds,
+        activated_at: nowMs,
+      })
       .where(eq(plansTable.id, planId));
     // Data hygiene (Decision 56): retire the plan being handed off from —
     // previously this just moved the pointer and left the old row stuck at
@@ -1716,7 +1771,8 @@ export class SupervisorProcess {
       }, 'supervisor: segment ended');
     }
 
-    const activeSegment = await resolveActivePlanSegment(this.db, planId);
+    // activeSegment was resolved above (Decision 90) — the same resolution
+    // drives both the drift measurement and the segment bookkeeping here.
     if (activeSegment) {
       this.currentSegmentId = activeSegment.segment.id;
       this.currentSegmentEndMs = activeSegment.segmentEndMs;
@@ -1929,9 +1985,13 @@ export class SupervisorProcess {
       remainingSeconds < RUNWAY_FLOOR_S ||
       (remainingSeconds < RUNWAY_WORTH_IT_THRESHOLD_S && !nextIsHard);
 
+    const sizing = await this.computeTargetFor(next, nowMs);
+    this.nextPlanDraftDriftSeconds = sizing.predictedDriftSeconds;
     await this.reconcileOccurrence(next, nowMs, {
       allowActivate: cutoverAllowed,
-      targetDurationSeconds: await this.computeFirstPassTarget(next.segment),
+      targetDurationSeconds: sizing.targetSeconds,
+      predictedDriftSeconds: sizing.predictedDriftSeconds,
+      appliedCorrectionSeconds: sizing.appliedCorrectionSeconds,
     });
   }
 
@@ -2015,7 +2075,14 @@ export class SupervisorProcess {
   private async reconcileOccurrence(
     resolved: ResolvedSegment,
     nowMs: number,
-    opts: { allowActivate: boolean; targetDurationSeconds: number },
+    opts: {
+      allowActivate: boolean;
+      targetDurationSeconds: number;
+      // Decision 93 ledger values when the target was drift-sized; absent for
+      // remaining-wall-clock targets (ground-truth establish, hard retarget).
+      predictedDriftSeconds?: number;
+      appliedCorrectionSeconds?: number;
+    },
   ): Promise<void> {
     const identity = computeResolutionIdentity(resolved);
     const candidates = await this.db
@@ -2094,6 +2161,8 @@ export class SupervisorProcess {
           adjusted_target_seconds: currentContentSeconds,
           drift_delta_seconds: 0,
           current_drift_seconds: 0,
+          predicted_drift_seconds: null,
+          applied_correction_seconds: null,
         });
       }
       return;
@@ -2117,6 +2186,9 @@ export class SupervisorProcess {
       show_id: resolved.show_id,
       show_name: resolved.show_name,
       resolution_identity: identity,
+      nominal_duration_seconds: resolved.segment.duration_seconds,
+      predicted_drift_seconds: opts.predictedDriftSeconds ?? null,
+      applied_correction_seconds: opts.appliedCorrectionSeconds ?? null,
     });
   }
 
@@ -2210,12 +2282,15 @@ export class SupervisorProcess {
 
     this.nextPlanId = msg.plan_id;
     this.nextPlanSegmentId = msg.segment_id;
-    this.nextPlanDraftDriftSeconds = this.boundaryDriftSeconds;
+    // Decision 91: nextPlanDraftDriftSeconds was already set to the
+    // prediction at the moment the draft was REQUESTED (maybeRequestNextDraft
+    // / reconcileNext) — don't overwrite it with boundary drift here; the
+    // T-30s gate compares fresh-prediction against it for drift_delta.
 
     await this.db.update(supervisorStateTable)
       .set({
         next_plan_id: msg.plan_id,
-        next_plan_draft_drift_seconds: this.boundaryDriftSeconds,
+        next_plan_draft_drift_seconds: this.nextPlanDraftDriftSeconds,
       })
       .where(eq(supervisorStateTable.id, 1));
 
@@ -2241,6 +2316,8 @@ export class SupervisorProcess {
         adjusted_target_seconds: currentContentSeconds,
         drift_delta_seconds: 0,
         current_drift_seconds: 0,
+        predicted_drift_seconds: null,
+        applied_correction_seconds: null,
       });
     }
   }
@@ -2353,7 +2430,6 @@ export class SupervisorProcess {
     }, 'supervisor: next plan never confirmed on air within threshold — marked Invalid, requesting fresh plan');
     this.nextPlanId = null;
     this.nextPlanSegmentId = null;
-    this.nextPlanScheduledEndMs = null;
     await this.db.update(supervisorStateTable)
       .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
       .where(eq(supervisorStateTable.id, 1));
@@ -2364,37 +2440,44 @@ export class SupervisorProcess {
 
   // ─── Draft request helpers ───────────────────────────────────────────────────
 
-  // Both boundaryDrift and plannedOvershoot represent accumulated lateness at
-  // the upcoming segment boundary. Subtracting both from nominal pre-corrects
-  // the draft so boundary drift self-corrects in one plan cycle.
-  //
-  // Recovery cap: allow up to 1.5× nominal when the station is running early
-  // (negative boundary drift). Without this, the min(nominal, …) ceiling
-  // means negative drift can never self-correct — every plan targets exactly
-  // nominal and the early-running condition persists indefinitely. The 1.5×
-  // cap limits per-segment catch-up so the planner doesn't try to fill 5×
-  // nominal with branding when music pools are short.
-  //
-  // Stop-sets get a higher floor (their own nominal, not the generic 30s):
-  // an ad break shouldn't be shrunk to absorb an unrelated segment's
-  // overshoot. Confirmed live 2026-07-04: a +209s overshoot elsewhere pushed
-  // a 120s stop-set's target to the 30s floor, leaving it with one 16-second
-  // spot. Protecting the floor doesn't lose the correction — it just carries
-  // forward as accumulated drift for whatever flexible segment comes next.
-  private async computeFirstPassTarget(segment: { type: string; duration_seconds: number }): Promise<number> {
-    // D78: cap is operator-configurable (Scheduling settings), read fresh.
+  // Decision 91: predicted lateness (seconds) at `scheduledStartMs` — the
+  // moment the active plan's remaining content will actually finish, vs when
+  // the target segment is scheduled to begin. Positive = will arrive late.
+  // Derived fresh from ground truth every call (confirmed elapsed time on
+  // the airing item + pending planned durations); replaces the old
+  // boundaryDrift + plannedOvershoot snapshot ledger and every hand-carried
+  // credit that ledger needed (skipped segments, replans, top-ups, stalls
+  // are all automatically reflected in the two inputs).
+  private async predictBoundaryLatenessSeconds(scheduledStartMs: number, nowMs: number): Promise<number> {
+    // No active plan (cold start / ground-truth re-establish): the current
+    // segment's own plan is being drafted to fill up to its scheduled end,
+    // so assume on-schedule arrival — treating "no plan yet" as "arriving
+    // right now" would fabricate a huge early-arrival reading and balloon
+    // the next plan for no reason.
+    if (this.activePlanId == null) return 0;
+    const remainingSeconds = await this.computeEstimatedRemaining(nowMs);
+    return (nowMs + remainingSeconds * 1_000 - scheduledStartMs) / 1000;
+  }
+
+  // Decision 85/86/91/92: one shared sizing routine for first pass, finalize,
+  // and any future mid-flight replan. Returns the ledger values (Decision 93)
+  // alongside the target so every caller persists the same story it acted on.
+  private async computeTargetFor(
+    next: { segment: { type: string; duration_seconds: number }; segmentStartMs: number },
+    nowMs: number,
+  ): Promise<{ targetSeconds: number; predictedDriftSeconds: number; appliedCorrectionSeconds: number }> {
     const cap = await getDriftRecoveryCapSeconds(this.db, this.logger);
-    // Decision 85/86: one shared formula for both first-pass and finalize —
-    // see requestPlan.ts for why the two used to diverge and what that cost.
-    const { targetSeconds, appliedCorrectionSeconds } = computeDriftAdjustedTarget(segment, {
-      boundaryDriftSeconds: this.boundaryDriftSeconds,
-      plannedOvershootSeconds: this.plannedOvershootSeconds,
+    const threshold = await getDriftFullAuthorityThresholdSeconds(this.db, this.logger);
+    const predictedDriftSeconds = await this.predictBoundaryLatenessSeconds(next.segmentStartMs, nowMs);
+    const { targetSeconds, appliedCorrectionSeconds } = computeDriftAdjustedTarget(next.segment, {
+      predictedDriftSeconds,
       capSeconds: cap,
+      fullAuthorityThresholdSeconds: threshold,
     });
     // D78 (implements D45): record the correction actually applied, so it can
     // be carried into intentional_offset_seconds once this plan activates.
     this.nextPlanIntentionalOffsetSeconds = appliedCorrectionSeconds;
-    return targetSeconds;
+    return { targetSeconds, predictedDriftSeconds, appliedCorrectionSeconds };
   }
 
   private async requestColdStartDraft(resolved: ResolvedSegment, nowMs: number): Promise<void> {
@@ -2416,6 +2499,10 @@ export class SupervisorProcess {
       show_id: resolved.show_id,
       show_name: resolved.show_name,
       resolution_identity: computeResolutionIdentity(resolved),
+      // Cold start sizes to remaining wall clock, not drift — no prediction.
+      nominal_duration_seconds: resolved.segment.duration_seconds,
+      predicted_drift_seconds: null,
+      applied_correction_seconds: null,
     });
   }
 
@@ -2474,18 +2561,20 @@ export class SupervisorProcess {
       return;
     }
 
-    const firstPassTarget = await this.computeFirstPassTarget(next.segment);
+    const sizing = await this.computeTargetFor(next, nowMs);
+    // Decision 91: remembered so the T-30s gate can report how much the
+    // prediction moved between draft and finalize (drift_delta).
+    this.nextPlanDraftDriftSeconds = sizing.predictedDriftSeconds;
 
-    // Store segment end time so activateNextPlan can compute boundary drift.
-    this.nextPlanScheduledEndMs = next.segmentEndMs;
     const requestId = randomUUID();
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_DRAFT_REQUESTED',
       segment_id: next.segment.id,
-      target_duration_seconds: firstPassTarget,
+      target_duration_seconds: sizing.targetSeconds,
       nominal_duration_seconds: next.segment.duration_seconds,
+      predicted_drift_seconds: sizing.predictedDriftSeconds,
+      applied_correction_seconds: sizing.appliedCorrectionSeconds,
       boundary_drift_seconds: this.boundaryDriftSeconds,
-      planned_overshoot_applied_seconds: this.plannedOvershootSeconds,
       request_id: requestId,
     }, 'supervisor: requesting first-pass draft for next segment');
     this._bus.emit({
@@ -2493,11 +2582,14 @@ export class SupervisorProcess {
       request_id: requestId,
       segment_id: next.segment.id,
       clock_instance_started_at: next.clockInstanceStartedAt,
-      target_duration_seconds: firstPassTarget,
+      target_duration_seconds: sizing.targetSeconds,
       now_ms: nowMs,
       show_id: next.show_id,
       show_name: next.show_name,
       resolution_identity: computeResolutionIdentity(next),
+      nominal_duration_seconds: next.segment.duration_seconds,
+      predicted_drift_seconds: sizing.predictedDriftSeconds,
+      applied_correction_seconds: sizing.appliedCorrectionSeconds,
     });
   }
 
@@ -2541,7 +2633,7 @@ export class SupervisorProcess {
 
         if (cappedTarget < RUNWAY_WORTH_IT_THRESHOLD_S) {
           const retiredPlanId = this.nextPlanId;
-          await this.retirePlanWithoutActivating(retiredPlanId, nominal);
+          await this.retirePlanWithoutActivating(retiredPlanId);
           this.finalizationRequestedForPlanId = null;
           this.finalizeInFlightForPlanId = null;
           // Still tracked as a backup: if the fresh hard-segment draft below
@@ -2562,8 +2654,6 @@ export class SupervisorProcess {
             process: 'supervisor', event: 'NEXT_PLAN_RETARGETED_TO_HARD_BOUNDARY',
             retired_plan_id: retiredPlanId, drafted_segment_id: plan.segment_id,
             hard_segment_id: lookahead.hard.segment.id, capped_target_seconds: cappedTarget,
-            credited_overshoot_seconds: nominal,
-            planned_overshoot_seconds: this.plannedOvershootSeconds,
           }, 'supervisor: runway to hard segment collapsed — retargeting directly at the hard segment instead of leaving the active plan to fill toward it alone');
           await this.reconcileOccurrence(lookahead.hard, nowMs, {
             allowActivate: false,
@@ -2586,28 +2676,28 @@ export class SupervisorProcess {
       }
     }
 
-    // driftDelta = how much drift changed since the first pass was requested.
-    // Since boundaryDrift is stable within a segment, delta is typically 0 — but
-    // may differ in edge cases where plan was forced-advanced to a new segment.
-    const driftDelta = this.boundaryDriftSeconds - this.nextPlanDraftDriftSeconds;
-    // Decision 85/86: same shared formula as computeFirstPassTarget — this is
-    // the concrete fix for the two passes having silently diverged (the
-    // finalize branch used to skip both the D71 cap and the plannedOvershoot
-    // term, and clamped to different bounds). Calling the same function here
-    // means there's no second implementation left to drift out of sync.
-    const cap = await getDriftRecoveryCapSeconds(this.db, this.logger);
-    const { targetSeconds: driftAdjustedTarget, appliedCorrectionSeconds } = computeDriftAdjustedTarget(
-      segment ?? { type: 'music', duration_seconds: nominal },
-      {
-        boundaryDriftSeconds: this.boundaryDriftSeconds,
-        plannedOvershootSeconds: this.plannedOvershootSeconds,
-        capSeconds: cap,
-      },
-    );
-    // D78 (implements D45): the second pass supersedes the first pass's
-    // recorded correction when it runs — record what actually ended up
-    // applied here (0 for stop-sets, per computeDriftAdjustedTarget).
-    this.nextPlanIntentionalOffsetSeconds = appliedCorrectionSeconds;
+    // Decision 86/91: the second pass re-invokes the same sizing routine as
+    // the first, with whatever the prediction looks like NOW — anchored to
+    // the next plan's own scheduled segment start (Decision 90's "trust the
+    // plan's own bounds" principle), never a remembered reference.
+    const nextPlanSegment = await resolveActivePlanSegment(this.db, this.nextPlanId);
+    let predictedDriftSeconds: number | null = null;
+    let appliedCorrectionSeconds: number | null = null;
+    let driftAdjustedTarget = nominal;
+    if (nextPlanSegment) {
+      const sizing = await this.computeTargetFor(nextPlanSegment, nowMs);
+      predictedDriftSeconds = sizing.predictedDriftSeconds;
+      appliedCorrectionSeconds = sizing.appliedCorrectionSeconds;
+      driftAdjustedTarget = sizing.targetSeconds;
+    } else {
+      this.logger?.warn({
+        process: 'supervisor', event: 'FINALIZE_SEGMENT_UNRESOLVED', plan_id: this.nextPlanId,
+      }, 'supervisor: next plan\'s segment no longer resolves — finalizing at nominal, no drift correction');
+    }
+    // driftDelta = how much the prediction moved since the first pass was
+    // requested. Governs the planner's full-reassembly-vs-substitution choice
+    // alongside the content-vs-target gap check (Decision 31/67).
+    const driftDelta = (predictedDriftSeconds ?? this.nextPlanDraftDriftSeconds) - this.nextPlanDraftDriftSeconds;
     const adjustedTarget = hardOverrideTarget ?? driftAdjustedTarget;
 
     this.finalizationRequestedForPlanId = this.nextPlanId;
@@ -2618,6 +2708,8 @@ export class SupervisorProcess {
       plan_id: this.nextPlanId, segment_id: plan.segment_id,
       drift_delta_seconds: driftDelta,
       adjusted_target_seconds: adjustedTarget,
+      predicted_drift_seconds: predictedDriftSeconds,
+      applied_correction_seconds: appliedCorrectionSeconds,
       boundary_drift_seconds: this.boundaryDriftSeconds,
       time_to_segment_end_seconds: timeToEnd / 1000,
       request_id: requestId,
@@ -2635,6 +2727,8 @@ export class SupervisorProcess {
       adjusted_target_seconds: adjustedTarget,
       drift_delta_seconds: driftDelta,
       current_drift_seconds: this.boundaryDriftSeconds,
+      predicted_drift_seconds: predictedDriftSeconds,
+      applied_correction_seconds: hardOverrideTarget != null ? nominal - adjustedTarget : appliedCorrectionSeconds,
     });
   }
 

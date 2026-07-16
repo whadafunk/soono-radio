@@ -2418,6 +2418,79 @@ Today's `tick()` runs roughly a dozen independently-polled concerns every 500ms,
 
 ---
 
+### Decision 90 — Boundary drift is measured from the activated plan's own scheduled bounds; the hand-carried reference dies
+
+**Status: decided 2026-07-16. Root-cause fix for the phantom drift readings observed live 2026-07-15 (sawtooth −1261…+1336 within minutes, physically impossible as real lateness).**
+
+At activation, boundary drift was computed against a remembered scalar (`nextPlanScheduledEndMs`) that only the ordinary draft-request path ever set. Every other activation path — adopted existing drafts (`DRAFT_SKIPPED_EXISTING`), reconcile-created plans, restarts (never rehydrated), empty-plan skip cascades, exhausted-plan advances — left it null or stale, and the fallback used the *outgoing* segment's end as if it were the incoming segment's. For adjacent segments that inflates measured drift by exactly +nominal(incoming) in one step. Live log values match this signature precisely (+722 on an 840s-nominal segment ≈ real −118 + phantom 840).
+
+**Fix:** `activatePlanById` already resolves the activated plan's own segment bounds (`resolveActivePlanSegment`, Decision 61) for bookkeeping. Boundary drift is now derived from that same resolution — `(activatedAt − segmentStartMs) / 1000` — and the `nextPlanScheduledEndMs` field, its fallback chain, and every site that maintained it are deleted. There is no scenario in which the plan's own scheduled start is the wrong reference: it is by definition the schedule slot this plan was built for. If the segment no longer resolves (deleted mid-flight), drift keeps its previous value and the existing `ACTIVATE_PLAN_SEGMENT_UNRESOLVED` warning covers it.
+
+Also fixed under the same "report reality, not bookkeeping" principle: `SEGMENT_SUMMARY.actual_duration_seconds` now sums real airtime from `play_history` (`ended_at − started_at`, confirmed rows; planned duration only as fallback for unconfirmed rows) instead of summing planned durations and calling them actual.
+
+---
+
+### Decision 91 — Predicted boundary lateness replaces the drift-credit ledger
+
+**Status: decided 2026-07-16. Completes Decisions 83/85; removes the `plannedOvershootSeconds` term from target sizing and with it the sign-inverted abandoned-plan credit shipped in c8e47fc.**
+
+The first-pass formula `nominal − (boundaryDrift + plannedOvershoot)` tried to *predict* lateness at the next boundary by summing two snapshots taken at activation. Every event after activation — mid-flight replans, top-ups, hard-start fills, skipped empty segments, stalls — invalidated the snapshots, and each got (or needed) its own hand-maintained credit. The abandoned-plan credit added 2026-07-15 had an inverted sign: skipping a segment makes the station arrive *early* at what follows, but the credit shrank the next plan as if it were arriving late — provably inconsistent with the force-activated-empty-plan path, which computes the same physical event with the opposite sign.
+
+**Fix: predicted lateness is derived fresh at the moment it's needed, never carried:**
+
+```
+predicted_drift(next) = (now + estimated_remaining(active_plan)) − scheduled_start(next segment)
+```
+
+`estimated_remaining` is the existing Decision 66 accounting (confirmed elapsed time on the airing item + pending planned durations). `scheduled_start` comes from the target segment's own resolved bounds. Both inputs are ground truth at call time, so every scenario is automatically accounted with no ledger:
+
+- **Skipped empty stop-set:** active plan's content ends ≈ at the stop-set's scheduled start, so predicted drift vs. the *following* segment is ≈ −nominal(stop-set) — the next plan is sized longer by exactly the hole, and the hour re-lands on schedule.
+- **Mid-flight replan/top-up/fill:** `estimated_remaining` re-reads the plan's actual current content; nothing to credit.
+- **Stall/dead air:** `now` advances; the prediction moves with it.
+
+`plannedOvershootSeconds` remains as an observability value (status page) but no longer participates in sizing. The T-30s finalize gate re-derives the same prediction fresh (Decision 86 — same routine, later moment); its reassembly trigger compares the fresh target against assembled content exactly as before. Drift-delta between draft and finalize is now `predicted_at_finalize − predicted_at_draft`, same semantics, honest inputs.
+
+---
+
+### Decision 92 — Correction authority: comfort band below a threshold, full authority above it; fill texture rule; cut only what is genuinely on air
+
+**Status: decided 2026-07-16. Extends Decisions 71/78/85/87; supersedes the fixed 0.6–1.4× proportional clamp as the only regime. Operator requirement: organic drift stays within ~±200s, and any |drift| > ~100s is corrected to near zero by the very next plan.**
+
+**Two regimes, one formula.** `correction = clamp(predicted_drift, ±drift_recovery_cap_seconds)` as today (Decision 71/78). Then:
+- `|correction| ≤ drift_full_authority_threshold_s` (new `station_settings` column, default 100, Scheduling settings page): target = `clamp(nominal − correction, [0.6×, 1.4×] nominal)` — the familiar comfort band; at ≤100s the band almost never binds.
+- Above the threshold: target = `max(30, nominal − correction)` — the plan is allowed to shrink far below the comfort floor (or grow up to nominal + cap), because at that magnitude landing the boundary matters more than one segment's fullness. Planning remains the *only* strategic recovery mechanism (Decision 87 unchanged); no segment skipping, no wall-clock realignment lever.
+
+**Stop-sets still bypass entirely** (Decision 73): target = nominal, correction = 0. `applied_correction` is recorded as `nominal − target` (what was actually applied after all clamps), fixing the old reporting flaw where the pre-clamp value was recorded.
+
+**Fill texture rule (extends Decision 70 from one pair to the general principle).** Music is the fabric; promo/station-ID/jingle are single stitches. In every fill path: never two items of the same non-music type adjacent (no promo→promo), never three non-music items in a row (promo→ID is the ceiling; then music must intervene). Spots are never fill/skip material in any path (contractual — `mandatory` + Decision 36 defaults already say so; the texture rule is planner-side placement discipline on top). Stop-set internal assembly is exempt — consecutive spots/promos are the normal sound of an ad break.
+
+**Fill/skip policy is station-wide, not per-segment.** The per-segment `catching_up_order`/`coasting_order` lists (Decision 27) are retired from all drift-adjacent paths — confirmed by code survey: `catching_up_order` was never read anywhere, and `coasting_order` only drives rundown-segment content fill, which it remains scoped to (that use is content assembly, not drift). Eligibility lives in `supervisor_config`'s per-content-type cut/skip columns (Decision 36), which already encode the operator's rules: music unrestricted, promo/ID/jingle skippable-not-cuttable, spots and envelopes untouchable.
+
+**Cut only what is genuinely on air.** The hard-start trim treated any `status='playing'` item as on-air, but queue-ahead marks an item 'playing' at *push* time — so the trim could mark a pre-queued item skipped while `queue.skip()` cut whatever was actually airing (potentially a mandatory spot), corrupting drift accounting and billing at once. Fix: an item is on-air iff its `play_history_id` equals the supervisor's confirmed `current_play_history_id`. Pre-queued items are committed content — LiquidSoap's queue can't be unpushed — so the trim leaves them alone and only skips genuinely `pending` items or cuts the genuinely airing one.
+
+---
+
+### Decision 93 — The drift ledger lives on `plans`; the Supervisor page shows the whole measure→correct→predict loop
+
+**Status: decided 2026-07-16. Implements the operator requirement "I want to look at the supervisor page and see how the algorithm works and how it recovers drift."**
+
+The `plans` table gains the sizing story as first-class columns, written by the planner at draft/finalize (values computed by the Supervisor and carried on the existing bus messages) and by the Supervisor at activation:
+
+```sql
+ALTER TABLE plans ADD COLUMN nominal_duration_seconds real;    -- segment nominal at draft time
+ALTER TABLE plans ADD COLUMN target_duration_seconds real;     -- what the plan was sized to (finalize overwrites draft)
+ALTER TABLE plans ADD COLUMN predicted_drift_seconds real;     -- Decision 91 prediction that sizing responded to
+ALTER TABLE plans ADD COLUMN applied_correction_seconds real;  -- nominal − target, post-clamp truth
+ALTER TABLE plans ADD COLUMN boundary_drift_seconds real;      -- measured at activation (Decision 90)
+ALTER TABLE plans ADD COLUMN activated_at integer;             -- unix ms
+```
+
+Every activated plan is thereby one ledger row: *we predicted X, sized the plan to nominal−Y, and actually arrived Z late* — no log archaeology. A new `GET /supervisor/v2/drift-ledger` returns the last N activated plans joined with segment name/type; `/supervisor/v2/status` additionally reports the live prediction for the active plan's next boundary and the next plan's recorded sizing.
+
+The Supervisor page gains a **Drift recovery panel**: measured boundary drift per transition over the last hours (chart), each row showing measured → correction applied to the following plan → predicted landing, plus a live "predicted arrival at next boundary" figure. The acceptance criteria become directly observable: the chart should show a sawtooth bounded by roughly ±one track length around zero, and any excursion past 100s should return to near zero within one transition.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

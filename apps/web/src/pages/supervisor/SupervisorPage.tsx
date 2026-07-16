@@ -18,9 +18,11 @@ import type {
   SupervisorV2NextHardSegment,
   SupervisorV2RecentPlay,
   SupervisorV2SegmentConfig,
+  SupervisorV2DriftLedgerEntry,
 } from '@soono/shared';
 import {
   fetchSupervisorV2Status,
+  fetchSupervisorV2DriftLedger,
   postSupervisorSkip,
   postSupervisorAlignToWallClock,
   postSupervisorAlignToClock,
@@ -543,39 +545,199 @@ function ActivePlanPanel({ items }: { items: SupervisorV2PlanItem[] }) {
   );
 }
 
-function DriftPanel({
-  driftSeconds,
+// ─── Drift recovery panel (Decision 93) ──────────────────────────────────────
+// Shows the whole measure → correct → predict loop: live drift now, the
+// predicted landing at the next boundary, how the next plan was sized in
+// response, and the per-transition ledger history.
+
+function driftMagnitudeColor(abs: number, thresholds: [number, number] = [30, 100]): string {
+  return abs < thresholds[0] ? 'text-green-400' : abs < thresholds[1] ? 'text-amber-400' : 'text-red-400';
+}
+
+function driftBarColor(abs: number): string {
+  return abs < 30 ? 'bg-green-500/70' : abs < 100 ? 'bg-amber-500/70' : 'bg-red-500/70';
+}
+
+function DriftLedgerChart({ entries }: { entries: SupervisorV2DriftLedgerEntry[] }) {
+  // Chronological left → right; endpoint returns newest first.
+  const chrono = entries.slice().reverse();
+  const scale = Math.max(60, ...chrono.map((e) => Math.abs(e.boundary_drift_seconds ?? 0)));
+  const HALF_PX = 44;
+  return (
+    <div>
+      <div className="flex items-end gap-[3px] h-[100px]" title="Boundary drift per transition — late above the line, early below">
+        {chrono.map((e) => {
+          const drift = e.boundary_drift_seconds ?? 0;
+          const abs = Math.abs(drift);
+          const px = Math.max(2, Math.round((abs / scale) * HALF_PX));
+          return (
+            <div key={e.plan_id} className="flex flex-col items-center justify-end flex-1 min-w-[4px] max-w-[16px] h-full group relative">
+              <div className="w-full flex flex-col justify-end" style={{ height: HALF_PX }}>
+                {drift > 0 && <div className={`w-full rounded-sm ${driftBarColor(abs)}`} style={{ height: px }} />}
+              </div>
+              <div className="w-full border-t border-zinc-600" />
+              <div className="w-full flex flex-col justify-start" style={{ height: HALF_PX }}>
+                {drift <= 0 && <div className={`w-full rounded-sm ${driftBarColor(abs)}`} style={{ height: px }} />}
+              </div>
+              <div className="hidden group-hover:block absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-30 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-[10px] text-zinc-300 whitespace-nowrap">
+                {e.segment_name || `seg #${e.segment_id}`} · {fmtDriftSign(drift)}
+                {e.activated_at != null && <> · {new Date(e.activated_at).toLocaleTimeString()}</>}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-zinc-500 mt-1">
+        oldest ← boundary drift per transition (late ↑ / early ↓) → newest
+      </p>
+    </div>
+  );
+}
+
+function DriftRecoveryPanel({
+  liveDriftSeconds,
+  predictedBoundaryLatenessSeconds,
+  nextPlan,
+  fullAuthorityThresholdSeconds,
+  driftRecoveryCapSeconds,
   lastHeartbeatAt,
 }: {
-  driftSeconds: number;
+  liveDriftSeconds: number;
+  predictedBoundaryLatenessSeconds: number | null;
+  nextPlan: SupervisorV2NextPlan | null | undefined;
+  fullAuthorityThresholdSeconds: number;
+  driftRecoveryCapSeconds: number;
   lastHeartbeatAt: number | null;
 }) {
-  const abs = Math.abs(driftSeconds);
-  const driftColor =
-    abs < 5 ? 'text-green-400' : abs < 10 ? 'text-amber-400' : 'text-red-400';
+  const { data: ledger } = useQuery({
+    queryKey: ['supervisor-v2-drift-ledger'],
+    queryFn: () => fetchSupervisorV2DriftLedger(48),
+    refetchInterval: 15000,
+  });
 
+  const abs = Math.abs(liveDriftSeconds);
   const hb = heartbeatStatus(lastHeartbeatAt);
+
+  const predicted = predictedBoundaryLatenessSeconds;
+  const predictedColor = predicted == null ? 'text-zinc-500' : driftMagnitudeColor(Math.abs(predicted));
+
+  const correction = nextPlan?.applied_correction_seconds ?? null;
+  const fullAuthority = correction != null && Math.abs(correction) > fullAuthorityThresholdSeconds;
 
   return (
     <section>
-      <h2 className="text-base font-semibold text-white mb-3">Drift</h2>
-      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 flex items-center gap-8">
-        <div>
-          <p className="text-xs text-zinc-400 mb-1">Current drift</p>
-          <p className={`text-3xl font-bold font-mono ${driftColor}`}>
-            {fmtDriftSign(driftSeconds)}
-          </p>
-          <p className="text-xs text-zinc-500 mt-1">
-            {abs < 5 ? 'On time' : abs < 10 ? 'Minor drift' : 'Significant drift'}
-          </p>
+      <h2 className="text-base font-semibold text-white mb-3">Drift recovery</h2>
+      <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 space-y-5">
+        <div className="flex flex-wrap items-start gap-8">
+          <div>
+            <p className="text-xs text-zinc-400 mb-1">Current drift</p>
+            <p className={`text-3xl font-bold font-mono ${driftMagnitudeColor(abs, [5, 10])}`}>
+              {fmtDriftSign(liveDriftSeconds)}
+            </p>
+            <p className="text-xs text-zinc-400 mt-1">
+              {abs < 5 ? 'On time' : abs < 10 ? 'Minor drift' : 'Significant drift'}
+            </p>
+          </div>
+          <div className="border-l border-zinc-800 pl-8">
+            <p className="text-xs text-zinc-400 mb-1" title="When the active plan's remaining content runs out vs when its segment is scheduled to end — what the next plan's sizing responds to">
+              Predicted landing at boundary
+            </p>
+            <p className={`text-3xl font-bold font-mono ${predictedColor}`}>
+              {predicted == null ? '—' : fmtDriftSign(predicted)}
+            </p>
+            <p className="text-xs text-zinc-400 mt-1">
+              {predicted == null
+                ? 'no active plan'
+                : Math.abs(predicted) <= fullAuthorityThresholdSeconds
+                  ? 'within comfort band'
+                  : `above ${fullAuthorityThresholdSeconds}s — next plan corrects with full authority`}
+            </p>
+          </div>
+          <div className="border-l border-zinc-800 pl-8">
+            <p className="text-xs text-zinc-400 mb-1">Next plan sizing</p>
+            {nextPlan ? (
+              <>
+                <p className="text-sm font-mono text-zinc-300 mt-1.5">
+                  {fmtMmSs(nextPlan.nominal_seconds)} nominal → <span className="text-white font-semibold">{fmtMmSs(nextPlan.target_seconds)}</span> target
+                </p>
+                <p className="text-xs text-zinc-400 mt-1">
+                  {correction == null || Math.abs(correction) < 1
+                    ? 'no correction applied'
+                    : `${fmtDriftSign(-correction)} correction`}
+                  {fullAuthority && (
+                    <span className="ml-1.5 inline-block px-1.5 py-0.5 rounded text-[10px] font-mono font-medium uppercase bg-red-900/50 text-red-300">
+                      full authority
+                    </span>
+                  )}
+                </p>
+              </>
+            ) : (
+              <p className="text-sm text-zinc-400 mt-1.5 italic">no next plan yet</p>
+            )}
+            <p className="text-[10px] text-zinc-500 mt-1">
+              corrections capped at ±{driftRecoveryCapSeconds}s per transition
+            </p>
+          </div>
+          <div className="border-l border-zinc-800 pl-8">
+            <p className="text-xs text-zinc-400 mb-1">Last heartbeat</p>
+            <p className={`text-sm font-medium ${hb.cls}`}>
+              {fmtRelativeTime(lastHeartbeatAt)}
+            </p>
+            <p className={`text-xs mt-1 ${hb.cls}`}>{hb.label}</p>
+          </div>
         </div>
-        <div className="border-l border-zinc-800 pl-8">
-          <p className="text-xs text-zinc-400 mb-1">Last heartbeat</p>
-          <p className={`text-sm font-medium ${hb.cls}`}>
-            {fmtRelativeTime(lastHeartbeatAt)}
-          </p>
-          <p className={`text-xs mt-1 ${hb.cls}`}>{hb.label}</p>
-        </div>
+
+        {ledger && ledger.entries.length > 0 && (
+          <>
+            <DriftLedgerChart entries={ledger.entries} />
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="border-b border-zinc-800">
+                  <tr>
+                    <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-2 py-1.5">Activated</th>
+                    <th className="text-left text-xs font-medium text-zinc-400 uppercase tracking-wider px-2 py-1.5">Segment</th>
+                    <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-2 py-1.5" title="Boundary drift measured when this plan's first item aired (Decision 90)">Measured</th>
+                    <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-2 py-1.5" title="Predicted lateness the sizing responded to (Decision 91)">Predicted</th>
+                    <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-2 py-1.5" title="nominal − target, after all clamps (Decision 92)">Correction</th>
+                    <th className="text-right text-xs font-medium text-zinc-400 uppercase tracking-wider px-2 py-1.5">Nominal → Target</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {ledger.entries.slice(0, 12).map((e) => {
+                    const measured = e.boundary_drift_seconds;
+                    return (
+                      <tr key={e.plan_id} className="border-t border-zinc-800/60">
+                        <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">
+                          {e.activated_at != null ? new Date(e.activated_at).toLocaleTimeString() : '—'}
+                        </td>
+                        <td className="px-2 py-1.5 text-xs text-zinc-300">
+                          {e.segment_name || `seg #${e.segment_id}`}
+                          <span className="text-zinc-500 ml-1.5">{e.segment_type}</span>
+                        </td>
+                        <td className={`px-2 py-1.5 text-right font-mono text-xs ${measured == null ? 'text-zinc-500' : driftMagnitudeColor(Math.abs(measured))}`}>
+                          {measured == null ? '—' : fmtDriftSign(measured)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-xs text-zinc-400">
+                          {e.predicted_drift_seconds == null ? '—' : fmtDriftSign(e.predicted_drift_seconds)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-xs text-zinc-400">
+                          {e.applied_correction_seconds == null || Math.abs(e.applied_correction_seconds) < 1
+                            ? '—'
+                            : fmtDriftSign(-e.applied_correction_seconds)}
+                        </td>
+                        <td className="px-2 py-1.5 text-right font-mono text-xs text-zinc-400">
+                          {e.nominal_duration_seconds != null && e.target_duration_seconds != null
+                            ? `${fmtMmSs(e.nominal_duration_seconds)} → ${fmtMmSs(e.target_duration_seconds)}`
+                            : '—'}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </section>
   );
@@ -978,8 +1140,12 @@ export function SupervisorPage() {
         driftRecoveryCapSeconds={data?.drift_recovery_cap_seconds ?? 300}
       />
 
-      <DriftPanel
-        driftSeconds={liveDriftSeconds}
+      <DriftRecoveryPanel
+        liveDriftSeconds={liveDriftSeconds}
+        predictedBoundaryLatenessSeconds={data?.predicted_boundary_lateness_seconds ?? null}
+        nextPlan={data?.next_plan}
+        fullAuthorityThresholdSeconds={data?.drift_full_authority_threshold_s ?? 100}
+        driftRecoveryCapSeconds={data?.drift_recovery_cap_seconds ?? 300}
         lastHeartbeatAt={data?.last_heartbeat_at ?? null}
       />
 

@@ -132,6 +132,15 @@ export type BusMessage =
       // requests that don't come from a live resolution (none exist today,
       // but kept optional for that eventuality).
       resolution_identity: string | null;
+      // ── Decision 93: drift-ledger inputs, persisted onto the plans row ──
+      // Segment nominal at request time. Null for live segments and legacy
+      // callers; the planner falls back to reading the segment row itself.
+      nominal_duration_seconds: number | null;
+      // Decision 91 prediction the target responded to (null where sizing
+      // wasn't drift-driven: cold start, reconcile ground-truth establish).
+      predicted_drift_seconds: number | null;
+      // nominal − target after all clamps (Decision 92's honest value).
+      applied_correction_seconds: number | null;
     }
   | {
       // Planner → Supervisor + Queue Feeder: draft plan written to SQLite.
@@ -160,6 +169,10 @@ export type BusMessage =
       // Running drift at the moment finalization is triggered. Logged on
       // every PLAN_FINALIZE_COMPLETE entry for post-mortem analysis.
       current_drift_seconds: number;
+      // ── Decision 93: drift-ledger inputs (see PLAN_DRAFT_REQUESTED) ──
+      // Finalize overwrites the draft-time ledger values on the plans row.
+      predicted_drift_seconds: number | null;
+      applied_correction_seconds: number | null;
     }
   | {
       // Planner → Supervisor + Queue Feeder: plan finalized, queue feeder may

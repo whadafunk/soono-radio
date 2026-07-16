@@ -110,8 +110,34 @@ export const SupervisorV2NextPlanSchema = z.object({
   segment_name: z.string(),
   item_count: z.number().int(),
   target_seconds: z.number(),
+  // Decision 93: the sizing story — nominal vs the drift-corrected target.
+  nominal_seconds: z.number(),
+  predicted_drift_seconds: z.number().nullable(),
+  applied_correction_seconds: z.number().nullable(),
 });
 export type SupervisorV2NextPlan = z.infer<typeof SupervisorV2NextPlanSchema>;
+
+// Decision 93 — one activated plan = one ledger row: "we predicted X, sized
+// the plan to nominal − Y, actually arrived Z late."
+export const SupervisorV2DriftLedgerEntrySchema = z.object({
+  plan_id: z.number().int(),
+  segment_id: z.number().int(),
+  segment_name: z.string(),
+  segment_type: z.string(),
+  status: z.string(),
+  activated_at: z.number().nullable(),
+  nominal_duration_seconds: z.number().nullable(),
+  target_duration_seconds: z.number().nullable(),
+  predicted_drift_seconds: z.number().nullable(),
+  applied_correction_seconds: z.number().nullable(),
+  boundary_drift_seconds: z.number().nullable(),
+});
+export type SupervisorV2DriftLedgerEntry = z.infer<typeof SupervisorV2DriftLedgerEntrySchema>;
+
+export const SupervisorV2DriftLedgerSchema = z.object({
+  entries: z.array(SupervisorV2DriftLedgerEntrySchema),
+});
+export type SupervisorV2DriftLedger = z.infer<typeof SupervisorV2DriftLedgerSchema>;
 
 export const SupervisorV2RecentPlaySchema = z.object({
   title: z.string().nullable(),
@@ -159,6 +185,12 @@ export const SupervisorV2StatusSchema = z.object({
   // correct for. Surfaced so the UI can explain why intentional_offset_seconds
   // sometimes doesn't fully close the measured drift in one transition.
   drift_recovery_cap_seconds: z.number(),
+  // Decision 92's threshold — above it the next plan corrects with full
+  // authority instead of the comfort band.
+  drift_full_authority_threshold_s: z.number(),
+  // Decision 93: live prediction — how late (positive) or early (negative)
+  // the active plan's content will arrive at its own segment boundary.
+  predicted_boundary_lateness_seconds: z.number().nullable(),
 });
 export type SupervisorV2Status = z.infer<typeof SupervisorV2StatusSchema>;
 

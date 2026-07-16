@@ -10,6 +10,7 @@ export function SchedulingSettings() {
   const [localPct, setLocalPct] = useState(10);
   const [localCap, setLocalCap] = useState(300);
   const [localRealityCheckInterval, setLocalRealityCheckInterval] = useState(3);
+  const [localFullAuthority, setLocalFullAuthority] = useState(100);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['station-settings'],
@@ -27,6 +28,10 @@ export function SchedulingSettings() {
 
   useEffect(() => {
     if (data) setLocalRealityCheckInterval(data.reality_check_interval_seconds);
+  }, [data]);
+
+  useEffect(() => {
+    if (data) setLocalFullAuthority(data.drift_full_authority_threshold_s);
   }, [data]);
 
   const mutation = useMutation({
@@ -166,6 +171,34 @@ export function SchedulingSettings() {
           </div>
           <p className="text-zinc-500 text-xs mt-1">
             Default 300s (5 minutes). Raising this lets the supervisor absorb larger drift in a single plan, at the cost of a more noticeably shortened or extended segment when it does.
+          </p>
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
+            Full-authority threshold
+            <HelpTooltip text="Below this predicted drift, the next plan's length stays within a comfortable 60–140% of the segment's nominal length. Above it, landing the boundary on time takes priority: the next plan may shrink or grow as much as the recovery cap allows, so the drift is gone within one transition." />
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={30}
+              max={600}
+              step={10}
+              value={localFullAuthority}
+              onChange={(e) => setLocalFullAuthority(Number(e.target.value))}
+              onBlur={() => {
+                if (!Number.isFinite(localFullAuthority)) { setLocalFullAuthority(data.drift_full_authority_threshold_s); return; }
+                const clamped = Math.max(30, Math.min(600, localFullAuthority));
+                setLocalFullAuthority(clamped);
+                if (clamped !== data.drift_full_authority_threshold_s) mutation.mutate({ drift_full_authority_threshold_s: clamped });
+              }}
+              className="w-28 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+            />
+            <span className="text-zinc-400 text-sm">seconds</span>
+          </div>
+          <p className="text-zinc-500 text-xs mt-1">
+            Default 100s. Any predicted drift beyond this is corrected to near zero by the very next plan instead of being spread gently across several.
           </p>
         </div>
       </div>

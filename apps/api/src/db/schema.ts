@@ -1101,6 +1101,11 @@ export const stationSettings = sqliteTable('station_settings', {
   // /now-playing against the resolved playhead) runs. The check itself is
   // near-free, so this is a dead-air-detection tradeoff, not a resource one.
   reality_check_interval_seconds: real('reality_check_interval_seconds').notNull().default(3),
+  // Decision 92: below this |predicted drift|, target sizing stays inside the
+  // 0.6-1.4x comfort band; above it, the plan gets full authority to shrink
+  // (floor 30s) or grow (up to nominal + cap) so the boundary lands on time
+  // within one transition.
+  drift_full_authority_threshold_s: real('drift_full_authority_threshold_s').notNull().default(100),
 });
 
 export type StationSettings = typeof stationSettings.$inferSelect;
@@ -1143,6 +1148,24 @@ export const plans = sqliteTable(
     reason: text('reason', { enum: PLAN_INVALID_REASONS }),
     created_at: integer('created_at').notNull(),
     finalized_at: integer('finalized_at'),
+    // ── Decision 93: drift ledger ──────────────────────────────────────────
+    // The sizing story of this plan, first-class instead of log archaeology:
+    // "we predicted X, sized to nominal − Y, actually arrived Z late."
+    // Segment nominal at draft time (denormalized — the segment row can be
+    // edited later; the ledger must describe what the sizing saw).
+    nominal_duration_seconds: real('nominal_duration_seconds'),
+    // What the plan was sized to; finalize overwrites the draft value.
+    target_duration_seconds: real('target_duration_seconds'),
+    // Decision 91 prediction the sizing responded to (positive = expected to
+    // arrive late at this segment's boundary).
+    predicted_drift_seconds: real('predicted_drift_seconds'),
+    // nominal − target after all clamps — the truth of what was applied,
+    // not the pre-clamp intent.
+    applied_correction_seconds: real('applied_correction_seconds'),
+    // Measured at activation (Decision 90): activated_at vs the plan's own
+    // scheduled segment start.
+    boundary_drift_seconds: real('boundary_drift_seconds'),
+    activated_at: integer('activated_at'),
   },
   (t) => ({
     segmentIdx: index('plans_segment_idx').on(t.segment_id),

@@ -66,6 +66,27 @@ import type {
 
 // Minimum gap (seconds) below which we accept silence rather than try to fill.
 const MIN_FILL_GAP_SECONDS = 5;
+
+// ── Decision 92: fill texture rule ────────────────────────────────────────────
+// Music is the fabric; promo/station-ID/jingle are single stitches. In fill
+// paths: never two items of the same non-music type adjacent (no promo →
+// promo), never three non-music items in a row (promo → station-ID is the
+// ceiling; then music must intervene). Stop-set internal assembly is exempt —
+// consecutive spots/promos are the normal sound of an ad break. Extends
+// Decision 70 (jingle/station-ID never back-to-back) to the general principle.
+const NON_MUSIC_TEXTURE_TYPES = new Set<PlanItemContentType>([
+  'promo', 'jingle', 'station_id', 'branding', 'filler',
+]);
+
+function textureAllows(placed: PendingAssemblyItem[], contentType: PlanItemContentType): boolean {
+  if (!NON_MUSIC_TEXTURE_TYPES.has(contentType)) return true;
+  const last = placed[placed.length - 1];
+  if (!last || !NON_MUSIC_TEXTURE_TYPES.has(last.content_type)) return true;
+  if (last.content_type === contentType) return false;
+  const prev = placed[placed.length - 2];
+  if (prev && NON_MUSIC_TEXTURE_TYPES.has(prev.content_type)) return false;
+  return true;
+}
 // Default request/response timeout for content process calls. Generous —
 // content processes do real DB work but should complete well inside this.
 const CANDIDATE_REQUEST_TIMEOUT_MS = 10_000;
@@ -195,6 +216,12 @@ export class PlannerProcess {
       msg.show_id,
       msg.show_name,
       msg.resolution_identity,
+      // Decision 93: sizing story, persisted onto the plans row.
+      {
+        nominal_duration_seconds: msg.nominal_duration_seconds,
+        predicted_drift_seconds: msg.predicted_drift_seconds,
+        applied_correction_seconds: msg.applied_correction_seconds,
+      },
     );
     this._bus.emit({
       type: 'PLAN_DRAFT_READY',
@@ -213,6 +240,10 @@ export class PlannerProcess {
       msg.adjusted_target_seconds,
       msg.drift_delta_seconds,
       msg.current_drift_seconds,
+      {
+        predicted_drift_seconds: msg.predicted_drift_seconds,
+        applied_correction_seconds: msg.applied_correction_seconds,
+      },
     );
     this._bus.emit({
       type: 'PLAN_FINALIZED',
@@ -248,6 +279,12 @@ export class PlannerProcess {
     showId: number | null,
     showName: string | null,
     resolutionIdentity: string | null,
+    // Decision 93: sizing story from the Supervisor; persisted verbatim.
+    ledger?: {
+      nominal_duration_seconds: number | null;
+      predicted_drift_seconds: number | null;
+      applied_correction_seconds: number | null;
+    },
   ): Promise<number> {
     const [segment] = await this.db
       .select()
@@ -257,13 +294,20 @@ export class PlannerProcess {
       throw new Error(`planner.buildPlan: segment ${segmentId} not found`);
     }
 
+    const ledgerColumns = {
+      nominal_duration_seconds: ledger?.nominal_duration_seconds ?? segment.duration_seconds,
+      target_duration_seconds: targetDurationSeconds,
+      predicted_drift_seconds: ledger?.predicted_drift_seconds ?? null,
+      applied_correction_seconds: ledger?.applied_correction_seconds ?? null,
+    };
+
     // Live segments have no automated content — write only the plans row so
     // the Supervisor can track the segment lifecycle. plan_items.media_id has
     // a NOT NULL FK; we cannot store a sentinel-less placeholder, so we
     // intentionally skip plan_items for live segments. The Supervisor / Queue
     // Feeder treat an empty plan as a live-suspension marker.
     if (segment.type === 'live') {
-      return this.insertPlanRow(segment, clockInstanceStartedAt, nowMs, resolutionIdentity);
+      return this.insertPlanRow(segment, clockInstanceStartedAt, nowMs, resolutionIdentity, ledgerColumns);
     }
 
     const config = await this.loadSupervisorConfig();
@@ -283,7 +327,7 @@ export class PlannerProcess {
 
     const showCtx: ShowContext = { showId, showName, isShowStart, isShowEnd, config };
 
-    const planId = await this.insertPlanRow(segment, clockInstanceStartedAt, nowMs, resolutionIdentity);
+    const planId = await this.insertPlanRow(segment, clockInstanceStartedAt, nowMs, resolutionIdentity, ledgerColumns);
 
     const result = await this.assembleForSegment(
       segment,
@@ -339,6 +383,12 @@ export class PlannerProcess {
     adjustedTargetSeconds: number,
     driftDeltaSeconds: number,
     currentDriftSeconds: number,
+    // Decision 93: finalize's sizing story overwrites draft's on the plans
+    // row — the ledger records what the plan was ultimately sized to.
+    ledger?: {
+      predicted_drift_seconds: number | null;
+      applied_correction_seconds: number | null;
+    },
   ): Promise<void> {
     void currentDriftSeconds; // logged by supervisor; planner just records finalize event
     const [plan] = await this.db
@@ -559,7 +609,22 @@ export class PlannerProcess {
 
     await this.db
       .update(plansTable)
-      .set({ status: 'finalized', finalized_at: nowMs })
+      .set({
+        status: 'finalized',
+        finalized_at: nowMs,
+        // Decision 93: a drift-sized finalize (predicted non-null) overwrites
+        // the draft-time sizing story. The content-preserving finalize paths
+        // (cold start, reconcile-an-existing-draft) pass adjusted_target as a
+        // "no gap" sentinel equal to current content — not a sizing decision —
+        // so they leave the draft-time ledger untouched.
+        ...(ledger?.predicted_drift_seconds != null
+          ? {
+              target_duration_seconds: adjustedTargetSeconds,
+              predicted_drift_seconds: ledger.predicted_drift_seconds,
+              applied_correction_seconds: ledger.applied_correction_seconds,
+            }
+          : {}),
+      })
       .where(eq(plansTable.id, planId));
 
     this.logger?.info(
@@ -1306,6 +1371,7 @@ export class PlannerProcess {
             new Set(),
             new Set(),
             config,
+            items,
           );
           if (placed) {
             items.push(placed.item);
@@ -1355,6 +1421,13 @@ export class PlannerProcess {
     clockInstanceStartedAt: number,
     nowMs: number,
     resolutionIdentity: string | null,
+    // Decision 93 drift-ledger columns, computed by buildPlan.
+    ledgerColumns?: {
+      nominal_duration_seconds: number;
+      target_duration_seconds: number;
+      predicted_drift_seconds: number | null;
+      applied_correction_seconds: number | null;
+    },
   ): Promise<number> {
     const inserted = await this.db
       .insert(plansTable)
@@ -1365,6 +1438,7 @@ export class PlannerProcess {
         status: 'draft',
         created_at: nowMs,
         finalized_at: null,
+        ...(ledgerColumns ?? {}),
       })
       .returning({ id: plansTable.id });
     const id = inserted[0]?.id;
@@ -1553,9 +1627,23 @@ export class PlannerProcess {
     usedCampaignIds: Set<number>,
     usedPromoIds: Set<number>,
     config: SupervisorConfig,
+    // Decision 92: items already placed in this plan — the texture rule
+    // rejects a non-music pick that would stack same-type or make a third
+    // consecutive non-music item.
+    placedSoFar: PendingAssemblyItem[] = [],
   ): { item: PendingAssemblyItem } | null {
     const max = Math.max(0, remainingSeconds - 2);
     if (max < MIN_FILL_GAP_SECONDS) return null;
+
+    const fillContentType: PlanItemContentType | null =
+      type === 'station_ids' ? 'station_id'
+      : type === 'jingles' ? 'jingle'
+      : type === 'promos' ? 'promo'
+      : type === 'songs' ? 'music'
+      : null;
+    if (fillContentType != null && !textureAllows(placedSoFar, fillContentType)) {
+      return null;
+    }
 
     switch (type) {
       case 'station_ids': {

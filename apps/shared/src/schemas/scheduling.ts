@@ -1006,6 +1006,10 @@ export const StationSettingsSchema = z.object({
   // playback state against the resolved playhead) runs. The check itself is
   // near-free, so this is a dead-air-detection tradeoff, not a resource one.
   reality_check_interval_seconds: z.number().min(1).max(10),
+  // Decision 92: below this |predicted drift| the next plan's target stays
+  // inside the 0.6-1.4x comfort band; above it the plan gets full authority
+  // to shrink or grow so the boundary lands on time within one transition.
+  drift_full_authority_threshold_s: z.number().min(30).max(600),
 });
 export type StationSettings = z.infer<typeof StationSettingsSchema>;
 
