@@ -961,7 +961,24 @@ export class SupervisorProcess {
         this.resetStillOpenWait(nowMs, playheadConfidence);
       } else {
         const stillOpenCheck = await this.isCurrentPlayHistoryStillOpen(nowMs);
-        if (stillOpenCheck.stillOpen) {
+        // Ground-truth override (2026-07-16, found live 81s after the alert
+        // rekey exposed it): the still-open corroboration trusts the item's
+        // PLANNED end timestamp — but when LiquidSoap explicitly reports
+        // nothing playing AND an empty queue, and no audio has been
+        // confirmed for 10s+ (filters any transient between-tracks blip),
+        // the "still airing" belief is provably false: the track died with
+        // a restarted LS. Waiting out the phantom's planned end produced
+        // 81s of real dead air post-deploy. Reality outranks bookkeeping.
+        const groundTruthSilence = realSilence && (nowMs - this.lastAudioConfirmedMs) > 10_000;
+        if (stillOpenCheck.stillOpen && groundTruthSilence) {
+          this.logger?.warn({
+            process: 'supervisor', event: 'STILL_OPEN_OVERRIDDEN_BY_SILENCE',
+            current_play_history_id: this.currentPlayHistoryId,
+            expected_end_ms: stillOpenCheck.expectedEndMs,
+            unconfirmed_seconds: Math.round((nowMs - this.lastAudioConfirmedMs) / 1000),
+          }, 'supervisor: play_history says still airing but LiquidSoap confirms silence — advancing instead of waiting out the phantom');
+        }
+        if (stillOpenCheck.stillOpen && !groundTruthSilence) {
           // resolvePlayhead found nothing 'playing' under activePlanId, but
           // ground truth (current_play_history_id) says something IS still
           // genuinely on air — it just belongs to a plan not yet promoted
