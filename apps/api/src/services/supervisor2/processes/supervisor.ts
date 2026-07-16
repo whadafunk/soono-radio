@@ -2598,6 +2598,19 @@ export class SupervisorProcess {
   private async maybeInvalidateStuckTransition(nowMs: number): Promise<void> {
     if (this.nextPlanTransitioningSinceMs == null || this.nextPlanId == null) return;
     if (nowMs - this.nextPlanTransitioningSinceMs < SILENCE_ALERT_THRESHOLD_S * 1_000) return;
+    // Ground-truth guard (2026-07-16, found live): a Transitioning plan is
+    // only STUCK if its pushed item failed to produce audio — not while the
+    // item is legitimately waiting in LiquidSoap's queue behind a track
+    // that's still airing (queue-ahead pushes can precede confirmation by
+    // whole minutes). Invalidating a queued-but-healthy plan double-plans
+    // the slot: LS's queue doesn't read DB statuses, so the "Invalid" plan's
+    // item airs anyway while the freshly drafted duplicate airs after it —
+    // observed live tonight as plans 8485+8486 both playing slot 229
+    // (+873 → +1089 drift). While audio is confirmed flowing, there is
+    // nothing stuck; the handoff will come when the current track ends.
+    // The two historical TRUE positives (2026-07-15 LS outage) both had no
+    // audio flowing — exactly what this guard permits through.
+    if (nowMs - this.lastAudioConfirmedMs < SILENCE_ALERT_THRESHOLD_S * 1_000) return;
 
     const staleTransitioningPlanId = this.nextPlanId;
     const result = await this.db
