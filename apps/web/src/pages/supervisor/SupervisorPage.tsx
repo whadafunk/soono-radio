@@ -36,6 +36,8 @@ import {
   heartbeatStatus,
   scheduleSourceMeta,
   computeTimelineLayout,
+  driftSeverity,
+  DRIFT_SEVERITY_TEXT,
 } from '../../lib/supervisorV2Ui';
 
 // ─── Status badge ─────────────────────────────────────────────────────────────
@@ -200,13 +202,27 @@ function SegmentTimeline({
   }
 
   const nowMs = Date.now();
-  const calendarElapsed = Math.max(0, (nowMs - segmentStartedAtMs) / 1000);
+  // Deliberately NOT clamped to 0: when a plan starts before its scheduled
+  // start (early), elapsed is negative until the wall clock catches up.
+  // Clamping froze one side of the drift subtraction while the other kept
+  // advancing, making the drift figure count up 1s/s through the early-start
+  // window — the "constantly incrementing drift" bug (fixed 2026-07-16).
+  const calendarElapsed = (nowMs - segmentStartedAtMs) / 1000;
   const remaining = Math.max(0, segmentDurationSeconds - calendarElapsed);
 
+  // Distance between playhead and wall clock, relative to schedule — stays
+  // constant while an element plays and is re-confirmed at each element
+  // start. Negative = content is airing ahead of (before) the schedule.
   const drift = calendarElapsed - planConsumedSeconds;
-  const absDrift = Math.abs(drift);
-  const driftCursorColor =
-    absDrift < 5 ? 'bg-green-400' : absDrift < 10 ? 'bg-amber-400' : 'bg-red-400';
+  const severity = driftSeverity(drift);
+  // Cursor grammar (operator spec 2026-07-16): only the playhead is drawn.
+  // Green playhead when drift is in the green band; white playhead plus a
+  // yellow/red arrow pointing toward where the wall clock is otherwise.
+  const playheadColor = severity === 'green' ? 'bg-green-400' : 'bg-white';
+  const arrowColor = severity === 'yellow' ? 'text-amber-400' : 'text-red-400';
+  const showArrow = severity !== 'green';
+  // drift > 0 → wall clock is ahead (to the right of) the playhead.
+  const arrowDir: 'left' | 'right' = drift > 0 ? 'right' : 'left';
 
   const terminalStatuses = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
   const layout = computeTimelineLayout(
@@ -244,8 +260,10 @@ function SegmentTimeline({
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4">
         {/* Header stats */}
         <div className="flex items-center gap-6 mb-3 text-sm text-zinc-400 flex-wrap">
-          <span>
-            <span className="text-zinc-300 font-mono">{fmtMmSs(calendarElapsed)}</span>
+          <span title={calendarElapsed < 0 ? `Scheduled start is in ${fmtMmSs(-calendarElapsed)} — this segment began early` : undefined}>
+            <span className="text-zinc-300 font-mono">
+              {calendarElapsed < 0 ? `−${fmtMmSs(-calendarElapsed)}` : fmtMmSs(calendarElapsed)}
+            </span>
             {' '}elapsed
           </span>
           <span>
@@ -260,11 +278,9 @@ function SegmentTimeline({
             planned{' '}
             <span className="text-zinc-300 font-mono">{fmtMmSs(layout.totalContentSeconds)}</span>
           </span>
-          <span>
+          <span title="Playhead-to-wall-clock distance relative to schedule — constant while an element plays, re-confirmed at each element start">
             drift{' '}
-            <span className={`font-mono font-semibold ${
-              absDrift < 5 ? 'text-green-400' : absDrift < 10 ? 'text-amber-400' : 'text-red-400'
-            }`}>
+            <span className={`font-mono font-semibold ${DRIFT_SEVERITY_TEXT[severity]}`}>
               {fmtDriftSign(drift)}
             </span>
           </span>
@@ -311,14 +327,14 @@ function SegmentTimeline({
               // assembler only ever lets ONE track cross a boundary; an
               // overshoot/early-start "region" spanning several blocks would
               // misrepresent several unrelated tracks as one anomaly).
-              const hoverKey =
-                block.leadHashPctOfBlock > 0 ? 'leading' : block.trailHashPctOfBlock > 0 ? 'trailing' : `content-${i}`;
+              // Hover is per ZONE, not per block: the hashed stretch answers
+              // with the deviation story (still naming the track), the clean
+              // remainder answers with the ordinary clip info.
               return (
                 <div
                   key={i}
                   className="absolute top-1 bottom-1 cursor-default"
                   style={{ left: `${block.leftPct}%`, width: `${Math.max(0.3, block.widthPct)}%` }}
-                  {...hoverHandlers(hoverKey)}
                 >
                   <div
                     className={`absolute inset-0 rounded-sm ${block.barColor} ${block.isTerminal ? 'opacity-30' : 'opacity-70'}`}
@@ -327,6 +343,7 @@ function SegmentTimeline({
                         ? { boxShadow: 'inset -1px 0 0 0 rgba(0,0,0,0.5), inset -2px 0 0 0 rgba(255,255,255,0.08)' }
                         : undefined
                     }
+                    {...hoverHandlers(`content-${i}`)}
                   />
                   {block.leadHashPctOfBlock > 0 && (
                     <div
@@ -336,6 +353,7 @@ function SegmentTimeline({
                         backgroundImage:
                           'repeating-linear-gradient(45deg, rgba(0,0,0,0.35) 0, rgba(0,0,0,0.35) 4px, transparent 4px, transparent 8px)',
                       }}
+                      {...hoverHandlers(`lead-${i}`)}
                     />
                   )}
                   {block.trailHashPctOfBlock > 0 && (
@@ -346,6 +364,7 @@ function SegmentTimeline({
                         backgroundImage:
                           'repeating-linear-gradient(45deg, rgba(0,0,0,0.35) 0, rgba(0,0,0,0.35) 4px, transparent 4px, transparent 8px)',
                       }}
+                      {...hoverHandlers(`trail-${i}`)}
                     />
                   )}
                   {block.isPlaying && (
@@ -354,6 +373,28 @@ function SegmentTimeline({
                 </div>
               );
             })}
+
+            {/* Late start — schedule time consumed before content began. The
+                marker line sits where content actually starts; its distance
+                from the bar's start is exactly how much the segment was
+                shortened by. */}
+            {layout.lateStartSeconds > 0.5 && (
+              <>
+                <div
+                  className="absolute top-0 bottom-0 left-0 cursor-default"
+                  style={{
+                    width: `${layout.lateStartPct}%`,
+                    backgroundImage:
+                      'repeating-linear-gradient(45deg, rgba(113,113,122,0.2) 0, rgba(113,113,122,0.2) 3px, transparent 3px, transparent 9px)',
+                  }}
+                  {...hoverHandlers('late-start')}
+                />
+                <div
+                  className="absolute top-0 bottom-0 w-0.5 bg-zinc-300 opacity-70 z-10 pointer-events-none"
+                  style={{ left: `${layout.contentStartPct}%` }}
+                />
+              </>
+            )}
 
             {/* Gap region — content falls short of nominal. Nothing real ever
                 occupied this stretch, so it's a distinct region, not an overlay. */}
@@ -379,12 +420,28 @@ function SegmentTimeline({
               {...hoverHandlers('boundary')}
             />
 
-            {/* Plan cursor (colored by drift) */}
+            {/* Playhead — the only cursor (operator spec 2026-07-16). Green
+                when drift is in the green band; white with a yellow/red
+                directional arrow pointing toward the wall clock otherwise.
+                The wall clock no longer gets its own cursor — its direction
+                and distance live in the arrow + tooltip. */}
             <div
-              className={`absolute top-0 bottom-0 w-1 -ml-0.5 cursor-default z-20 ${driftCursorColor}`}
+              className={`absolute top-0 bottom-0 w-1.5 -ml-[3px] cursor-default z-20 rounded-full ${playheadColor}`}
               style={{ left: `${planCursorLeft}%` }}
               {...hoverHandlers('plan-cursor')}
             />
+            {showArrow && (
+              <div
+                className={`absolute top-1/2 -translate-y-1/2 z-20 font-bold text-sm leading-none pointer-events-none ${arrowColor}`}
+                style={
+                  arrowDir === 'right'
+                    ? { left: `calc(${planCursorLeft}% + 6px)` }
+                    : { left: `calc(${planCursorLeft}% - 18px)` }
+                }
+              >
+                {arrowDir === 'right' ? '→' : '←'}
+              </div>
+            )}
 
             {/* Expected end of current item */}
             {expectedEndLeft != null && (
@@ -396,27 +453,18 @@ function SegmentTimeline({
                 <div className="absolute inset-y-0 left-1/2 w-px bg-zinc-500 opacity-60" />
               </div>
             )}
-
-            {/* Calendar cursor (white, always on top) */}
-            <div
-              className="absolute top-0 bottom-0 w-1 -ml-0.5 cursor-default z-20"
-              style={{ left: `${calendarCursorLeft}%` }}
-              {...hoverHandlers('wall-clock')}
-            >
-              <div className="absolute inset-y-0 left-1/2 w-0.5 bg-white" />
-            </div>
           </div>
 
           {/* Tooltips — rendered outside the clipped inner div so they never get cut off */}
-          {layout.leadingPct > 0 && (
-            <TimelineTooltip active={hoveredKey === 'leading'} leftPct={layout.leadingPct / 2}>
-              <div className="font-semibold">Started {fmtMmSs(layout.leadingSeconds)} early</div>
-              <div className="text-zinc-400 text-xs mt-0.5">Real content — the previous segment came up short</div>
-            </TimelineTooltip>
-          )}
           <TimelineTooltip active={hoveredKey === 'boundary'} leftPct={layout.nominalEndPct}>
             Nominal length: {fmtMmSs(segmentDurationSeconds)}
           </TimelineTooltip>
+          {layout.lateStartSeconds > 0.5 && (
+            <TimelineTooltip active={hoveredKey === 'late-start'} leftPct={layout.lateStartPct / 2}>
+              <div className="font-semibold">Started {fmtMmSs(layout.lateStartSeconds)} late</div>
+              <div className="text-zinc-400 text-xs mt-0.5">Schedule time consumed before this segment's content began — the segment was shortened by this much</div>
+            </TimelineTooltip>
+          )}
           {layout.contentBlocks.map((block, i) => (
             <TimelineTooltip key={i} active={hoveredKey === `content-${i}`} leftPct={block.leftPct + block.widthPct / 2}>
               <div className="font-semibold">{block.label}</div>
@@ -425,36 +473,54 @@ function SegmentTimeline({
               </div>
             </TimelineTooltip>
           ))}
-          {layout.trailingKind === 'overshoot' && (
-            <TimelineTooltip
-              active={hoveredKey === 'trailing'}
-              leftPct={(layout.nominalEndPct + 100) / 2}
-            >
-              Overshoot: +{fmtMmSs(Math.abs(layout.trailingSeconds))}
-            </TimelineTooltip>
-          )}
+          {layout.contentBlocks.map((block, i) => (
+            block.leadHashPctOfBlock > 0 ? (
+              <TimelineTooltip
+                key={`lead-${i}`}
+                active={hoveredKey === `lead-${i}`}
+                leftPct={block.leftPct + (block.widthPct * block.leadHashPctOfBlock) / 200}
+              >
+                <div className="font-semibold">Started {fmtMmSs(layout.leadingSeconds)} early ({block.label})</div>
+                <div className="text-zinc-400 text-xs mt-0.5">Real content airing before the scheduled start</div>
+              </TimelineTooltip>
+            ) : null
+          ))}
+          {layout.contentBlocks.map((block, i) => (
+            block.trailHashPctOfBlock > 0 ? (
+              <TimelineTooltip
+                key={`trail-${i}`}
+                active={hoveredKey === `trail-${i}`}
+                leftPct={block.leftPct + block.widthPct - (block.widthPct * block.trailHashPctOfBlock) / 200}
+              >
+                <div className="font-semibold">Overshoot by {fmtMmSs(Math.abs(layout.trailingSeconds))} ({block.label})</div>
+                <div className="text-zinc-400 text-xs mt-0.5">Real content extending past the nominal end</div>
+              </TimelineTooltip>
+            ) : null
+          ))}
           {layout.trailingKind === 'gap' && layout.gapPct > 0 && (
             <TimelineTooltip active={hoveredKey === 'trailing'} leftPct={layout.gapLeftPct + layout.gapPct / 2}>
               Gap: {fmtMmSs(Math.abs(layout.trailingSeconds))}
             </TimelineTooltip>
           )}
           <TimelineTooltip active={hoveredKey === 'plan-cursor'} leftPct={planCursorLeft}>
-            Plan position: {fmtMmSs(planConsumedSeconds)}
+            <div className="font-semibold">Playhead: {fmtMmSs(planConsumedSeconds)}</div>
+            <div className="text-zinc-400 text-xs mt-0.5">
+              Wall clock at {calendarCursorLeft >= planCursorLeft ? '→' : '←'} {fmtMmSs(Math.abs(drift))} · drift {fmtDriftSign(drift)}
+            </div>
           </TimelineTooltip>
           {expectedEndLeft != null && (
             <TimelineTooltip active={hoveredKey === 'expected-end'} leftPct={expectedEndLeft}>
               Expected end of current item
             </TimelineTooltip>
           )}
-          <TimelineTooltip active={hoveredKey === 'wall-clock'} leftPct={calendarCursorLeft}>
-            Wall clock: {fmtMmSs(calendarElapsed)} elapsed
-          </TimelineTooltip>
         </div>
 
         {/* Legend */}
         <div className="flex items-center gap-4 mt-2 text-xs text-zinc-500 flex-wrap">
-          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-white inline-block" />wall clock</span>
-          <span className="flex items-center gap-1"><span className={`w-2 h-2 rounded-full ${driftCursorColor} inline-block`} />plan position</span>
+          <span className="flex items-center gap-1"><span className={`w-1 h-3 rounded-full inline-block ${playheadColor}`} />playhead</span>
+          {showArrow && (
+            <span className="flex items-center gap-1"><span className={`font-bold ${arrowColor}`}>{arrowDir === 'right' ? '→' : '←'}</span>wall clock {fmtMmSs(Math.abs(drift))} {arrowDir === 'right' ? 'ahead' : 'behind'}</span>
+          )}
           <span className="flex items-center gap-1"><span className="w-2 h-2 border-l border-dashed border-zinc-400 inline-block" />nominal length</span>
           <span className="flex items-center gap-1"><span className="w-2 h-2 border-2 border-white rounded-sm inline-block" />now playing</span>
         </div>
@@ -550,12 +616,14 @@ function ActivePlanPanel({ items }: { items: SupervisorV2PlanItem[] }) {
 // predicted landing at the next boundary, how the next plan was sized in
 // response, and the per-transition ledger history.
 
-function driftMagnitudeColor(abs: number, thresholds: [number, number] = [30, 100]): string {
-  return abs < thresholds[0] ? 'text-green-400' : abs < thresholds[1] ? 'text-amber-400' : 'text-red-400';
+// Severity bands (operator-defined): green ≤120s, yellow 121–600s, red >600s.
+function driftMagnitudeColor(abs: number): string {
+  return DRIFT_SEVERITY_TEXT[driftSeverity(abs)];
 }
 
 function driftBarColor(abs: number): string {
-  return abs < 30 ? 'bg-green-500/70' : abs < 100 ? 'bg-amber-500/70' : 'bg-red-500/70';
+  const sev = driftSeverity(abs);
+  return sev === 'green' ? 'bg-green-500/70' : sev === 'yellow' ? 'bg-amber-500/70' : 'bg-red-500/70';
 }
 
 function DriftLedgerChart({ entries }: { entries: SupervisorV2DriftLedgerEntry[] }) {
@@ -616,6 +684,7 @@ function DriftRecoveryPanel({
   });
 
   const abs = Math.abs(liveDriftSeconds);
+  const currentSeverity = driftSeverity(liveDriftSeconds);
   const hb = heartbeatStatus(lastHeartbeatAt);
 
   const predicted = predictedBoundaryLatenessSeconds;
@@ -630,17 +699,19 @@ function DriftRecoveryPanel({
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-5 space-y-5">
         <div className="flex flex-wrap items-start gap-8">
           <div>
-            <p className="text-xs text-zinc-400 mb-1">Current drift</p>
-            <p className={`text-3xl font-bold font-mono ${driftMagnitudeColor(abs, [5, 10])}`}>
+            <p className="text-xs text-zinc-400 mb-1" title="Playhead-to-wall-clock distance relative to schedule — constant while an element plays, re-confirmed each time a new element starts">
+              Current drift
+            </p>
+            <p className={`text-3xl font-bold font-mono ${driftMagnitudeColor(abs)}`}>
               {fmtDriftSign(liveDriftSeconds)}
             </p>
             <p className="text-xs text-zinc-400 mt-1">
-              {abs < 5 ? 'On time' : abs < 10 ? 'Minor drift' : 'Significant drift'}
+              {currentSeverity === 'green' ? (abs < 5 ? 'On time' : liveDriftSeconds < 0 ? 'Running early' : 'Running late') : currentSeverity === 'yellow' ? 'Drifting' : 'Heavy drift'}
             </p>
           </div>
           <div className="border-l border-zinc-800 pl-8">
-            <p className="text-xs text-zinc-400 mb-1" title="When the active plan's remaining content runs out vs when its segment is scheduled to end — what the next plan's sizing responds to">
-              Predicted landing at boundary
+            <p className="text-xs text-zinc-400 mb-1" title="The drift the next plan will start with — when this plan's remaining content actually runs out vs when the next segment is scheduled to begin. This is what the next plan's sizing responds to.">
+              Next plan starts (predicted)
             </p>
             <p className={`text-3xl font-bold font-mono ${predictedColor}`}>
               {predicted == null ? '—' : fmtDriftSign(predicted)}
@@ -1061,14 +1132,17 @@ export function SupervisorPage() {
     refetchInterval: 3000,
   });
 
-  // Compute live drift: how many seconds the wall clock is ahead of audio consumption.
-  // This is the meaningful "on-time?" metric for an operator. current_drift_seconds is
-  // an internal planner value (boundary offset) and should not drive operator-facing UI.
+  // Live drift: playhead-to-wall-clock distance relative to schedule. Stays
+  // constant while an element plays; re-confirmed at each element start.
+  // Elapsed is deliberately NOT clamped to 0 — when a plan starts before its
+  // scheduled start, clamping froze one side of the subtraction while the
+  // other advanced, making this figure count up 1s/s through the early-start
+  // window (the "constantly incrementing drift" bug, fixed 2026-07-16).
   const liveDriftSeconds = (() => {
     const startMs = data?.segment_started_at_ms;
     const consumed = data?.plan_consumed_seconds ?? 0;
     if (startMs == null) return 0;
-    const elapsed = Math.max(0, (Date.now() - startMs) / 1000);
+    const elapsed = (Date.now() - startMs) / 1000;
     return elapsed - consumed;
   })();
 

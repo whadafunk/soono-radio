@@ -135,9 +135,18 @@ export interface TimelineLayout {
   // itself lives on whichever content block(s) it overlaps.
   leadingPct: number;
   leadingSeconds: number;
-  // Reference positions marking the segment's nominal/configured length on
-  // this bar's real-seconds scale. nominalStartPct is always equal to
-  // leadingPct (kept as its own name for clarity at call sites).
+  // Late start (boundary drift > 0): schedule time that passed before this
+  // segment's content actually began. Rendered as an empty dark region at
+  // the front of the scheduled window with a marker line where content
+  // starts — the distance from bar start to that line is exactly how much
+  // the segment was shortened by.
+  lateStartPct: number;
+  lateStartSeconds: number;
+  // Where real content begins on the bar (0 unless late start).
+  contentStartPct: number;
+  // Reference positions marking the segment's nominal/configured window on
+  // this bar's real-seconds scale. nominalStartPct equals leadingPct in the
+  // early-start case and 0 in the late-start case.
   nominalStartPct: number;
   nominalEndPct: number;
   contentBlocks: TimelineContentBlock[];
@@ -152,9 +161,11 @@ export interface TimelineLayout {
   trailingSeconds: number;
   totalContentSeconds: number;
   // Position a plan-consumed-seconds value (measured from the real start of
-  // content, position 0) onto the bar.
+  // content) onto the bar.
   planPositionToPct: (planConsumedSeconds: number) => number;
-  // Position a wall-clock-elapsed-since-nominal-start value onto the bar.
+  // Position a wall-clock-elapsed-since-scheduled-start value onto the bar.
+  // Negative elapsed (wall clock hasn't reached the scheduled start yet —
+  // the early-start window) is valid and lands before nominalStartPct.
   wallClockToPct: (calendarElapsedSeconds: number) => number;
 }
 
@@ -163,33 +174,43 @@ export function computeTimelineLayout(
   boundaryDriftSeconds: number,
   items: TimelineContentInput[],
 ): TimelineLayout {
+  // Two anchor points on one seconds scale, whichever is earlier at 0:
+  //   early start (drift < 0): content at 0, scheduled start after it.
+  //   late start (drift > 0): scheduled start at 0, content after it.
   const leadingSeconds = boundaryDriftSeconds < 0 ? -boundaryDriftSeconds : 0;
+  const lateStartSeconds = boundaryDriftSeconds > 0 ? boundaryDriftSeconds : 0;
+  const contentStartSeconds = lateStartSeconds;
+  const scheduledStartSeconds = leadingSeconds;
+
   const totalContentSeconds = items.reduce((sum, it) => sum + it.durationSeconds, 0);
 
-  const nominalEndSeconds = leadingSeconds + nominalDurationSeconds;
+  const nominalEndSeconds = scheduledStartSeconds + nominalDurationSeconds;
   // Derived from real, always-consistent data — never from planned_
   // overshoot_seconds (see module header comment for why).
-  const trailingSeconds = totalContentSeconds - nominalEndSeconds;
+  const trailingSeconds = contentStartSeconds + totalContentSeconds - nominalEndSeconds;
   const trailingKind: 'gap' | 'overshoot' | null =
     trailingSeconds === 0 ? null : trailingSeconds > 0 ? 'overshoot' : 'gap';
 
   // At least one of these two is always the true extent of the bar — real
   // content when overshooting, the nominal reference when it falls short
   // (so there's still room to draw the Gap region and the reference line).
-  const containerTotalSeconds = Math.max(totalContentSeconds, nominalEndSeconds, 1);
+  const containerTotalSeconds = Math.max(contentStartSeconds + totalContentSeconds, nominalEndSeconds, 1);
 
   const pct = (seconds: number): number => (seconds / containerTotalSeconds) * 100;
 
   const leadingPct = pct(leadingSeconds);
+  const lateStartPct = pct(lateStartSeconds);
+  const contentStartPct = pct(contentStartSeconds);
+  const nominalStartPct = pct(scheduledStartSeconds);
   const nominalEndPct = pct(nominalEndSeconds);
-  const contentEndPct = pct(totalContentSeconds);
+  const contentEndPct = pct(contentStartSeconds + totalContentSeconds);
 
-  let cursor = 0;
+  let cursor = contentStartPct;
   const contentBlocks: TimelineContentBlock[] = items.map((item) => {
     const widthPct = pct(item.durationSeconds);
     const blockStart = cursor;
     const blockEnd = cursor + widthPct;
-    const leadOverlapPct = Math.max(0, Math.min(blockEnd, leadingPct) - blockStart);
+    const leadOverlapPct = Math.max(0, Math.min(blockEnd, nominalStartPct) - blockStart);
     const trailOverlapPct = Math.max(0, blockEnd - Math.max(blockStart, nominalEndPct));
     const block: TimelineContentBlock = {
       ...item,
@@ -205,15 +226,18 @@ export function computeTimelineLayout(
   const gapPct = trailingKind === 'gap' ? Math.max(0, nominalEndPct - contentEndPct) : 0;
 
   const planPositionToPct = (planConsumedSeconds: number): number =>
-    pct(Math.min(Math.max(0, planConsumedSeconds), totalContentSeconds));
+    pct(contentStartSeconds + Math.min(Math.max(0, planConsumedSeconds), totalContentSeconds));
 
   const wallClockToPct = (calendarElapsedSeconds: number): number =>
-    pct(leadingSeconds + Math.max(0, calendarElapsedSeconds));
+    pct(Math.max(0, scheduledStartSeconds + calendarElapsedSeconds));
 
   return {
     leadingPct,
     leadingSeconds,
-    nominalStartPct: leadingPct,
+    lateStartPct,
+    lateStartSeconds,
+    contentStartPct,
+    nominalStartPct,
     nominalEndPct,
     contentBlocks,
     contentEndPct,
@@ -226,6 +250,21 @@ export function computeTimelineLayout(
     wallClockToPct,
   };
 }
+
+// ─── Drift severity (operator-defined intervals, 2026-07-16) ─────────────────
+// green: |drift| ≤ 120s · yellow: 121–600s · red: > 600s
+export type DriftSeverity = 'green' | 'yellow' | 'red';
+
+export function driftSeverity(driftSeconds: number): DriftSeverity {
+  const abs = Math.abs(driftSeconds);
+  return abs <= 120 ? 'green' : abs <= 600 ? 'yellow' : 'red';
+}
+
+export const DRIFT_SEVERITY_TEXT: Record<DriftSeverity, string> = {
+  green: 'text-green-400',
+  yellow: 'text-amber-400',
+  red: 'text-red-400',
+};
 
 export function heartbeatStatus(lastHeartbeatAt: number | null): { label: string; cls: string; dotCls: string } {
   const heartbeatAgo = lastHeartbeatAt ? Math.floor((Date.now() - lastHeartbeatAt) / 1000) : null;
