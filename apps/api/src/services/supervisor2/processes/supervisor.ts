@@ -353,8 +353,15 @@ export class SupervisorProcess {
   // Tracks which part of tick() is executing for richer TICK_FAILED logs (B4).
   private tickOperation = 'init';
 
-  // ── Silence alert (Phase F, D79 escalation) ──────────────────────────────────
-  private lastPushSentMs = Date.now();
+  // ── Silence alert (Phase F, D79 escalation; rekeyed 2026-07-16) ─────────────
+  // Last moment audio was POSITIVELY confirmed: LiquidSoap's /now-playing
+  // reported a current track (checked every reality-check cycle), or an
+  // LS_TRACK_STARTED webhook landed. The alert used to key off "time since
+  // the last PUSH" — but pushes happen roughly once per track, so every
+  // track longer than the 30s threshold tripped it: 500-1,400 false alerts
+  // per day for 10+ days, drowning the one real signal this alert exists
+  // for. Ground truth, not bookkeeping (same principle as D82/D89).
+  private lastAudioConfirmedMs = Date.now();
   // D79: replaces the old one-shot silenceAlertFired boolean — tracks when the
   // alert last fired so it can re-fire (escalating) while the stall persists,
   // instead of latching silent after the first occurrence.
@@ -490,7 +497,9 @@ export class SupervisorProcess {
         void this.maybePromoteToTransitioning(msg).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PUSH_SENT_TRANSITIONING' }, 'supervisor: transitioning-promotion check failed');
         });
-        this.lastPushSentMs = Date.now();
+        // A push isn't proof of audio (that's lastAudioConfirmedMs's job),
+        // but it IS forward progress — clear any standing alert latch so a
+        // recovery is followed by a fresh alert window, not a stale repeat.
         this.lastSilenceAlertMs = null;
       }),
     );
@@ -781,6 +790,11 @@ export class SupervisorProcess {
     }
     if (nowPlaying) {
       await this.checkLsPid(nowPlaying.ls_pid, nowMs);
+      // Ground-truth audio confirmation for the silence alert: LiquidSoap
+      // itself says something is on air right now.
+      if (nowPlaying.current != null) {
+        this.lastAudioConfirmedMs = nowMs;
+      }
     }
 
     this.tickOperation = 'segment_resolve';
@@ -900,12 +914,16 @@ export class SupervisorProcess {
     this.tickOperation = 'transitioning_check';
     await this.maybeInvalidateStuckTransition(nowMs);
 
-    // ── Silence alert (Phase F, D79 escalation) ────────────────────────────
-    // Re-fires every SILENCE_ALERT_REPEAT_MS while the stall persists, instead
-    // of latching silent after the first occurrence — a sustained incident
-    // previously produced exactly one log line about it, then nothing.
-    // Escalates warn -> error past SILENCE_ALERT_ESCALATE_S.
-    const stallSeconds = (nowMs - this.lastPushSentMs) / 1000;
+    // ── Silence alert (Phase F, D79 escalation; rekeyed 2026-07-16) ────────
+    // Fires on GROUND-TRUTH silence: LiquidSoap hasn't confirmed anything on
+    // air (via /now-playing above, checked every cycle, or a track-started
+    // webhook) for the threshold. The old push-cadence trigger fired on
+    // every track longer than 30s — 500-1,400 false alerts/day. A failing
+    // /now-playing check also (correctly) lets this grow: 30s+ of being
+    // unable to confirm audio is alarm-worthy either way.
+    // Re-fires every SILENCE_ALERT_REPEAT_MS while the stall persists;
+    // escalates warn -> error past SILENCE_ALERT_ESCALATE_S.
+    const stallSeconds = (nowMs - this.lastAudioConfirmedMs) / 1000;
     if (
       stallSeconds > SILENCE_ALERT_THRESHOLD_S &&
       (this.lastSilenceAlertMs == null || nowMs - this.lastSilenceAlertMs >= SILENCE_ALERT_REPEAT_MS)
@@ -917,9 +935,10 @@ export class SupervisorProcess {
         stall_duration_seconds: Math.floor(stallSeconds),
         active_plan_id: this.activePlanId,
         current_play_history_id: this.currentPlayHistoryId,
+        queue_depth: nowPlaying?.queue_depth ?? null,
         still_open_wait_seconds: this.stillOpenWaitSince != null ? Math.round((nowMs - this.stillOpenWaitSince) / 1000) : null,
         playhead_confidence: playheadConfidence,
-      }, `supervisor: no push sent for ${Math.floor(stallSeconds)}s — station may be silent`);
+      }, `supervisor: no audio confirmed for ${Math.floor(stallSeconds)}s — station may be silent`);
     }
 
     // ── Push timing ─────────────────────────────────────────────────────────
@@ -1644,6 +1663,9 @@ export class SupervisorProcess {
 
   private async handleTrackStarted(msg: BusMessage & { type: 'LS_TRACK_STARTED' }): Promise<void> {
     await this.checkLsPid(msg.ls_pid, Date.now());
+    // Webhook-grade audio confirmation for the silence alert — same fact the
+    // reality check's /now-playing poll establishes, just event-driven.
+    this.lastAudioConfirmedMs = Date.now();
 
     const onAirMs = Math.floor(msg.on_air_timestamp * 1000);
 
