@@ -7,3 +7,4 @@ export * from './schemas/playlists.js';
 export * from './schemas/integrations.js';
 export * from './schemas/activity.js';
 export * from './schemas/logs.js';
+export * from './schemas/maintenance.js';

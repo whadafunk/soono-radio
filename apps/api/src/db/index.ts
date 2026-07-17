@@ -18,6 +18,8 @@ const MIGRATIONS_FOLDER =
 const client = createClient({ url: `file:${DB_PATH}` });
 
 export const db = drizzle(client, { schema });
+// For maintenance/stats endpoints that report the DB file's on-disk size.
+export const dbFilePath = DB_PATH;
 
 export async function runMigrations(): Promise<void> {
   await migrate(db, { migrationsFolder: MIGRATIONS_FOLDER });

@@ -30,6 +30,8 @@ import { stationSettingsRoutes } from './routes/stationSettings.js';
 import { supervisorStatusRoutes } from './routes/supervisorStatus.js';
 import { supervisorControlRoutes } from './routes/supervisorControl.js';
 import { logsRoutes } from './routes/logs.js';
+import { maintenanceRoutes } from './routes/maintenance.js';
+import { startDbRetentionSweep } from './services/maintenance/dbRetention.js';
 import { createRotatingLogStream } from './services/logging/rotatingLog.js';
 import { startExternalLogSweep } from './services/logging/externalLogSweep.js';
 import {
@@ -119,6 +121,7 @@ fastify.register(stationSettingsRoutes);
 fastify.register(supervisorStatusRoutes);
 fastify.register(supervisorControlRoutes);
 fastify.register(logsRoutes);
+fastify.register(maintenanceRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Soono API' };
@@ -226,6 +229,11 @@ const start = async () => {
       ],
       supervisorLog,
     );
+
+    // Nightly database retention sweep (terminal plans + operational records
+    // past retention; hard floor at the previous month's start — see
+    // services/maintenance/dbRetention.ts for what it never touches).
+    startDbRetentionSweep(supervisorLog);
 
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
 

@@ -43,6 +43,11 @@ import {
   LogSettingsSchema,
   SupervisorV2PlanStory,
   SupervisorV2PlanStorySchema,
+  DbStats,
+  DbStatsSchema,
+  DbSweepResult,
+  DbSweepResultSchema,
+  MaintenanceSettings,
 } from '@soono/shared';
 
 const API_BASE = '/api';
@@ -1429,4 +1434,32 @@ export async function fetchSupervisorV2PlanStory(planId: number): Promise<Superv
     throw new Error((body as { error?: string }).error ?? `Failed to fetch plan story: ${res.statusText}`);
   }
   return SupervisorV2PlanStorySchema.parse(await res.json());
+}
+
+export async function fetchDbStats(): Promise<DbStats> {
+  const res = await fetch(`${API_BASE}/maintenance/db-stats`);
+  if (!res.ok) throw new Error(`Failed to fetch database stats: ${res.statusText}`);
+  return DbStatsSchema.parse(await res.json());
+}
+
+export async function updateMaintenanceSettings(settings: MaintenanceSettings): Promise<MaintenanceSettings> {
+  const res = await fetch(`${API_BASE}/maintenance/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Save failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function runDbSweep(): Promise<DbSweepResult> {
+  const res = await fetch(`${API_BASE}/maintenance/db-sweep`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Sweep failed: ${res.statusText}`);
+  }
+  return DbSweepResultSchema.parse(await res.json());
 }

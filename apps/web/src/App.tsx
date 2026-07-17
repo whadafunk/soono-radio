@@ -10,7 +10,7 @@ import { LiquidSoapSettings } from './pages/settings/LiquidSoapSettings';
 import { SupervisorSettings } from './pages/settings/SupervisorSettings';
 import { IntegrationsSettings } from './pages/settings/IntegrationsSettings';
 import { SchedulingSettings } from './pages/settings/SchedulingSettings';
-import { LogsSettings } from './pages/settings/LogsSettings';
+import { MaintenanceSettings } from './pages/settings/MaintenanceSettings';
 import { LibraryLayout } from './pages/library/LibraryLayout';
 import { LibraryBrowse } from './pages/library/LibraryBrowse';
 import { LibraryUpload } from './pages/library/LibraryUpload';
@@ -45,7 +45,7 @@ export function App() {
               <Route path="supervisor" element={<SupervisorSettings />} />
               <Route path="integrations" element={<IntegrationsSettings />} />
               <Route path="scheduling" element={<SchedulingSettings />} />
-              <Route path="logs" element={<LogsSettings />} />
+              <Route path="maintenance" element={<MaintenanceSettings />} />
             </Route>
             <Route path="/library" element={<LibraryLayout />}>
               <Route index element={<LibraryBrowse />} />
