@@ -2633,6 +2633,22 @@ On reinstating the correction as a bar region: the 2026-07-15 round rejected it 
 
 ---
 
+### Decision 102 — Execution-layer race hardening: stale-snapshot guard, confirmed-row close, dropped-item walk, plausible queue count, bus drop detection
+
+**Status: decided & implemented 2026-07-18. Closes robustness item 4 from the 2026-07-16 audit. Every fix reproduced/verified by direct test before shipping.**
+
+1. **Reassembly swap guarded against the feeder (finalize + replan).** Both build-then-swap sites snapshot pending items, assemble (a second or two of content-process round-trips), then delete by snapshot id. The feeder — 500ms tick + LS track-ending trigger, and by D44 entitled to feed from the next plan — can promote a snapshotted item to 'playing' inside that window; the swap then deleted a row whose audio was airing/queued, and the new content double-filled its slot. Fix, two layers: (a) after assembly, re-check that every snapshot row is still 'pending' — if not, discard the build (free: assembly has no side effects, D11/D98) and throw; the D98 failure event unlatches the guard and the retry nets the escaped item as committed content via the existing D67 logic — no new reconciliation code. (b) The DELETE itself is status-guarded (`AND status='pending'`) with a rowsAffected check, so even a push landing between re-check and delete preserves the airing row (cost: ~one item of overshoot, absorbed by drift). Reproduced deterministically (stubbed assembly promoting an item mid-build): guard threw, plan intact.
+
+2. **`closeMostRecentOpenRow` closes only CONFIRMED rows.** Normal queue-ahead leaves two open play_history rows: the airing one (confirmed) and the pre-queued next item (unconfirmed placeholder). When a non-annotated track started (live/manual/safety fill), "close the newest open row" hit the pre-queued one — a track that never aired got an ended_at and its item flipped to 'played' (rotation pollution), while the airing row stayed open forever (a permanently stuck 'playing' item). Confirmed-only closes the airing row; the placeholder stays open for its own confirmation.
+
+3. **Playhead walk steps over 'dropped' without credit.** The consumed-time walk stopped at the first non-terminal, non-playing status — 'dropped' (which the feeder itself produces on missing media) froze the playhead at that position forever while later items aired. Not fixed by adding 'dropped' to the terminal set: it aired zero seconds, so crediting its planned duration would corrupt drift. The walk now `continue`s past it. Same correction in the restart-hydration walk (which had the opposite flaw: crediting dropped durations).
+
+4. **Queue-cap DB fallback counts only plausible occupants.** When the /now-playing ground-truth check fails (the only time the fallback runs — i.e. while LS is already unhealthy), the fallback counted every 'playing' row; a stuck row (bug 2's product) read as "queue full" forever, wedging the feeder into silence at the worst moment. The count now requires: play_history open, and either unconfirmed (queued, waiting) or confirmed with now < started + planned duration + 120s grace. Verified: two fabricated stuck rows + stubbed harbor outage — feeder proceeded to push.
+
+5. **Bus detects silently dropped messages.** EventEmitter emits with zero listeners vanish — no error, no trace. Today every type has a subscriber only because boot starts all processes before the HTTP server listens; a crashed subscriber or future reorder would swallow messages invisibly. `bus.emit` now warns (BUS_NO_SUBSCRIBER, rate-limited 10s per type) via the supervisor logger. Deliberately warn-not-fail: severity depends on the message type, and consumers' own watchdogs handle recovery.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

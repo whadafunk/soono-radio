@@ -15,13 +15,14 @@
 // the Supervisor. When there is nothing to push the feeder logs QUEUE_STALL
 // and exits; the Supervisor's next tick resolves it.
 
-import { and, asc, count, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
 import {
   media as mediaTable,
   planItems as planItemsTable,
+  playHistory as playHistoryTable,
   supervisorState as supervisorStateTable,
   type Media,
   type PlanItem,
@@ -142,11 +143,33 @@ export class QueueFeederProcess {
       this.logger?.warn({ process: 'queueFeeder', event: 'NOW_PLAYING_CHECK_FAILED', err: String(err) }, 'queueFeeder: /now-playing check failed, falling back to DB count for queue cap');
       const planIdsToCap = [activePlanId, nextPlanId].filter((id): id is number => id != null);
       if (planIdsToCap.length > 0) {
-        const [countRow] = await this.db
-          .select({ c: count() })
+        // Count only 'playing' rows that can PLAUSIBLY still occupy the
+        // physical queue: play_history open, and either not yet confirmed
+        // (queued, waiting to start) or confirmed with the clock still
+        // inside its planned duration + grace. A row stuck at 'playing'
+        // forever (an unclosed diary entry from a past incident) would
+        // otherwise read as "queue full" for the rest of time — wedging the
+        // feeder into silence exactly while LS is already unreachable, the
+        // only time this fallback runs.
+        const rows = await this.db
+          .select({
+            planned_duration_seconds: planItemsTable.planned_duration_seconds,
+            ph_started_at: playHistoryTable.started_at,
+            ph_ended_at: playHistoryTable.ended_at,
+            ph_confirmed: playHistoryTable.confirmed,
+          })
           .from(planItemsTable)
+          .leftJoin(playHistoryTable, eq(playHistoryTable.id, planItemsTable.play_history_id))
           .where(and(inArray(planItemsTable.plan_id, planIdsToCap), eq(planItemsTable.status, 'playing')));
-        physicalQueueDepth = countRow?.c ?? 0;
+        const nowMs = Date.now();
+        const STALE_GRACE_MS = 120_000;
+        physicalQueueDepth = rows.filter((r) => {
+          if (r.ph_started_at == null) return false; // no play_history at all — corrupt link, can't be queued
+          if (r.ph_ended_at != null) return false; // already finished
+          if (!r.ph_confirmed) return true; // pushed, not yet started — occupies a queue slot
+          const startedMs = new Date(r.ph_started_at).getTime();
+          return nowMs < startedMs + (r.planned_duration_seconds ?? 0) * 1_000 + STALE_GRACE_MS;
+        }).length;
       }
     }
     if (physicalQueueDepth != null && physicalQueueDepth >= 2) {

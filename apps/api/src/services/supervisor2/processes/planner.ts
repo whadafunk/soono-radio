@@ -520,6 +520,11 @@ export class PlannerProcess {
         showCtx,
       );
 
+      // The feeder runs on its own triggers and can promote a snapshotted
+      // item to 'playing' while assembly was in flight — swap only against a
+      // world that hasn't moved.
+      await this.assertSnapshotStillPending(planId, pendingItems.map((it) => it.id), 'finalize');
+
       // ── Swap: only now do the old pending items get released and removed ──
       const dropMusic: number[] = [];
       const dropBranding: number[] = [];
@@ -544,9 +549,7 @@ export class PlannerProcess {
       if (dropRundown.length > 0) this.emitDrop('rundown', dropRundown);
 
       if (pendingItems.length > 0) {
-        await this.db
-          .delete(planItemsTable)
-          .where(inArray(planItemsTable.id, pendingItems.map((it) => it.id)));
+        await this.deleteSnapshotRows(planId, pendingItems.map((it) => it.id), 'finalize');
       }
 
       await this.persistPlanItems(planId, result.items);
@@ -662,6 +665,70 @@ export class PlannerProcess {
   // content processes that those items are no longer committed, then runs the
   // segment-type assembler against `remainingSeconds` and re-inserts new
   // pending items starting from `fromPosition`.
+  // Robustness guard for both build-then-swap sites (finalize full
+  // reassembly, mid-flight replan). The Queue Feeder runs on its own triggers
+  // (500ms tick + LS track-ending webhook) and can promote a snapshotted
+  // 'pending' item to 'playing' while assembly is in flight; the swap would
+  // then delete a row whose audio is airing or queued in LS, and the fresh
+  // content double-fills its slot. Assembly has no side effects (D11/D98),
+  // so the cheapest correct move is to discard the build and fail the
+  // request: the D98 failure event unlatches the Supervisor's guard, the
+  // retry re-runs against fresh state, and the escaped item is netted out
+  // as committed content like any other 'playing' row (D67).
+  private async assertSnapshotStillPending(
+    planId: number,
+    snapshotIds: number[],
+    context: 'finalize' | 'replan',
+  ): Promise<void> {
+    if (snapshotIds.length === 0) return;
+    const stillPending = await this.db
+      .select({ id: planItemsTable.id })
+      .from(planItemsTable)
+      .where(and(inArray(planItemsTable.id, snapshotIds), eq(planItemsTable.status, 'pending')));
+    if (stillPending.length !== snapshotIds.length) {
+      this.logger?.warn(
+        {
+          event: 'PLAN_REASSEMBLY_STALE_SNAPSHOT',
+          plan_id: planId,
+          context,
+          snapshot_count: snapshotIds.length,
+          still_pending: stillPending.length,
+        },
+        'planner: items changed state during reassembly — build discarded; the retry nets the committed item',
+      );
+      throw new Error(`planner: plan ${planId} items changed state during ${context} reassembly`);
+    }
+  }
+
+  // Second layer under the guard above: even after the re-check passes, a
+  // push can land in the microseconds before this DELETE executes — so the
+  // DELETE itself only removes rows still 'pending'. A shortfall means an
+  // item escaped in that window: its airing row is preserved (the point),
+  // at the cost of the new content double-filling its slot (~one item of
+  // overshoot the drift machinery absorbs).
+  private async deleteSnapshotRows(
+    planId: number,
+    snapshotIds: number[],
+    context: 'finalize' | 'replan',
+  ): Promise<void> {
+    const deleted = await this.db
+      .delete(planItemsTable)
+      .where(and(inArray(planItemsTable.id, snapshotIds), eq(planItemsTable.status, 'pending')));
+    const deletedCount = deleted.rowsAffected ?? snapshotIds.length;
+    if (deletedCount !== snapshotIds.length) {
+      this.logger?.error(
+        {
+          event: 'PLAN_REASSEMBLY_SWAP_RACE',
+          plan_id: planId,
+          context,
+          expected: snapshotIds.length,
+          deleted: deletedCount,
+        },
+        'planner: item escaped between re-check and delete — airing row preserved; slot double-filled',
+      );
+    }
+  }
+
   async replanRemaining(
     planId: number,
     fromPosition: number,
@@ -729,6 +796,10 @@ export class PlannerProcess {
       showCtx,
     );
 
+    // Same stale-snapshot guard as finalize — the feeder can promote a
+    // snapshotted tail item to 'playing' while assembly runs.
+    await this.assertSnapshotStillPending(planId, dropping.map((it) => it.id), 'replan');
+
     // ── Swap: release and remove the superseded tail, then insert the new ──
     const dropMusic: number[] = [];
     const dropBranding: number[] = [];
@@ -761,9 +832,7 @@ export class PlannerProcess {
     if (dropRundown.length > 0) this.emitDrop('rundown', dropRundown);
 
     if (dropping.length > 0) {
-      await this.db
-        .delete(planItemsTable)
-        .where(inArray(planItemsTable.id, dropping.map((it) => it.id)));
+      await this.deleteSnapshotRows(planId, dropping.map((it) => it.id), 'replan');
     }
 
     // Re-insert from fromPosition.

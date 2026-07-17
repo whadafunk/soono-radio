@@ -595,9 +595,10 @@ export class SupervisorProcess {
           .from(planItemsTable)
           .where(eq(planItemsTable.plan_id, this.activePlanId))
           .orderBy(asc(planItemsTable.position));
-        const terminal = new Set(['played', 'supervisor_skipped', 'operator_skipped', 'dropped']);
+        const terminal = new Set(['played', 'supervisor_skipped', 'operator_skipped']);
         let consumedMs = 0;
         for (const item of items) {
+          if (item.status === 'dropped') continue; // aired zero seconds — step over without credit
           if (terminal.has(item.status)) {
             consumedMs += (item.planned_duration_seconds ?? 0) * 1_000;
           } else {

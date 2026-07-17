@@ -123,6 +123,12 @@ async function consumedSecondsForPlan(
   for (const item of items) {
     if (TERMINAL_STATUSES.has(item.status)) {
       consumedSeconds += item.planned_duration_seconds ?? 0;
+    } else if (item.status === 'dropped') {
+      // A dropped item aired zero seconds. It must neither stop the walk
+      // (that froze the playhead at the dropped position forever while
+      // later items actually aired) nor credit its planned duration
+      // (unaired time counted as consumed would corrupt drift). Step over.
+      continue;
     } else if (item.status === 'playing') {
       if (item.play_history_id != null) {
         const [ph] = await db

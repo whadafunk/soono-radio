@@ -260,8 +260,41 @@ const emitter = new EventEmitter();
 // development when many process modules subscribe at once.
 emitter.setMaxListeners(50);
 
+// An EventEmitter emit with zero listeners is dropped with no error, no log,
+// no counter — today every message type has a subscriber because the boot
+// sequence starts all processes before the HTTP server listens, but that's
+// safety by ordering accident: a crashed/stopped process or a future boot
+// reorder would silently swallow messages. Warn (rate-limited per type so a
+// dead subscriber of a hot message like the 500ms tick doesn't flood the
+// log) instead of failing — a dropped message's severity depends on the
+// type, and the consumers' own watchdogs handle recovery.
+interface BusWarnLogger {
+  warn(obj: Record<string, unknown>, msg: string): void;
+}
+let busLogger: BusWarnLogger | null = null;
+export function setBusLogger(logger: BusWarnLogger): void {
+  busLogger = logger;
+}
+const lastNoSubscriberWarnAt = new Map<string, number>();
+const NO_SUBSCRIBER_WARN_INTERVAL_MS = 10_000;
+
 export const bus = {
   emit<T extends BusMessage>(msg: T): void {
+    if (emitter.listenerCount(msg.type) === 0) {
+      const now = Date.now();
+      const last = lastNoSubscriberWarnAt.get(msg.type) ?? 0;
+      if (now - last >= NO_SUBSCRIBER_WARN_INTERVAL_MS) {
+        lastNoSubscriberWarnAt.set(msg.type, now);
+        if (busLogger) {
+          busLogger.warn(
+            { process: 'bus', event: 'BUS_NO_SUBSCRIBER', message_type: msg.type },
+            'bus: message emitted with no subscriber — silently dropped',
+          );
+        } else {
+          console.warn(`[bus] message '${msg.type}' emitted with no subscriber — silently dropped`);
+        }
+      }
+    }
     emitter.emit(msg.type, msg);
   },
 

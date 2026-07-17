@@ -148,9 +148,18 @@ export async function closeOpenRowsBefore(
     );
 }
 
-// Closes the single most recent open row regardless of id ordering — used
-// when LS_TRACK_STARTED carries no play_history_id (manual / live / safety
-// fill) but a previous auto play_history row is still open.
+// Closes the single most recent open CONFIRMED row — used when
+// LS_TRACK_STARTED carries no play_history_id (manual / live / safety fill)
+// but a previous auto play_history row is still open.
+//
+// Confirmed-only is load-bearing: during normal queue-ahead there are TWO
+// open rows — the airing one (confirmed) and the pre-queued next item
+// (unconfirmed placeholder, still sitting in LS's queue). Closing "the
+// newest open row" used to hit the pre-queued one: a track that never aired
+// got an ended_at (and its plan_item flipped to 'played' by the caller,
+// polluting rotation history), while the genuinely-airing row stayed open
+// forever — a permanently stuck 'playing' item. The unconfirmed row must be
+// left open: its track is still queued and will get its own confirmation.
 export async function closeMostRecentOpenRow(
   db: typeof defaultDb,
   endedAtMs: number,
@@ -158,7 +167,7 @@ export async function closeMostRecentOpenRow(
   const rows = await db
     .select({ id: playHistoryTable.id })
     .from(playHistoryTable)
-    .where(isNull(playHistoryTable.ended_at))
+    .where(and(isNull(playHistoryTable.ended_at), eq(playHistoryTable.confirmed, true)))
     .orderBy(playHistoryTable.id);
   const last = rows[rows.length - 1];
   if (!last) return null;

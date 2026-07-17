@@ -50,7 +50,7 @@ import { loadIntegrationsConfig } from './services/integrations/config.js';
 import { generateRadioLiq, readLiquidsoapConfig, readRadioLiq } from './services/liquidsoapConfig.js';
 import { ensureIcecastConfig } from './services/icecastConfig.js';
 import { startPeakTracker } from './services/icecastPeakTracker.js';
-import { bus } from './services/supervisor2/bus.js';
+import { bus, setBusLogger } from './services/supervisor2/bus.js';
 import { createSupervisorLogger, withProcess } from './services/supervisor2/supervisorLogger.js';
 import { MusicProcess } from './services/supervisor2/processes/music.js';
 import { CampaignProcess } from './services/supervisor2/processes/campaign.js';
@@ -190,6 +190,8 @@ const start = async () => {
     // Create a dedicated supervisor logger — writes to logs/supervisor.log so
     // supervisor events are separated from HTTP noise in logs/api.log.
     const supervisorLog = createSupervisorLogger(LOG_DIR);
+    // Let the bus report zero-listener emits (silently dropped messages).
+    setBusLogger(supervisorLog);
 
     // Instantiate and start all seven Supervisor V2 processes (Level 1 — all
     // share this Node.js process, communicating exclusively via the bus).
