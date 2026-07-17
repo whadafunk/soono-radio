@@ -937,50 +937,22 @@ export class PlannerProcess {
     let stationIdCursor = 0;
     let musicCount = 0;
 
-    // (b/c) Music fill — single boundary decision, in received order (D72).
-    // Walk candidates strictly in order; place anything that fits cleanly.
-    // The first candidate that WOULDN'T fit is the boundary-crossing one: make
-    // one decision (place it if its overshoot is smaller than the gap left by
-    // not placing it) and stop — no hunting further through the rest of the
-    // (over-served) pool for something that "fits better". This function no
-    // longer knows or cares whether the next segment is hard — the hard-start
+    // (b/c) Music fill — place fitting candidates in received order; skip any
+    // candidate longer than what's left (D101). D72 treated the FIRST
+    // non-fitting candidate as proof the segment was nearly full and made the
+    // single boundary decision right there — but with mixed-length libraries a
+    // long track can surface while the gap is still several tracks wide, and
+    // the break threw away every fitting candidate behind it (plan 8617 live
+    // 2026-07-17: a 46-min track as 3rd candidate → 443s plan against an 895s
+    // target). Skipping costs nothing: remaining only shrinks, so a candidate
+    // that doesn't fit now can never fit later; rotation order stays
+    // authoritative for everything that does fit. This function still doesn't
+    // know or care whether the next segment is hard — the hard-start
     // fill/trim gate (Decision 66) already polices actual encroachment on a
-    // real hard boundary, continuously, in real time; duplicating that
-    // awareness here was redundant and hard to trace through.
+    // real hard boundary, continuously, in real time.
     for (const candidate of music.candidates) {
       if (usedMusicIds.has(candidate.id)) continue;
-
-      if (candidate.duration_seconds > remaining) {
-        // Decision 97 refinement of D72's single boundary decision: judge the
-        // MINIMUM-OVERSHOOT candidate among the remaining non-fitting pool,
-        // not just whichever candidate the rotation order happened to surface
-        // first. With small targets (a drift-shrunk 220s slot) the first
-        // candidate can be a 7-minute track whose overshoot fails the test
-        // while a 4-minute track sits unexamined right behind it — the exact
-        // birth mechanism of the zero-item music plans observed live
-        // 2026-07-16. Still ONE decision, still no hunting for later
-        // candidates that would fit cleanly (rotation order stays authoritative
-        // for ordinary placement); only the boundary pick widens its view,
-        // mirroring the rule stop-set assembly already uses.
-        let boundaryPick = candidate;
-        for (const alt of music.candidates) {
-          if (usedMusicIds.has(alt.id) || alt.duration_seconds <= remaining) continue;
-          if (alt.duration_seconds < boundaryPick.duration_seconds) boundaryPick = alt;
-        }
-        const overshoot = boundaryPick.duration_seconds - remaining;
-        const gap = remaining;
-        if (overshoot < gap) {
-          // Force cut_allowed:true regardless of config — this function can't
-          // know if the next segment is hard, so this is the safety net that
-          // lets the hard-start gate trim it short if it ever matters; costs
-          // nothing when it doesn't.
-          items.push({ ...withCutSkip(musicCandidateToItem(boundaryPick), config), cut_allowed: true });
-          usedMusicIds.add(boundaryPick.id);
-          remaining -= boundaryPick.duration_seconds;
-          musicCount += 1;
-        }
-        break;
-      }
+      if (candidate.duration_seconds > remaining) continue;
 
       // Interstitial injection before each music track (except the very first).
       // Jingle and station-ID are mutually exclusive per boundary (D70) — a
@@ -1031,6 +1003,34 @@ export class PlannerProcess {
       usedMusicIds.add(candidate.id);
       remaining -= candidate.duration_seconds;
       musicCount += 1;
+    }
+
+    // (d) Single boundary decision (D72/D97, retimed by D101). After the fill
+    // pass every unused candidate overshoots — remaining only ever shrank, so
+    // anything skipped then still doesn't fit now. Judge the minimum-overshoot
+    // candidate (D97) exactly once: place it iff its overshoot is smaller than
+    // the gap left by stopping. Because the gap here is necessarily smaller
+    // than the shortest unused candidate, the residual lands within ~half a
+    // track either way — the one-track granularity the next plan's prediction
+    // sizing absorbs (D91).
+    {
+      let boundaryPick: (typeof music.candidates)[number] | null = null;
+      for (const alt of music.candidates) {
+        if (usedMusicIds.has(alt.id)) continue;
+        if (boundaryPick == null || alt.duration_seconds < boundaryPick.duration_seconds) {
+          boundaryPick = alt;
+        }
+      }
+      if (boundaryPick != null && boundaryPick.duration_seconds - remaining < remaining) {
+        // Force cut_allowed:true regardless of config — this function can't
+        // know if the next segment is hard, so this is the safety net that
+        // lets the hard-start gate trim it short if it ever matters; costs
+        // nothing when it doesn't.
+        items.push({ ...withCutSkip(musicCandidateToItem(boundaryPick), config), cut_allowed: true });
+        usedMusicIds.add(boundaryPick.id);
+        remaining -= boundaryPick.duration_seconds;
+        musicCount += 1;
+      }
     }
 
     // (e) Segment-end envelope.

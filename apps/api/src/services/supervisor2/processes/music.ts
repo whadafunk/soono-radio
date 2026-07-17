@@ -216,6 +216,7 @@ export class MusicProcess {
         cfg,
         targetPerSource,
         nowMs,
+        durationNeededSeconds,
       );
       for (const c of rotationCandidates) {
         if (seenMediaIds.has(c.media_id)) continue;
@@ -260,6 +261,7 @@ export class MusicProcess {
     cfg: RotationSourceConfig,
     limit: number,
     nowMs: number,
+    durationNeededSeconds: number,
   ): Promise<MusicCandidate[]> {
     const playlistMedia = await this.db
       .select({
@@ -305,9 +307,22 @@ export class MusicProcess {
     const separationSeconds = readSeparationMinutes(cfg.rotation.params) * 60;
     const nowSeconds = Math.floor(nowMs / 1000);
 
+    // D101: a track longer than the requested target — even by a second — is
+    // disqualified outright (operator rule: a track that cannot fit the plan
+    // is a mistake, not a candidate; a shortfall is honest, recoverable drift,
+    // while airing a track longer than the whole segment is not). Filtering
+    // BEFORE the LRP slice also keeps such tracks from permanently occupying
+    // pool slots: a never-played mega-track sorts to the front of LRP forever
+    // (it can never air, so it never stops being never-played) and would
+    // otherwise win a slot in nearly every pool.
+    const placeableIds = mediaIds.filter((id) => {
+      const m = mediaById.get(id);
+      return m != null && effectiveDuration(m) <= durationNeededSeconds;
+    });
+
     // LRP sort across all tracks. Never-played first (-Infinity), then oldest
     // most-recently-played.
-    const allSorted = mediaIds.slice().sort((a, b) => {
+    const allSorted = placeableIds.slice().sort((a, b) => {
       const ta = latestByMediaId.get(a) ?? -Infinity;
       const tb = latestByMediaId.get(b) ?? -Infinity;
       return ta - tb;

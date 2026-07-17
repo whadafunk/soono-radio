@@ -2619,6 +2619,20 @@ On reinstating the correction as a bar region: the 2026-07-15 round rejected it 
 
 ---
 
+### Decision 101 — Music fill skips non-fitting candidates; the boundary decision fires when nothing fits
+
+**Status: decided with the operator & implemented 2026-07-17. Retimes D72's single boundary decision (as refined by D97.2). Found via live plan 8617.**
+
+**The incident.** Plan 8617 (music, 840s nominal, 895.6s requested) drafted healthy at 957s, then the T-30s finalize's full reassembly produced 442.8s — two tracks — and shipped a 452.8s hole (the timeline bar's 7:32 end-gap). Root cause: the fill's boundary decision fired on the *first* non-fitting candidate, and the random order surfaced a never-played 46-minute track ("Live full set", 2753s) as candidate #3. The D97.2 min-overshoot scan considers only *non-fitting* alternatives; the mega-track was the only one, its overshoot failed the test, and the `break` discarded the ~9 fitting candidates behind it. The draft had succeeded 3 seconds earlier purely on a different `Math.random()` draw — plan quality was a lottery whenever a pathological-length track existed in the playlist. The symmetric failure also existed: a large non-fitting candidate meeting a still-wide gap could be *placed* (overshoot < gap admits overshoots up to the full gap — e.g. an 862s track against a 452.8s gap = +409s).
+
+**The rule change.** D72 conflated "this candidate doesn't fit" with "the segment is nearly full" — only valid when track lengths are roughly uniform. The fill now **skips** candidates longer than what's left and keeps placing fitting ones in received order (rotation order stays authoritative for everything that fits; skipping is not fit-hunting). The single boundary decision (unchanged: place the minimum-overshoot unused candidate iff its overshoot beats the gap) fires exactly once, **after** the pass, when nothing fits — which is what "the boundary" always meant. Correctness lean: remaining only shrinks, so a candidate that doesn't fit now can never fit later — one pass suffices, and after it every unused candidate is a legal boundary pick.
+
+**Consequences.** At decision time the gap is necessarily smaller than the shortest unused candidate, so the residual — gap or overshoot — is bounded by ~half a short track (typ. ≤ ~90s), i.e. the one-track granularity D91's next-plan prediction absorbs. Both catastrophic tails disappear. Sign bias acknowledged with the operator: small residual gaps become more common than small overshoots (the fill shrinks the gap before the sign-neutral rule fires); magnitude, which is what drift cares about, strictly improves.
+
+**Pool eligibility rider.** A track longer than the requested target — even by a second — is disqualified from the pool outright (operator rule: a track that cannot fit the plan is a mistake, not a candidate). This is stricter than the mathematical bound (the boundary rule alone would still admit a track up to 2× a near-full gap in the degenerate near-empty-pool case, airing e.g. a 1000s track in an 895s slot); the operator explicitly prefers the honest shortfall — recoverable drift — over airing a track longer than the whole segment. Filtering before the LRP slice also stops never-played mega-tracks from squatting pool slots forever (they can never air, so they never stop being never-played, and LRP fronts them in every draw). Corollary: "Live full set" (46 min) never airs from a 14-minute segment; airing it requires a segment long enough to hold it or removing it from the rotation playlist — a curation call the algorithm no longer depends on.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
