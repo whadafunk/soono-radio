@@ -92,67 +92,6 @@ export function SupervisorSettings() {
       )}
 
       <form onSubmit={handleSubmit((data) => mutation.mutate(data))} className="space-y-8">
-        <CollapsibleSection title="Polling">
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-                Scheduler tick interval (ms)
-                <HelpTooltip text="How often the Supervisor checks the Mix Engine queue and pushes the next track when it runs short. Lower = faster reaction to an empty queue, higher CPU/telnet traffic. 5000 ms is the default; 1000 is fine on a healthy system." />
-              </label>
-              <input
-                type="number"
-                min={500}
-                max={60000}
-                step={500}
-                {...register('scheduler_tick_ms', { valueAsNumber: true })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
-              />
-              {errors.scheduler_tick_ms && (
-                <p className="text-red-400 text-xs mt-1">{errors.scheduler_tick_ms.message}</p>
-              )}
-            </div>
-
-            <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-                Metadata poll interval (ms)
-                <HelpTooltip text="How often the Supervisor polls the Mix Engine for the currently-airing track. Lower = more responsive Now Playing UI, higher telnet traffic. 1000–2000 ms is a good range; 5000 is conservative." />
-              </label>
-              <input
-                type="number"
-                min={500}
-                max={60000}
-                step={500}
-                {...register('metadata_poll_ms', { valueAsNumber: true })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
-              />
-              {errors.metadata_poll_ms && (
-                <p className="text-red-400 text-xs mt-1">{errors.metadata_poll_ms.message}</p>
-              )}
-            </div>
-          </div>
-        </CollapsibleSection>
-
-        <CollapsibleSection title="Queue Management">
-          <div className="space-y-4">
-            <div>
-              <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
-                Queue depth threshold
-                <HelpTooltip text="The Supervisor pushes a new track whenever the Mix Engine queue is below this depth. 1 means 'always keep one track lined up'; 3 means 'always lined up 3 ahead'. Higher = more buffer against Supervisor outages, less precise when scheduling lands." />
-              </label>
-              <input
-                type="number"
-                min={1}
-                max={20}
-                {...register('queue_depth_threshold', { valueAsNumber: true })}
-                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
-              />
-              {errors.queue_depth_threshold && (
-                <p className="text-red-400 text-xs mt-1">{errors.queue_depth_threshold.message}</p>
-              )}
-            </div>
-          </div>
-        </CollapsibleSection>
-
         <CollapsibleSection title="Picker">
           <div className="space-y-4">
             <div>

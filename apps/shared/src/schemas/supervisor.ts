@@ -2,9 +2,15 @@ import { z } from 'zod';
 import { JOIN_POLICIES, EXTENSION_POLICIES } from './scheduling.js';
 
 export const SupervisorConfigSchema = z.object({
-  scheduler_tick_ms: z.number().int().min(500).max(60_000).default(5_000),
-  metadata_poll_ms: z.number().int().min(500).max(60_000).default(5_000),
-  queue_depth_threshold: z.number().int().min(1).max(20).default(1),
+  // scheduler tick / metadata polling deliberately NOT configurable: the
+  // supervisor's real tick is a hardcoded 500ms constant and metadata comes
+  // from LS webhooks + /now-playing on the same cadence — the old fields
+  // were saved but never read, implying control that didn't exist.
+  // queue depth deliberately NOT configurable: the whole execution layer
+  // (queue-ahead, activation-on-confirmation, playhead accounting, the
+  // finalize snapshot guard) is built around exactly 1 playing + 1 queued,
+  // hardcoded in the Queue Feeder. A UI knob for it was misleading — it was
+  // never read — and would be dangerous if it ever were.
   separation_minutes: z.number().int().min(0).max(720).default(30),
   // Station-wide handover defaults — clocks inherit these unless they set an explicit override
   join_policy: z.enum(JOIN_POLICIES).default('join_top'),
