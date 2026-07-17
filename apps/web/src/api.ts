@@ -33,6 +33,14 @@ import {
   SupervisorV2ControlResponseSchema,
   SupervisorV2DriftLedger,
   SupervisorV2DriftLedgerSchema,
+  LogSourceId,
+  LogSourcesResponse,
+  LogSourcesResponseSchema,
+  LogTailResponse,
+  LogTailResponseSchema,
+  LogMaintenanceResponse,
+  LogSettings,
+  LogSettingsSchema,
 } from '@soono/shared';
 
 const API_BASE = '/api';
@@ -1338,3 +1346,76 @@ export async function postSupervisorAlignToClock(): Promise<SupervisorV2ControlR
   return SupervisorV2ControlResponseSchema.parse(await res.json());
 }
 
+
+// ─── Logs ─────────────────────────────────────────────────────────────────────
+
+export async function fetchLogSources(): Promise<LogSourcesResponse> {
+  const res = await fetch(`${API_BASE}/logs/sources`);
+  if (!res.ok) throw new Error(`Failed to fetch log sources: ${res.statusText}`);
+  return LogSourcesResponseSchema.parse(await res.json());
+}
+
+export async function fetchLogTail(query: {
+  source: LogSourceId;
+  limit?: number;
+  level_min?: number;
+  process?: string;
+  event?: string;
+  q?: string;
+}): Promise<LogTailResponse> {
+  const params = new URLSearchParams();
+  params.set('source', query.source);
+  if (query.limit != null) params.set('limit', String(query.limit));
+  if (query.level_min != null) params.set('level_min', String(query.level_min));
+  if (query.process) params.set('process', query.process);
+  if (query.event) params.set('event', query.event);
+  if (query.q) params.set('q', query.q);
+  const res = await fetch(`${API_BASE}/logs/tail?${params.toString()}`);
+  if (!res.ok) throw new Error(`Failed to fetch log tail: ${res.statusText}`);
+  return LogTailResponseSchema.parse(await res.json());
+}
+
+export async function rotateLogSource(source: LogSourceId): Promise<LogMaintenanceResponse> {
+  const res = await fetch(`${API_BASE}/logs/rotate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Rotate failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function purgeLogSource(source: LogSourceId): Promise<LogMaintenanceResponse> {
+  const res = await fetch(`${API_BASE}/logs/purge`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ source }),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Purge failed: ${res.statusText}`);
+  }
+  return res.json();
+}
+
+export async function fetchLogSettings(): Promise<LogSettings> {
+  const res = await fetch(`${API_BASE}/logs/settings`);
+  if (!res.ok) throw new Error(`Failed to fetch log settings: ${res.statusText}`);
+  return LogSettingsSchema.parse(await res.json());
+}
+
+export async function updateLogSettings(settings: LogSettings): Promise<LogSettings> {
+  const res = await fetch(`${API_BASE}/logs/settings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(settings),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Save failed: ${res.statusText}`);
+  }
+  return res.json();
+}

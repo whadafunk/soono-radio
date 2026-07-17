@@ -10,6 +10,7 @@ import { LiquidSoapSettings } from './pages/settings/LiquidSoapSettings';
 import { SupervisorSettings } from './pages/settings/SupervisorSettings';
 import { IntegrationsSettings } from './pages/settings/IntegrationsSettings';
 import { SchedulingSettings } from './pages/settings/SchedulingSettings';
+import { LogsSettings } from './pages/settings/LogsSettings';
 import { LibraryLayout } from './pages/library/LibraryLayout';
 import { LibraryBrowse } from './pages/library/LibraryBrowse';
 import { LibraryUpload } from './pages/library/LibraryUpload';
@@ -26,6 +27,7 @@ import { PlaylistsPage } from './pages/playlists/PlaylistsPage';
 import { ActivityPage } from './pages/activity/ActivityPage';
 import { PromoPage } from './pages/promo/PromoPage';
 import { SupervisorPage } from './pages/supervisor/SupervisorPage';
+import { LogsPage } from './pages/logs/LogsPage';
 
 const queryClient = new QueryClient();
 
@@ -43,6 +45,7 @@ export function App() {
               <Route path="supervisor" element={<SupervisorSettings />} />
               <Route path="integrations" element={<IntegrationsSettings />} />
               <Route path="scheduling" element={<SchedulingSettings />} />
+              <Route path="logs" element={<LogsSettings />} />
             </Route>
             <Route path="/library" element={<LibraryLayout />}>
               <Route index element={<LibraryBrowse />} />
@@ -64,6 +67,7 @@ export function App() {
             <Route path="/playlists" element={<PlaylistsPage />} />
             <Route path="/rotations" element={<RotationsPage />} />
             <Route path="/supervisor" element={<SupervisorPage />} />
+            <Route path="/logs" element={<LogsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

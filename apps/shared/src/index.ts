@@ -6,3 +6,4 @@ export * from './schemas/scheduling.js';
 export * from './schemas/playlists.js';
 export * from './schemas/integrations.js';
 export * from './schemas/activity.js';
+export * from './schemas/logs.js';

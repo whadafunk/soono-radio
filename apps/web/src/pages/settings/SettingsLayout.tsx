@@ -5,6 +5,7 @@ const tabs = [
   { label: 'Mix Engine',       path: '/settings/liquidsoap' },
   { label: 'Supervisor',       path: '/settings/supervisor' },
   { label: 'Scheduling',       path: '/settings/scheduling' },
+  { label: 'Logs',             path: '/settings/logs' },
   { label: 'Integrations',     path: '/settings/integrations' },
 ];
 

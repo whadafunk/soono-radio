@@ -2,6 +2,7 @@ import { readFileSync, mkdirSync } from 'fs';
 import { fileURLToPath } from 'url';
 import { join } from 'path';
 import Fastify from 'fastify';
+import pino from 'pino';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import multipart from '@fastify/multipart';
@@ -28,6 +29,16 @@ import { spotBudgetRoutes } from './routes/spotBudget.js';
 import { stationSettingsRoutes } from './routes/stationSettings.js';
 import { supervisorStatusRoutes } from './routes/supervisorStatus.js';
 import { supervisorControlRoutes } from './routes/supervisorControl.js';
+import { logsRoutes } from './routes/logs.js';
+import { createRotatingLogStream } from './services/logging/rotatingLog.js';
+import { startExternalLogSweep } from './services/logging/externalLogSweep.js';
+import {
+  API_LOG_FILE,
+  ICECAST_LOG_DIR,
+  LIQUIDSOAP_LOG_DIR,
+  LOG_DIR,
+  newestLogIn,
+} from './services/logging/logPaths.js';
 import { db, runMigrations } from './db/index.js';
 import { supervisorState as supervisorStateTable } from './db/schema.js';
 import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
@@ -38,7 +49,7 @@ import { generateRadioLiq, readLiquidsoapConfig, readRadioLiq } from './services
 import { ensureIcecastConfig } from './services/icecastConfig.js';
 import { startPeakTracker } from './services/icecastPeakTracker.js';
 import { bus } from './services/supervisor2/bus.js';
-import { createSupervisorLogger } from './services/supervisor2/supervisorLogger.js';
+import { createSupervisorLogger, withProcess } from './services/supervisor2/supervisorLogger.js';
 import { MusicProcess } from './services/supervisor2/processes/music.js';
 import { CampaignProcess } from './services/supervisor2/processes/campaign.js';
 import { BrandingProcess } from './services/supervisor2/processes/branding.js';
@@ -47,25 +58,21 @@ import { PlannerProcess } from './services/supervisor2/processes/planner.js';
 import { QueueFeederProcess } from './services/supervisor2/processes/queueFeeder.js';
 import { SupervisorProcess } from './services/supervisor2/processes/supervisor.js';
 
-// Write structured JSON logs to a rotating file so supervisor events can be
-// reviewed after the fact with: tail -f logs/api.log | jq 'select(.event)'
-const LOG_DIR = join(fileURLToPath(new URL('../../..', import.meta.url)), 'logs');
+// Write structured JSON logs to a size-rotated file so supervisor events can
+// be reviewed after the fact with: tail -f logs/api.log | jq 'select(.event)'
 try { mkdirSync(LOG_DIR, { recursive: true }); } catch { /* already exists */ }
-const LOG_FILE = join(LOG_DIR, 'api.log');
 
 const fastify = Fastify({
   bodyLimit: 4 * 1024 * 1024 * 1024, // 4 GB — large FLAC batches can easily exceed 500 MB
-  logger: {
-    level: 'debug',
-    transport: {
-      targets: [
-        // Human-readable stdout for the dev terminal
-        { target: 'pino/file', options: { destination: 1 }, level: 'info' },
-        // Full debug JSON to file for post-hoc analysis
-        { target: 'pino/file', options: { destination: LOG_FILE }, level: 'debug' },
-      ],
-    },
-  },
+  logger: pino(
+    { level: 'debug' },
+    pino.multistream([
+      // JSON stdout for the dev terminal / docker logs
+      { stream: process.stdout, level: 'info' },
+      // Full debug JSON to a size-rotated file for post-hoc analysis
+      { stream: createRotatingLogStream('api', API_LOG_FILE), level: 'debug' },
+    ]),
+  ),
 });
 
 fastify.register(helmet);
@@ -111,6 +118,7 @@ fastify.register(spotBudgetRoutes);
 fastify.register(stationSettingsRoutes);
 fastify.register(supervisorStatusRoutes);
 fastify.register(supervisorControlRoutes);
+fastify.register(logsRoutes);
 
 fastify.get('/', async () => {
   return { message: 'Soono API' };
@@ -186,7 +194,9 @@ const start = async () => {
     const campaignProcess = new CampaignProcess(bus, db, supervisorLog);
     const brandingProcess = new BrandingProcess(bus, db, supervisorLog);
     const rundownProcess = new RundownProcess(bus, db, supervisorLog);
-    const plannerProcess = new PlannerProcess(bus, db, supervisorLog);
+    // Planner is the one process that doesn't stamp `process` per call —
+    // bind it here so its lines are selectable in the Logs UI.
+    const plannerProcess = new PlannerProcess(bus, db, withProcess(supervisorLog, 'planner'));
     const queueFeederProcess = new QueueFeederProcess(bus, db, supervisorLog);
     const supervisorProcess = new SupervisorProcess(bus, db, supervisorLog);
 
@@ -203,6 +213,18 @@ const start = async () => {
     fastify.log.info(
       { count: supervisorProcesses.length },
       'Supervisor V2 processes started',
+    );
+
+    // Hourly size sweep for the log files the API doesn't write itself
+    // (LiquidSoap, Icecast) — their writers hold the files open in append
+    // mode, so the sweep archives+truncates instead of renaming.
+    startExternalLogSweep(
+      () => [
+        newestLogIn(LIQUIDSOAP_LOG_DIR),
+        join(ICECAST_LOG_DIR, 'error.log'),
+        join(ICECAST_LOG_DIR, 'access.log'),
+      ],
+      supervisorLog,
     );
 
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
