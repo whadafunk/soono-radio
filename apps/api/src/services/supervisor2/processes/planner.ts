@@ -1693,21 +1693,10 @@ export class PlannerProcess {
       });
     }
 
-    const unusedByProcess: Record<ContentProcessName, number[]> = {
-      music: result.unused_music_ids,
-      branding: result.unused_branding_ids,
-      campaign: [...result.unused_campaign_ids, ...result.unused_promo_ids],
-      rundown: result.unused_rundown_ids,
-    };
-    for (const proc of ['music', 'branding', 'campaign', 'rundown'] as const) {
-      if (unusedByProcess[proc].length === 0) continue;
-      this._bus.emit({
-        type: 'RETURN_UNUSED',
-        request_id: requestId,
-        process: proc,
-        unused_ids: unusedByProcess[proc],
-      });
-    }
+    // RETURN_UNUSED deliberately not emitted: Decision 63 Part C retired it
+    // (no process ever subscribed — unused candidates leave no trace and
+    // self-correct for free). The emit outlived the retirement and was the
+    // first thing D102's zero-listener bus detection caught after deploy.
   }
 
   private emitDrop(process: ContentProcessName, ids: number[]): void {
