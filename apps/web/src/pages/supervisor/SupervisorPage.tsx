@@ -23,6 +23,7 @@ import type {
 import {
   fetchSupervisorV2Status,
   fetchSupervisorV2DriftLedger,
+  fetchSupervisorV2PlanStory,
   postSupervisorSkip,
   postSupervisorAlignToWallClock,
   postSupervisorAlignToClock,
@@ -157,9 +158,14 @@ function TimelineTooltip({
 }) {
   if (!active) return null;
   const clampedLeft = Math.min(92, Math.max(8, leftPct));
+  // Edge-aware anchoring: a centered tooltip near either end of the bar can
+  // be wider than the space beside it and get clipped by the viewport —
+  // anchor its near edge to the position instead so it grows inward.
+  const translate =
+    clampedLeft < 25 ? 'translate-x-0' : clampedLeft > 75 ? '-translate-x-full' : '-translate-x-1/2';
   return (
     <div
-      className="absolute bottom-full mb-2 z-30 -translate-x-1/2 whitespace-nowrap rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 shadow-lg pointer-events-none"
+      className={`absolute bottom-full mb-2 z-30 ${translate} whitespace-nowrap rounded-md border border-zinc-700 bg-zinc-950 px-3 py-2 text-sm text-zinc-200 shadow-lg pointer-events-none`}
       style={{ left: `${clampedLeft}%` }}
     >
       {children}
@@ -640,20 +646,38 @@ function driftBarColor(abs: number): string {
   return sev === 'green' ? 'bg-green-500/70' : sev === 'yellow' ? 'bg-amber-500/70' : 'bg-red-500/70';
 }
 
-function DriftLedgerChart({ entries }: { entries: SupervisorV2DriftLedgerEntry[] }) {
+function DriftLedgerChart({
+  entries,
+  onSelect,
+}: {
+  entries: SupervisorV2DriftLedgerEntry[];
+  onSelect: (planId: number) => void;
+}) {
   // Chronological left → right; endpoint returns newest first.
   const chrono = entries.slice().reverse();
   const scale = Math.max(60, ...chrono.map((e) => Math.abs(e.boundary_drift_seconds ?? 0)));
   const HALF_PX = 44;
   return (
     <div>
-      <div className="flex items-end gap-[3px] h-[100px]" title="Boundary drift per transition — late above the line, early below">
-        {chrono.map((e) => {
+      <div
+        className="flex items-end gap-[3px] h-[100px]"
+        title="Boundary drift per transition — late above the line, early below. Click a bar for the plan's story."
+      >
+        {chrono.map((e, i) => {
           const drift = e.boundary_drift_seconds ?? 0;
           const abs = Math.abs(drift);
           const px = Math.max(2, Math.round((abs / scale) * HALF_PX));
+          // Edge bars anchor their tooltip's near edge instead of centering,
+          // so it grows inward rather than clipping at the viewport.
+          const pos = chrono.length > 1 ? i / (chrono.length - 1) : 0.5;
+          const tooltipAnchor =
+            pos < 0.2 ? 'left-0' : pos > 0.8 ? 'right-0' : 'left-1/2 -translate-x-1/2';
           return (
-            <div key={e.plan_id} className="flex flex-col items-center justify-end flex-1 min-w-[4px] max-w-[16px] h-full group relative">
+            <button
+              key={e.plan_id}
+              className="flex flex-col items-center justify-end flex-1 min-w-[4px] max-w-[16px] h-full group relative cursor-pointer"
+              onClick={() => onSelect(e.plan_id)}
+            >
               <div className="w-full flex flex-col justify-end" style={{ height: HALF_PX }}>
                 {drift > 0 && <div className={`w-full rounded-sm ${driftBarColor(abs)}`} style={{ height: px }} />}
               </div>
@@ -661,17 +685,202 @@ function DriftLedgerChart({ entries }: { entries: SupervisorV2DriftLedgerEntry[]
               <div className="w-full flex flex-col justify-start" style={{ height: HALF_PX }}>
                 {drift <= 0 && <div className={`w-full rounded-sm ${driftBarColor(abs)}`} style={{ height: px }} />}
               </div>
-              <div className="hidden group-hover:block absolute bottom-full mb-1 left-1/2 -translate-x-1/2 z-30 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-[10px] text-zinc-300 whitespace-nowrap">
+              <div className={`hidden group-hover:block absolute bottom-full mb-1 ${tooltipAnchor} z-30 px-2 py-1 rounded bg-zinc-800 border border-zinc-700 text-[10px] text-zinc-300 whitespace-nowrap`}>
                 {e.segment_name || `seg #${e.segment_id}`} · {fmtDriftSign(drift)}
                 {e.activated_at != null && <> · {new Date(e.activated_at).toLocaleTimeString()}</>}
               </div>
-            </div>
+            </button>
           );
         })}
       </div>
       <p className="text-[10px] text-zinc-500 mt-1">
-        oldest ← boundary drift per transition (late ↑ / early ↓) → newest
+        oldest ← boundary drift per transition (late ↑ / early ↓) → newest · click a bar for the plan's story
       </p>
+    </div>
+  );
+}
+
+// ─── Plan story modal ─────────────────────────────────────────────────────────
+// The narrative version of one ledger row: how the plan was sized, what it
+// contained and why, what actually aired, and what it inherited from the
+// plan before it. Built from the DB, so it works long after logs rotate.
+
+function StoryStat({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <div>
+      <p className="text-[10px] uppercase tracking-wider text-zinc-400">{label}</p>
+      <p className="text-sm font-mono text-zinc-200 mt-0.5">{children}</p>
+    </div>
+  );
+}
+
+function PlanStoryModal({ planId, onClose }: { planId: number; onClose: () => void }) {
+  const { data: story, isLoading, error } = useQuery({
+    queryKey: ['supervisor-v2-plan-story', planId],
+    queryFn: () => fetchSupervisorV2PlanStory(planId),
+  });
+
+  const p = story?.plan;
+  const nominal = p?.nominal_duration_seconds ?? null;
+  const target = p?.target_duration_seconds ?? null;
+  const predicted = p?.predicted_drift_seconds ?? null;
+  const applied = p?.applied_correction_seconds ?? null;
+  const measured = p?.boundary_drift_seconds ?? null;
+  const assembled = story?.planned_total_seconds ?? null;
+  const assemblyDelta = assembled != null && target != null ? assembled - target : null;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4" onClick={onClose}>
+      <div
+        className="bg-zinc-900 border border-zinc-700 rounded-lg max-w-3xl w-full max-h-[85vh] overflow-y-auto p-6"
+        onClick={(ev) => ev.stopPropagation()}
+      >
+        {isLoading && <p className="text-sm text-zinc-400">Loading plan story…</p>}
+        {error != null && <p className="text-sm text-red-400">Failed to load: {(error as Error).message}</p>}
+        {story && p && (
+          <>
+            <div className="flex items-start justify-between mb-4">
+              <div>
+                <h3 className="text-lg font-semibold text-white">
+                  Plan #{p.id} — {p.segment_name ?? `segment #${p.segment_id}`}
+                  <span className="ml-2 text-sm font-normal text-zinc-400">{p.segment_type}</span>
+                </h3>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  {p.activated_at != null
+                    ? `on air ${new Date(p.activated_at).toLocaleString()}`
+                    : 'never activated'}
+                  {' · '}status {p.status}
+                </p>
+              </div>
+              <button className="text-zinc-400 hover:text-zinc-200 text-xl leading-none px-1" onClick={onClose}>
+                ×
+              </button>
+            </div>
+
+            {/* Sizing story */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 rounded-lg border border-zinc-800 bg-zinc-950/60 p-4 mb-3">
+              <StoryStat label="Scheduled length">{nominal != null ? fmtMmSs(nominal) : '—'}</StoryStat>
+              <StoryStat label="Predicted start">
+                {predicted == null ? '—' : `${fmtDriftSign(predicted)} ${predicted <= 0 ? 'early' : 'late'}`}
+              </StoryStat>
+              <StoryStat label="Requested">
+                {target != null ? fmtMmSs(target) : '—'}
+                {applied != null && Math.abs(applied) >= 1 && (
+                  <span className="text-zinc-400"> ({fmtDriftSign(-applied)} corr.)</span>
+                )}
+              </StoryStat>
+              <StoryStat label="Measured start">
+                {measured == null ? '—' : fmtDriftSign(measured)}
+              </StoryStat>
+            </div>
+            <p className="text-sm text-zinc-300 mb-4">
+              {nominal != null && target != null && assembled != null ? (
+                <>
+                  The planner was asked to fill <span className="font-mono">{fmtMmSs(target)}</span> and assembled{' '}
+                  <span className="font-mono">{fmtMmSs(assembled)}</span> across {story.items.length} item
+                  {story.items.length === 1 ? '' : 's'}
+                  {assemblyDelta != null && Math.abs(assemblyDelta) >= 2 && (
+                    <>
+                      {' — '}
+                      <span className={Math.abs(assemblyDelta) > 120 ? 'text-amber-300' : 'text-zinc-300'}>
+                        {assemblyDelta < 0
+                          ? `${fmtMmSs(Math.abs(assemblyDelta))} short of the request`
+                          : `${fmtMmSs(assemblyDelta)} past the request`}
+                      </span>
+                    </>
+                  )}
+                  .
+                </>
+              ) : (
+                'This plan has no sizing record (drafted before the drift ledger existed).'
+              )}
+            </p>
+
+            {/* Previous plan context */}
+            {story.previous && (
+              <div className="rounded border border-zinc-800 bg-zinc-950/40 px-3 py-2 mb-4 text-xs text-zinc-400">
+                Before it: plan #{story.previous.id} — {story.previous.segment_name ?? 'unknown segment'} (
+                {story.previous.segment_type}), on air{' '}
+                {story.previous.activated_at != null
+                  ? new Date(story.previous.activated_at).toLocaleTimeString()
+                  : '—'}
+                , started{' '}
+                {story.previous.boundary_drift_seconds != null
+                  ? fmtDriftSign(story.previous.boundary_drift_seconds)
+                  : '—'}
+                {story.previous.nominal_duration_seconds != null &&
+                  story.previous.target_duration_seconds != null && (
+                    <>
+                      , sized {fmtMmSs(story.previous.nominal_duration_seconds)} →{' '}
+                      {fmtMmSs(story.previous.target_duration_seconds)}
+                    </>
+                  )}
+              </div>
+            )}
+
+            {/* Items */}
+            {story.items.length === 0 ? (
+              <p className="text-sm text-zinc-400 italic mb-4">
+                No items — the plan came out empty (its segment was skipped, D94).
+              </p>
+            ) : (
+              <div className="border border-zinc-800 rounded-lg divide-y divide-zinc-800/70 mb-4">
+                {story.items.map((it) => (
+                  <div key={it.position} className="px-3 py-2">
+                    <div className="flex items-center gap-2 text-sm">
+                      <span className="font-mono text-xs text-zinc-400 w-5">{it.position + 1}</span>
+                      <span className="px-1.5 py-0.5 rounded text-[10px] bg-zinc-800 border border-zinc-700 text-zinc-300">
+                        {it.content_type}
+                      </span>
+                      <span className="text-zinc-200 truncate">
+                        {it.title ?? '—'}
+                        {it.artist && <span className="text-zinc-400"> — {it.artist}</span>}
+                      </span>
+                      <span className="ml-auto font-mono text-xs text-zinc-400 whitespace-nowrap">
+                        {fmtMmSs(it.planned_duration_seconds)} planned
+                        {it.aired_seconds != null && <> · {fmtMmSs(it.aired_seconds)} aired</>}
+                      </span>
+                      {it.aborted ? (
+                        <span className="px-1.5 py-0.5 rounded text-[10px] bg-red-900/50 border border-red-800 text-red-300">
+                          cut short
+                        </span>
+                      ) : (
+                        <span
+                          className={`px-1.5 py-0.5 rounded text-[10px] border ${
+                            it.status === 'played' || it.status === 'playing'
+                              ? 'bg-green-900/40 border-green-800 text-green-300'
+                              : it.status === 'pending'
+                                ? 'bg-zinc-800 border-zinc-700 text-zinc-300'
+                                : 'bg-amber-900/40 border-amber-800 text-amber-300'
+                          }`}
+                        >
+                          {it.status}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-zinc-400 mt-1 ml-7">{it.reason}</p>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2">
+              <a
+                href={`/logs?view=engine&q=${encodeURIComponent(`"plan_id":${p.id}`)}`}
+                className="px-3 py-1.5 rounded border border-zinc-700 text-sm text-zinc-300 hover:bg-zinc-800"
+              >
+                Open raw logs
+              </a>
+              <button
+                className="px-3 py-1.5 rounded border border-zinc-700 text-sm text-zinc-300 hover:bg-zinc-800"
+                onClick={onClose}
+              >
+                Close
+              </button>
+            </div>
+          </>
+        )}
+      </div>
     </div>
   );
 }
@@ -696,6 +905,7 @@ function DriftRecoveryPanel({
     queryFn: () => fetchSupervisorV2DriftLedger(48),
     refetchInterval: 15000,
   });
+  const [storyPlanId, setStoryPlanId] = useState<number | null>(null);
 
   const abs = Math.abs(liveDriftSeconds);
   const currentSeverity = driftSeverity(liveDriftSeconds);
@@ -774,7 +984,7 @@ function DriftRecoveryPanel({
 
         {ledger && ledger.entries.length > 0 && (
           <>
-            <DriftLedgerChart entries={ledger.entries} />
+            <DriftLedgerChart entries={ledger.entries} onSelect={setStoryPlanId} />
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="border-b border-zinc-800">
@@ -791,7 +1001,11 @@ function DriftRecoveryPanel({
                   {ledger.entries.slice(0, 12).map((e) => {
                     const measured = e.boundary_drift_seconds;
                     return (
-                      <tr key={e.plan_id} className="border-t border-zinc-800/60">
+                      <tr
+                        key={e.plan_id}
+                        className="border-t border-zinc-800/60 cursor-pointer hover:bg-zinc-800/40"
+                        onClick={() => setStoryPlanId(e.plan_id)}
+                      >
                         <td className="px-2 py-1.5 font-mono text-xs text-zinc-400">
                           {e.activated_at != null ? new Date(e.activated_at).toLocaleTimeString() : '—'}
                         </td>
@@ -824,6 +1038,7 @@ function DriftRecoveryPanel({
           </>
         )}
       </div>
+      {storyPlanId != null && <PlanStoryModal planId={storyPlanId} onClose={() => setStoryPlanId(null)} />}
     </section>
   );
 }

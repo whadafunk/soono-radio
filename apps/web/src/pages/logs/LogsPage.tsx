@@ -22,6 +22,9 @@ interface ViewDef {
 }
 
 const VIEWS: ViewDef[] = [
+  // The whole engine stream interleaved (no process filter) — the forensic
+  // view for following one plan across planner/supervisor/feeder.
+  { id: 'engine', label: 'Engine (all)', sources: ['supervisor'], structured: true },
   { id: 'supervisor', label: 'Supervisor', sources: ['supervisor'], process: 'supervisor,queueFeeder', structured: true },
   { id: 'planner', label: 'Planner', sources: ['supervisor'], process: 'planner', structured: true },
   { id: 'content', label: 'Content Pickers', sources: ['supervisor'], process: 'music,campaign,branding,rundown', structured: true },
@@ -170,11 +173,15 @@ function MaintenanceCard({ sources }: { sources: LogSourceInfo[] }) {
 }
 
 export function LogsPage() {
-  const [viewId, setViewId] = useState<string>('supervisor');
+  // Deep links (e.g. the Supervisor page's plan-story modal) can preconfigure
+  // the view and search: /logs?view=engine&q="plan_id":8617
+  const params = new URLSearchParams(window.location.search);
+  const initialView = VIEWS.some((v) => v.id === params.get('view')) ? params.get('view')! : 'supervisor';
+  const [viewId, setViewId] = useState<string>(initialView);
   const [icecastFile, setIcecastFile] = useState<LogSourceId>('icecast-error');
   const [levelMin, setLevelMin] = useState(0);
   const [eventFilter, setEventFilter] = useState('');
-  const [search, setSearch] = useState('');
+  const [search, setSearch] = useState(params.get('q') ?? '');
   const [limit, setLimit] = useState(200);
   const [live, setLive] = useState(false);
   const [showMaintenance, setShowMaintenance] = useState(false);

@@ -41,6 +41,8 @@ import {
   LogMaintenanceResponse,
   LogSettings,
   LogSettingsSchema,
+  SupervisorV2PlanStory,
+  SupervisorV2PlanStorySchema,
 } from '@soono/shared';
 
 const API_BASE = '/api';
@@ -1418,4 +1420,13 @@ export async function updateLogSettings(settings: LogSettings): Promise<LogSetti
     throw new Error((body as { error?: string }).error ?? `Save failed: ${res.statusText}`);
   }
   return res.json();
+}
+
+export async function fetchSupervisorV2PlanStory(planId: number): Promise<SupervisorV2PlanStory> {
+  const res = await fetch(`${API_BASE}/supervisor/v2/plans/${planId}/story`);
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Failed to fetch plan story: ${res.statusText}`);
+  }
+  return SupervisorV2PlanStorySchema.parse(await res.json());
 }

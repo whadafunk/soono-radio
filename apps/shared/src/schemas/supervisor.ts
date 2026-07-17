@@ -139,6 +139,49 @@ export const SupervisorV2DriftLedgerSchema = z.object({
 });
 export type SupervisorV2DriftLedger = z.infer<typeof SupervisorV2DriftLedgerSchema>;
 
+// The full story of one plan — built from the DB (plans/plan_items/
+// play_history), so it works for any plan ever activated, even after the log
+// lines have rotated away. Rendered as a narrative in the Supervisor page's
+// plan-story modal.
+export const SupervisorV2PlanStoryItemSchema = z.object({
+  position: z.number().int(),
+  content_type: z.string(),
+  title: z.string().nullable(),
+  artist: z.string().nullable(),
+  planned_duration_seconds: z.number(),
+  status: z.string(),
+  reason: z.string(),
+  started_at_ms: z.number().nullable(),
+  aired_seconds: z.number().nullable(),
+  aborted: z.boolean(),
+});
+export type SupervisorV2PlanStoryItem = z.infer<typeof SupervisorV2PlanStoryItemSchema>;
+
+export const SupervisorV2PlanStoryPlanSchema = z.object({
+  id: z.number().int(),
+  segment_id: z.number().int(),
+  segment_name: z.string().nullable(),
+  segment_type: z.string().nullable(),
+  status: z.string(),
+  created_at: z.number(),
+  finalized_at: z.number().nullable(),
+  activated_at: z.number().nullable(),
+  nominal_duration_seconds: z.number().nullable(),
+  target_duration_seconds: z.number().nullable(),
+  predicted_drift_seconds: z.number().nullable(),
+  applied_correction_seconds: z.number().nullable(),
+  boundary_drift_seconds: z.number().nullable(),
+});
+
+export const SupervisorV2PlanStorySchema = z.object({
+  plan: SupervisorV2PlanStoryPlanSchema,
+  items: z.array(SupervisorV2PlanStoryItemSchema),
+  planned_total_seconds: z.number(),
+  // Context: the plan that aired immediately before this one.
+  previous: SupervisorV2PlanStoryPlanSchema.nullable(),
+});
+export type SupervisorV2PlanStory = z.infer<typeof SupervisorV2PlanStorySchema>;
+
 export const SupervisorV2RecentPlaySchema = z.object({
   title: z.string().nullable(),
   artist: z.string().nullable(),

@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { and, asc, count, desc, eq, isNotNull, isNull, ne } from 'drizzle-orm';
+import { and, asc, count, desc, eq, isNotNull, isNull, lt, ne } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import {
   supervisorState,
@@ -440,6 +440,107 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
     } catch (err) {
       fastify.log.error(err, 'supervisor v2 drift-ledger failed');
       return reply.status(500).send({ error: 'Failed to fetch drift ledger' });
+    }
+  });
+
+  // The full story of one plan — sizing chain, every item with its reason and
+  // what actually aired, plus the plan that aired immediately before it. Built
+  // entirely from the DB so it outlives log rotation.
+  fastify.get('/supervisor/v2/plans/:id/story', async (request, reply) => {
+    try {
+      const planId = Number((request.params as { id: string }).id);
+      if (!Number.isInteger(planId) || planId <= 0) {
+        return reply.status(400).send({ error: 'invalid plan id' });
+      }
+
+      const planCols = {
+        id: plans.id,
+        segment_id: plans.segment_id,
+        segment_name: clockSegments.name,
+        segment_type: clockSegments.type,
+        status: plans.status,
+        created_at: plans.created_at,
+        finalized_at: plans.finalized_at,
+        activated_at: plans.activated_at,
+        nominal_duration_seconds: plans.nominal_duration_seconds,
+        target_duration_seconds: plans.target_duration_seconds,
+        predicted_drift_seconds: plans.predicted_drift_seconds,
+        applied_correction_seconds: plans.applied_correction_seconds,
+        boundary_drift_seconds: plans.boundary_drift_seconds,
+      };
+
+      const [plan] = await db
+        .select(planCols)
+        .from(plans)
+        .leftJoin(clockSegments, eq(clockSegments.id, plans.segment_id))
+        .where(eq(plans.id, planId));
+      if (!plan) {
+        return reply.status(404).send({ error: 'plan not found' });
+      }
+
+      const itemRows = await db
+        .select({
+          item_id: planItems.id,
+          position: planItems.position,
+          content_type: planItems.content_type,
+          planned_duration_seconds: planItems.planned_duration_seconds,
+          status: planItems.status,
+          reason: planItems.reason,
+          title: media.title,
+          original_filename: media.original_filename,
+          artist: media.artist,
+          ph_started_at: playHistory.started_at,
+          ph_ended_at: playHistory.ended_at,
+          ph_aborted: playHistory.aborted,
+        })
+        .from(planItems)
+        .leftJoin(media, eq(planItems.media_id, media.id))
+        .leftJoin(playHistory, eq(playHistory.plan_item_id, planItems.id))
+        .where(eq(planItems.plan_id, planId))
+        .orderBy(asc(planItems.position), asc(playHistory.started_at));
+
+      // A retried item can have several play_history rows — keep the latest.
+      const byItem = new Map<number, (typeof itemRows)[number]>();
+      for (const r of itemRows) byItem.set(r.item_id, r);
+      const items = [...byItem.values()].map((r) => {
+        const startedMs = r.ph_started_at != null ? r.ph_started_at.getTime() : null;
+        const endedMs = r.ph_ended_at != null ? r.ph_ended_at.getTime() : null;
+        return {
+          position: r.position,
+          content_type: r.content_type,
+          title: r.title ?? r.original_filename ?? null,
+          artist: r.artist ?? null,
+          planned_duration_seconds: r.planned_duration_seconds,
+          status: r.status,
+          reason: r.reason,
+          started_at_ms: startedMs,
+          aired_seconds:
+            startedMs != null && endedMs != null ? Math.max(0, (endedMs - startedMs) / 1000) : null,
+          aborted: r.ph_aborted ?? false,
+        };
+      });
+
+      let previous: typeof plan | null = null;
+      if (plan.activated_at != null) {
+        const [prev] = await db
+          .select(planCols)
+          .from(plans)
+          .leftJoin(clockSegments, eq(clockSegments.id, plans.segment_id))
+          .where(and(isNotNull(plans.activated_at), lt(plans.activated_at, plan.activated_at)))
+          .orderBy(desc(plans.activated_at))
+          .limit(1);
+        previous = prev ?? null;
+      }
+
+      return reply.send({
+        plan,
+        items,
+        planned_total_seconds: items.reduce((acc, it) => acc + it.planned_duration_seconds, 0),
+        previous,
+      });
+    } catch (err) {
+      fastify.log.error(err, 'supervisor v2 plan story failed');
+      return reply.status(500).send({ error: 'Failed to fetch plan story' });
     }
   });
 }
