@@ -2738,6 +2738,116 @@ intervals** (new validation rule, adopted into Part 1).
 - `mandatory` (= `priority='hard'` ∧ pacing ≥ 0.2) and the min/avg-spot space estimate both
   die with `priority`; guarantee-driven mandatoriness replaces them.
 
+#### D96 Part 3 — Design (drafted 2026-07-18; open decisions flagged at the end)
+
+**Data model.** Campaigns keep a flat row — no guarantee sub-table; the UI's "one interval
+guarantee + one show guarantee" shape is the spec, and two column pairs model it exactly:
+
+- `plays_per_month` → **`total_plays`** (contract volume over [starts_on, ends_on]).
+- `interval_plays_per_week` → **`interval_plays_per_day`** (N per daily occurrence of
+  `interval_id`); `plays_per_show` stays (N per airing of `show_id`). Both pairs now mean
+  GUARANTEE scope, never eligibility fence.
+- New: **`allowed_interval_ids`** (JSON id array; NULL = inherit station default),
+  **`min_gap_minutes`** (nullable — anti-clustering), `max_plays_per_day` stays (cap only).
+- Dropped: `priority`, `time_window_start/end`, `days_of_week`,
+  `first_in_slot_mode='at_least_one_shared'` (enum shrinks to `always` | `at_least_one`).
+- `campaign_media` + **`weight`** (int, default 1, 0 = benched).
+- `station_settings` + **`default_allowed_interval_ids`** (the "standard commercial day").
+- **No reservations table and no ledger table.** Outstanding guarantee reservations ARE the
+  active campaign rows (validator queries overlapping campaigns); the delivery ledger IS
+  play_history filtered `aborted=false` per D63 — the campaign page panel and invoices are
+  queries over it. Campaign DELETE additionally sweeps its id from other rows'
+  `competing_exclusions` (Part 2 hygiene item).
+
+**Eligibility pipeline (campaign.ts rewrite).** Per break, in order — each gate cheap
+before expensive:
+1. Active ∧ date range covers today.
+2. **Restriction:** break's real start ∈ (campaign's `allowed_interval_ids` ?? station
+   default) for today's dow. Replaces the singular `resolveIntervalId` identity check.
+3. **Hard wall:** delivered_total ≥ total_plays → out. (The wall whose absence caused the
+   2,563/90 incident.)
+4. Daily cap; **min-gap** (last play ≥ min_gap_minutes ago, from play_history).
+5. **Bracket fit:** `duration_bracket` ≤ break seconds remaining at request time (the pool
+   no longer filters by actual spot lengths — bracket is the fill unit; all attached files
+   fit it by attach-time validation).
+6. **Guarantee urgency:** break inside an unmet guarantee occurrence (interval instance
+   today with delivered < N, or current show airing with delivered < N) → candidate is
+   guarantee-urgent, the replacement for `mandatory`.
+7. **Pacing:** daily_quota = ceil(remaining_plays ÷ remaining_eligible_days) bounded by
+   max_plays_per_day; eligible while delivered_today < quota (guarantee-urgent bypasses).
+   In-day spread: score = expected-by-now-today − delivered_today, where expected runs
+   linearly across the day's eligible breaks (replaces D74's ±5% global ratio gate — the
+   quota IS the ahead-of-pace stop, per-day and honest).
+   Sort: guarantee-urgent first, then pacing deficit, then campaign_id.
+
+**Planner fill changes.** Fill stays physical (actual file seconds shrink `remaining` —
+that's what airs); eligibility and sale math use bracket (conservative: bracket ≥ file, so
+sold capacity always physically fits). Spot pick = weighted deficit rotation (Part 1), not
+longest-fits. `always` first-in-slot: contests slot 1 in EVERY eligible break (no
+slot_1_satisfied filter) and is placeable ONLY at position 0 — losers sit out that break;
+demand feasibility is the validator's job, not air-time's. `at_least_one`: if slot 1 is
+unclaimed by an `always` winner, the highest-deficit unsatisfied at_least_one candidate
+takes position 0 (this makes slot_1_preferred real). Separation filter fixed to `.some`
+(the Part 2 defect); exclusions unchanged. Scope fences removed (step 6 replaces them).
+
+**Sale-time validator** (one function; campaign form calls it live, schedule mutations
+re-run it for all active campaigns → problem badges):
+1. Volume: total_plays ≤ eligible breaks in period (allowed intervals ∩ [start,end], 1
+   play/campaign/break) minus same-exclusion-group companions' undelivered volume.
+2. Seconds: bracket × total_plays ≤ nominal sellable seconds remaining in eligible breaks
+   (Σ across active campaigns, never counting D75-style boost).
+3. Bracket sanity: bracket ≤ smallest break duration among allowed intervals.
+4. Guarantees: N × bracket ≤ smallest occurrence capacity (worst dow binds); N ≤ breaks in
+   the occurrence; period commitment (N × occurrences) ≤ scope supply − other campaigns'
+   guarantee commitments, summed within exclusion groups.
+5. First-in-slot: `always` → total_plays ≤ slot-1-free breaks (breaks − other always
+   campaigns' overlapping demand); `at_least_one` → every eligible day has ≥1 slot-1-free
+   break after always demand.
+6. Output: fit | warnings | refuse, with the numbers (feeds the cap-and-modal UX and the
+   simulation view).
+
+**Simulation & ledger.** The forecast endpoint dry-runs the SAME eligibility pipeline over
+the D95 grid day by day (no parallel model). Campaign page panel: sold / delivered /
+projected + per-guarantee compliance, all from play_history. Existing budget-drawn section
+gets recomputed from the ledger. Shortfall alert when quota × remaining eligible days <
+remaining plays (catch-up can't close) → operator chooses extend / credit.
+
+**Retirements:** D75 recovery multiplier + stop_set_estimates feedback loop (open decision
+1 below), `AHEAD_OF_PACE_THRESHOLD`/`MANDATORY_PACING_THRESHOLD`, `pickFirstInSlot`
+tie-break on priority, `pickLongestSpotThatFits`, `resolveIntervalId` singular resolution.
+
+**Phasing** (each shippable, in order):
+- **A — Schema + forms:** migration (renames, new columns, drops), campaign form rework
+  (Placement section: restrictions above guarantees, renamed Guaranteed Interval Plays with
+  count field, weights on spot rows, min-gap, allowed intervals), station default-intervals
+  setting, campaign wipe. Old engine keeps running on new columns' defaults.
+- **B — Engine:** eligibility/pacing rewrite + planner fill changes + separation/slot fixes.
+  The moment breaks stop being empty — watch the drift ledger's amber texture disappear.
+- **C — Validator:** sale-time checks + live form validation + revalidation-on-schedule-edit
+  + badges.
+- **D — Visibility:** delivery ledger panel, simulation view, budget-drawn validation,
+  shortfall alerts. Billing/invoices remain roadmap item 6, reading the same ledger.
+
+**Open decisions — RESOLVED with the operator 2026-07-18/19:**
+1. **D75 recovery boost: RETIRED.** Breaks stay nominal-sized, always. Catch-up space comes
+   from layers, in absorption order: (a) structural slack — the validator sells
+   bracket-seconds with conservative capacity models, so "100% sold" is never physically
+   full; (b) **the promo margin is the designed shock absorber** — campaigns are sold
+   against EFFECTIVE capacity (raw − promo margin), and since break fill order is already
+   campaigns-then-promos, raised catch-up quotas displace promos inside breaks with zero
+   new mechanism, then hand the space back when the debt clears (one lost day ≈ five days
+   of full margin consumption at 20%); (c) operator enlarges the grid — bigger/extra
+   stop-sets are a plain schedule edit that D95 tiling + revalidation absorb automatically;
+   (d) extend the campaign or settle with the client — surfaced by the shortfall alert,
+   never silent. The promo margin setting is hereby also the station's sellable-capacity
+   ceiling (revenue vs resilience dial) and gets surfaced as such in the inventory UI.
+2. **Catch-up limit: adopted.** Station setting, default 2× the campaign's original even
+   pace, per-campaign override; `max_plays_per_day` still caps absolutely on top; excess
+   debt flows to the shortfall alert.
+3. **Pacing mode `even` | `asap` per campaign: adopted** (asap = no quota gate, only caps
+   bind — burst campaigns). **Empty-break behavior stays:** no eligible demand → empty plan
+   → D94 skip; promos remain the only non-campaign break filler.
+
 ---
 
 ### Decision 97 — Boundary and runway refinements: greedy prefix, min-overshoot boundary pick, runway threshold as a setting
