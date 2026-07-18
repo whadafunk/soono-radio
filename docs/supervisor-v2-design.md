@@ -2564,6 +2564,180 @@ The campaign fields sort into three classes the current implementation conflates
 
 Out of scope for this outline: exact pacing-score formula, separation interactions, promo interplay — full design when the phase starts.
 
+#### D96 Part 1 — The campaign contract (pinned with the operator 2026-07-18)
+
+The contract discussion happened before the stop-set assembly analysis (deliberately reversed
+from the original plan: the analysis needs these semantics as its correctness criteria; the
+mechanical layer it audits survives the redesign either way). Everything below is agreed; the
+outline above stands except where this section refines it.
+
+**Volume — total plays over the contract period, not plays-per-month.** `plays_per_month`
+becomes `total_plays`: the contract promises N plays between `starts_on` and `ends_on`,
+full stop. This dissolves the partial-month proration question instead of answering it —
+there is no monthly promise to prorate. The monthly figure survives in two places only: a
+sales-side display ("≈120 plays/month equivalent") and the invoice, which bills each
+calendar month for what the delivery ledger says actually aired that month (delivered plays
+× bracket rate). Under-delivery in one month self-corrects: smaller invoice, catch-up plays
+next month. The existing campaign rows will be wiped and reconfigured fresh (operator's
+call) — no migration.
+
+**Duration bracket — the inventory and billing quantum.** Values 15/30/45/60/90 (replacing
+the 10–90-by-10 set). The bracket, not the actual file length, is what a play consumes from
+break capacity and what the rate card prices: a 27s spot in a 30 bracket consumes and bills
+30. The file is validated against the bracket at attach time (≤ bracket, else rejected with
+"upgrade the bracket" as the escape hatch — a pricing event, as it should be). This makes
+sale-time inventory math stable under spot-file swaps and structurally prevents the
+spot-length-outlier bug class. Spot picker UI: filter the clip list to bracket-fitting files
+by default, with a show-all view that displays lengths and blocks the wrong ones.
+
+**Pacing — derived, not operator-set.** Daily quota = remaining plays ÷ remaining eligible
+days, recomputed daily from the ledger (missed days redistribute forward — built-in
+make-goods, bounded catch-up). `max_plays_per_day` is demoted from pacing mechanism to
+optional client-facing ceiling ("don't make me sound spammy"). New field: **minimum gap
+between plays of the same campaign** (minutes) — the natural anti-clustering knob ("not
+twice in the same hour"), composing with pacing instead of fighting it. In-day placement
+spreads the daily quota across the day's eligible breaks rather than filling greedily from
+the first one.
+
+**Restrictions — allowed intervals (plural).** A campaign carries a set of broadcast-interval
+ids; a play may only land in a break whose real start time (D95 tiling) falls inside an
+allowed interval that day. The default is a **station-level setting** — a "standard
+commercial day" set every campaign inherits — so overnight airing is the explicit opt-in
+exception, never the consequence of an unset form field. Subsumes and retires
+`time_window_start`/`time_window_end`/`days_of_week` (operator approved the removal).
+Effective supply for BOTH sale-time validation and pacing is the intersection: period ×
+allowed intervals × the tiled break grid. Pacing must derive from the restricted supply, or
+it demands plays on days where the allowed windows have nothing left.
+
+**Guarantees — one mechanism: N plays per occurrence of a scope.** The two UI concepts are
+the same machine: an interval guarantee is "N plays per daily instance of interval X"
+(operator's per-day framing), a show guarantee is "N plays per airing of show Y". Scope
+occurrence: interval → its daily instance; show → one airing. Validation is identical for
+both: (a) N × bracket must fit the scope's **smallest** occurrence (interval durations vary
+by day-of-week — the worst day binds; this is the number behind the cap-and-modal UX), and
+(b) the derived period commitment (N × occurrences in period) must fit the scope's supply
+**minus other campaigns' outstanding guarantee reservations** — guarantees are reservations
+and must be tracked first-class per scope, or two same-week sales can jointly oversell an
+interval while both passing naive validation. Internal consistency: guaranteed plays count
+WITHIN `total_plays` (never on top), and a guaranteed interval must be inside the allowed
+set (auto-added or hard error). UI: one "Placement" section, restrictions ("where it may
+air") above guarantees ("where it must air"); the old mistitled "Broadcast Interval" field
+becomes "Guaranteed Interval Plays" with the count field appearing on selection.
+
+**First-in-slot — global, two modes.** `always` (every play opens its break — consumes
+exclusive slot-1 inventory, priced accordingly) and `at_least_one` (once per day). The
+third mode `at_least_one_shared` is dropped — the assembly analysis first documents what it
+currently does before the enum value is deleted. Slot-1 inventory is exactly one per break;
+sale-time validation: the sum of all campaigns' slot-1 demand within the eligible supply
+must fit the break count. Explicitly NOT per-interval: first-in-slot does not compose with
+interval guarantees ("first slot within the guaranteed interval" is not a sellable thing —
+operator's call, keeps the budget math sane).
+
+**Priority — dropped** (reconfirmed). Guarantees express "must", pacing urgency orders the
+queue, the total-plays wall bounds everything; two overlapping importance systems is how
+the 28×-over-serving incident happened.
+
+**Unchanged:** `advertiser_separation_spots` (intra-break, customer-scoped) and
+`competing_exclusions` (mutual break-level exclusion: two campaigns marked as competitors
+never share a break). Exclusions are symmetric BY CONSTRUCTION at save time
+(`syncExclusions` in customers.ts writes both sides on create and patch), which is what
+makes the planner's one-directional enforcement ("once placed, exclude everyone on my
+list") correct regardless of placement order. Two follow-ups: (a) campaign DELETE does not
+clean the deleted id out of other campaigns' exclusion lists — dangling ids are inert at
+runtime but should be swept in the D96 schema work; (b) exclusion groups interact with
+guarantee validation — two mutually-excluded campaigns with guarantees in the same scope
+occurrence need N_A + N_B breaks (they can never share one), so the reservation math must
+sum demand within an exclusion group, not max it.
+
+**Spot rotation within a campaign — weighted, stateless (added 2026-07-18).** A campaign
+may carry multiple spots in its bracket; today they do NOT rotate (`pickLongestSpotThatFits`
+is deterministic — the longest attached spot airs every time, the rest never do).
+`campaign_media` gains a `weight` column (default 1; 0 = deliberately benched, shown as
+such in the UI — not an error). No rotation document and no cursor state: at pick time,
+per-spot delivered counts come from play_history and the pick is the fitting spot most
+behind its weighted share (lowest delivered ÷ weight) — exact long-run proportions, no RNG,
+self-correcting, restart-proof, and the ledger shows per-spot delivery for free. Composes
+with the bracket quantum: since a play consumes bracket seconds regardless of file length,
+spot choice no longer affects fill math at all — selection becomes purely a rotation
+concern and `pickLongestSpotThatFits` retires. Attach-time validation (file ≤ bracket)
+already pinned above.
+
+**Simulation & ledger UX.** The day/week "budget draw" forecast must be a **dry-run of the
+live allocator's own code path** against the D95 grid — never a parallel model (it would
+drift and then lie at sale time). It doubles as the sale-time validator's explanation.
+The existing per-day budget-drawn section gets validated against the delivery ledger.
+Shortfall handling: bounded catch-up first; when catch-up cannot close the gap, an operator
+alert with an explicit choice (extend end date / credit) — never silent best-effort.
+Schedule edits re-run validation for active campaigns via the existing cache-invalidation
+hooks; newly-oversold campaigns get a problem badge on the campaigns list AND on the
+campaign rows in customer detail.
+
+#### D96 Part 2 — Stop-set assembly analysis (the D101-style audit, run 2026-07-18 against the pinned contract)
+
+Scope: `assembleStopSetPlan` (planner.ts) + `buildPool`/pacing (campaign.ts), plus a screen
+of rundown assembly and the coasting gap-fill core for the same bug classes.
+
+**D101 bug class 1 (premature place-or-stop): the stop-set fill loop is CLEAN.** Eligibility
+recomputes every iteration on "has any spot ≤ remaining", so a long spot never blocks a
+shorter one and the loop only stops when nothing fits; the boundary decision (D73) fires
+once, after the pass. Stop-set had the shape music only got with D101. The rundown path's
+strict tail-drop (D35) LOOKS like the bug class but is justified: rundown order is
+editorial — skipping a long story to air a later one would reorder editorial content.
+Gap-fill (tryGapFill rounds) is also clean: while-progress loop, longest-fit per type.
+
+**D101 bug class 2 (pool sizing / outlier sensitivity): structurally robust.** buildPool
+returns ALL eligible campaigns with ALL fitting spots — no count sizing to starve. Spots
+filter at ≤ requestBound (target × 1.5, D75). One silent hole: a campaign whose every spot
+exceeds requestBound vanishes with no log; under the bracket model this becomes a sale-time
+check instead — **a campaign's bracket must fit the smallest break in its allowed
+intervals** (new validation rule, adopted into Part 1).
+
+**Real defects found:**
+
+1. **`advertiser_separation_spots` > 1 is broken.** Both copies of the filter (fill loop and
+   boundary decision) test `!tailCustomerIds.every(cid === c.customer_id)` — a candidate is
+   only blocked when the ENTIRE lookback tail is its own customer. Sequence A,B,A passes a
+   separation of 2 (only 1 spot between the As). Correct test is `.some(...)` → block if the
+   customer appears ANYWHERE in the last N campaign items. Effective behavior today is
+   adjacency-only regardless of the configured value. (Also underspecified: the tail slice
+   counts promos as separators — acceptable, but should be an explicit decision.)
+2. **First-in-slot `always` is not enforced.** The slot-1 contest excludes candidates with
+   `slot_1_satisfied_today`, and nothing stops a `slot_1_required` campaign from being
+   placed mid-break by the main loop. So `always` actually delivers "first play of the day
+   opens a break; every later play lands anywhere" — `at_least_one` semantics. Under the
+   pinned contract, `always` must mean: only ever placeable at position 0 (and its slot-1
+   demand is validated at sale time).
+3. **`slot_1_preferred` is dead code.** Both `at_least_one` and `at_least_one_shared` map to
+   it, and no code consumes it — "at least once a day" currently does nothing at all. This
+   also answers the pre-deletion question: `at_least_one_shared` is behaviorally identical
+   to `at_least_one` (both dead); safe to drop the enum value.
+4. **Scopes are fences, not minimums.** `campaign.show_id != null && show_id !== current`
+   (and the interval twin) makes a show/interval association a hard filter — the campaign
+   can ONLY air there. The pinned contract says guarantees are minimums; the only fences are
+   the allowed-intervals restriction. Placement must split guarantee-scope (extra demand
+   inside the scope) from restriction-scope (eligibility).
+
+**Confirmed-as-coded (not defects, but D96 inputs):**
+- The empty-stop-sets lockout is D74 working as written: `globalRatio ≥ +5%` excludes, and
+  the 28×-overserved campaigns stay excluded until linear expected pace catches up (~months).
+  Moot once campaigns are wiped, but the mechanism is why breaks are empty since 07-12.
+- `globalPacingRatio` projects volume via `plays_per_month × (rangeMs / 30d)` — a fixed
+  30-day month approximation that over/under-states the target on real months. Dies with
+  `total_plays` (expected = total × elapsed/total, no approximation).
+- The D75 recovery boost fills up to 1.5× the scheduled break when behind. Sale-time
+  validation must sell against NOMINAL break seconds only — boost is a recovery mechanism,
+  never sellable capacity.
+- Adjacency rule (no same campaign back-to-back; D22 repeats otherwise legal) bounds
+  per-break capacity: with a single eligible campaign, one spot per break (the boundary
+  decision also excludes the immediately-preceding campaign). Guarantee validation should
+  use the conservative "1 play per campaign per break" capacity model.
+- Slot-1 contest edge: if the winner has no fitting spot the slot is simply not filled — no
+  fallback to the runner-up. Rare; fix rides with the first-in-slot rework.
+- D99 protections verified sound: ≥1s spot floor in both eligibility and pick, 15s loop
+  threshold, 200-iteration backstop; every placement shrinks the remainder.
+- `mandatory` (= `priority='hard'` ∧ pacing ≥ 0.2) and the min/avg-spot space estimate both
+  die with `priority`; guarantee-driven mandatoriness replaces them.
+
 ---
 
 ### Decision 97 — Boundary and runway refinements: greedy prefix, min-overshoot boundary pick, runway threshold as a setting
