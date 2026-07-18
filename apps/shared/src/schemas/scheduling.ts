@@ -347,11 +347,21 @@ export type BroadcastIntervalSlotPatch = z.infer<typeof BroadcastIntervalSlotPat
 
 // ============ CAMPAIGNS ============
 
-export const PRIORITY_LEVELS = ['hard', 'best_effort'] as const;
-export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
-
-export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one', 'at_least_one_shared'] as const;
+// D96: 'at_least_one_shared' dropped — it mapped to the same dead
+// slot_1_preferred constraint as 'at_least_one' (behaviorally identical).
+export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one'] as const;
 export type FirstInSlotMode = (typeof FIRST_IN_SLOT_MODES)[number];
+
+// D96: brackets are the inventory/billing quantum (rate-card values).
+export const DURATION_BRACKETS = [15, 30, 45, 60, 90] as const;
+
+export const PACING_MODES = ['even', 'asap'] as const;
+export type PacingMode = (typeof PACING_MODES)[number];
+
+const durationBracketField = z.number().int().refine(
+  (v) => (DURATION_BRACKETS as readonly number[]).includes(v),
+  { message: 'Must be one of 15, 30, 45, 60, 90 seconds' },
+);
 
 export const CampaignSchema = z.object({
   id: z.number().int(),
@@ -359,20 +369,24 @@ export const CampaignSchema = z.object({
   name: z.string(),
   starts_on: z.string(),
   ends_on: z.string(),
-  plays_per_month: z.number().int().positive(),
-  duration_bracket: z.number().int().refine(v => [10,20,30,40,50,60,70,80,90].includes(v), { message: 'Must be 10–90s in 10s steps' }),
+  // Contract volume over [starts_on, ends_on] (D96 — not a monthly figure).
+  total_plays: z.number().int().positive(),
+  duration_bracket: durationBracketField,
   max_plays_per_day: z.number().int().positive().nullable(),
+  min_gap_minutes: z.number().int().positive().nullable(),
+  pacing_mode: z.enum(PACING_MODES).default('even'),
+  catch_up_factor: z.number().positive().nullable(),
+  // Allowed-airtime restriction: broadcast_interval ids. Null = station default.
+  allowed_interval_ids: z.array(z.number().int()).nullable(),
   sweeps_per_month: z.number().int().nonnegative().nullable(),
   max_sweeps_per_day: z.number().int().positive().nullable(),
-  time_window_start: z.string().nullable(),
-  time_window_end: z.string().nullable(),
-  days_of_week: z.string().nullable(),
   advertiser_separation_spots: z.number().int().nonnegative().default(1),
   competing_exclusions: z.array(z.number().int()).default([]),
-  priority: z.enum(PRIORITY_LEVELS).default('hard'),
   interval_id: z.number().int().nullable(),
-  interval_plays_per_week: z.number().int().positive().nullable(),
+  // Guarantee: N plays per DAILY occurrence of interval_id (D96).
+  interval_plays_per_day: z.number().int().positive().nullable(),
   show_id: z.number().int().nullable(),
+  // Guarantee: N plays per AIRING of show_id.
   plays_per_show: z.number().int().positive().nullable(),
   first_in_slot: z.boolean().default(false),
   first_in_slot_mode: z.enum(FIRST_IN_SLOT_MODES).nullable(),
@@ -391,19 +405,19 @@ export const CampaignCreateSchema = z.object({
     'Start date cannot be in the past',
   ),
   ends_on: z.string().min(1, 'End date required'),
-  plays_per_month: z.number().int().positive('Must be at least 1'),
-  duration_bracket: z.number().int().refine(v => [10,20,30,40,50,60,70,80,90].includes(v), { message: 'Must be 10–90s in 10s steps' }),
+  total_plays: z.number().int().positive('Must be at least 1'),
+  duration_bracket: durationBracketField,
   max_plays_per_day: z.number().int().positive().nullable().optional(),
+  min_gap_minutes: z.number().int().positive().nullable().optional(),
+  pacing_mode: z.enum(PACING_MODES).default('even'),
+  catch_up_factor: z.number().positive().nullable().optional(),
+  allowed_interval_ids: z.array(z.number().int()).nullable().optional(),
   sweeps_per_month: z.number().int().nonnegative().nullable().optional(),
   max_sweeps_per_day: z.number().int().positive().nullable().optional(),
-  time_window_start: z.string().nullable().optional(),
-  time_window_end: z.string().nullable().optional(),
-  days_of_week: z.string().nullable().optional(),
   advertiser_separation_spots: z.number().int().nonnegative().default(1),
   competing_exclusions: z.array(z.number().int()).default([]),
-  priority: z.enum(PRIORITY_LEVELS).default('hard'),
   interval_id: z.number().int().positive().nullable().optional(),
-  interval_plays_per_week: z.number().int().positive().nullable().optional(),
+  interval_plays_per_day: z.number().int().positive().nullable().optional(),
   show_id: z.number().int().positive().nullable().optional(),
   plays_per_show: z.number().int().positive().nullable().optional(),
   first_in_slot: z.boolean().default(false),
@@ -416,19 +430,19 @@ export const CampaignPatchSchema = z.object({
   name: z.string().min(1).optional(),
   starts_on: z.string().optional(),
   ends_on: z.string().optional(),
-  plays_per_month: z.number().int().positive().optional(),
-  duration_bracket: z.number().int().refine(v => [10,20,30,40,50,60,70,80,90].includes(v), { message: 'Must be 10–90s in 10s steps' }).optional(),
+  total_plays: z.number().int().positive().optional(),
+  duration_bracket: durationBracketField.optional(),
   max_plays_per_day: z.number().int().positive().nullable().optional(),
+  min_gap_minutes: z.number().int().positive().nullable().optional(),
+  pacing_mode: z.enum(PACING_MODES).optional(),
+  catch_up_factor: z.number().positive().nullable().optional(),
+  allowed_interval_ids: z.array(z.number().int()).nullable().optional(),
   sweeps_per_month: z.number().int().nonnegative().nullable().optional(),
   max_sweeps_per_day: z.number().int().positive().nullable().optional(),
-  time_window_start: z.string().nullable().optional(),
-  time_window_end: z.string().nullable().optional(),
-  days_of_week: z.string().nullable().optional(),
   advertiser_separation_spots: z.number().int().nonnegative().optional(),
   competing_exclusions: z.array(z.number().int()).optional(),
-  priority: z.enum(PRIORITY_LEVELS).optional(),
   interval_id: z.number().int().positive().nullable().optional(),
-  interval_plays_per_week: z.number().int().positive().nullable().optional(),
+  interval_plays_per_day: z.number().int().positive().nullable().optional(),
   show_id: z.number().int().positive().nullable().optional(),
   plays_per_show: z.number().int().positive().nullable().optional(),
   first_in_slot: z.boolean().optional(),
@@ -581,6 +595,8 @@ export const CampaignMediaSchema = z.object({
   media_id: z.number().int(),
   play_as_spot: z.boolean().default(true),
   play_as_sweep: z.boolean().default(false),
+  // D96 spot rotation weight; 0 = deliberately benched.
+  weight: z.number().int().min(0).max(10).default(1),
   created_at: z.coerce.date(),
 });
 export type CampaignMedia = z.infer<typeof CampaignMediaSchema>;
@@ -589,6 +605,7 @@ export const CampaignMediaCreateSchema = z.object({
   media_id: z.number().int().positive(),
   play_as_spot: z.boolean().default(true),
   play_as_sweep: z.boolean().default(false),
+  weight: z.number().int().min(0).max(10).default(1),
 });
 export type CampaignMediaCreate = z.infer<typeof CampaignMediaCreateSchema>;
 
@@ -1022,6 +1039,11 @@ export const StationSettingsSchema = z.object({
   // skipped and their time becomes boundary fill. Default 300s ≈ one average
   // track plus headroom.
   runway_worth_it_threshold_s: z.number().min(60).max(900),
+  // D96: the "standard commercial day" — allowed-airtime intervals every
+  // campaign inherits unless it overrides. Null/empty = unrestricted.
+  default_allowed_interval_ids: z.array(z.number().int()).nullable(),
+  // D96: catch-up ceiling as a multiple of a campaign's original even pace.
+  default_catch_up_factor: z.number().min(1).max(10),
 });
 export type StationSettings = z.infer<typeof StationSettingsSchema>;
 

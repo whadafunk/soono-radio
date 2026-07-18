@@ -268,21 +268,23 @@ export async function customerRoutes(fastify: FastifyInstance) {
       name: parsed.data.name,
       starts_on: parsed.data.starts_on,
       ends_on: parsed.data.ends_on,
-      plays_per_month: parsed.data.plays_per_month,
+      total_plays: parsed.data.total_plays,
       duration_bracket: parsed.data.duration_bracket,
       max_plays_per_day: parsed.data.max_plays_per_day ?? null,
+      min_gap_minutes: parsed.data.min_gap_minutes ?? null,
+      pacing_mode: parsed.data.pacing_mode ?? 'even',
+      catch_up_factor: parsed.data.catch_up_factor ?? null,
+      allowed_interval_ids: parsed.data.allowed_interval_ids ?? null,
       sweeps_per_month: parsed.data.sweeps_per_month ?? null,
       max_sweeps_per_day: parsed.data.max_sweeps_per_day ?? null,
-      time_window_start: parsed.data.time_window_start ?? null,
-      time_window_end: parsed.data.time_window_end ?? null,
-      days_of_week: parsed.data.days_of_week ?? null,
       advertiser_separation_spots: parsed.data.advertiser_separation_spots ?? 1,
       competing_exclusions: parsed.data.competing_exclusions ?? [],
-      priority: parsed.data.priority ?? 'best_effort',
       interval_id: parsed.data.interval_id ?? null,
-      interval_plays_per_week: parsed.data.interval_plays_per_week ?? null,
+      interval_plays_per_day: parsed.data.interval_plays_per_day ?? null,
       show_id: parsed.data.show_id ?? null,
       plays_per_show: parsed.data.plays_per_show ?? null,
+      first_in_slot: parsed.data.first_in_slot ?? false,
+      first_in_slot_mode: parsed.data.first_in_slot_mode ?? null,
       notes: parsed.data.notes ?? null,
     }).returning();
     if (campaign.competing_exclusions && (campaign.competing_exclusions as number[]).length > 0) {
@@ -319,6 +321,9 @@ export async function customerRoutes(fastify: FastifyInstance) {
 
   fastify.delete<{ Params: { id: string } }>('/campaigns/:id', async (request, reply) => {
     const id = Number(request.params.id);
+    // D96 hygiene: clear this id out of partners' exclusion lists BEFORE the
+    // row goes away, so no dangling references survive the delete.
+    await syncExclusions(id, []);
     await db.delete(campaigns).where(eq(campaigns.id, id));
     invalidateInventory();
     invalidateDemand();
@@ -328,12 +333,12 @@ export async function customerRoutes(fastify: FastifyInstance) {
   // Pacing stub — real calculation requires play tracking per campaign
   fastify.get<{ Params: { id: string } }>('/campaigns/:id/pacing', async (request, reply) => {
     const id = Number(request.params.id);
-    const [campaign] = await db.select({ plays_per_month: campaigns.plays_per_month })
+    const [campaign] = await db.select({ total_plays: campaigns.total_plays })
       .from(campaigns).where(eq(campaigns.id, id));
     if (!campaign) return reply.status(404).send({ error: 'Campaign not found' });
     return reply.send({
       plays_this_month: 0,
-      target: campaign.plays_per_month,
+      target: campaign.total_plays,
       pct: 0,
       on_track: false,
     });
@@ -350,6 +355,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
         media_id: campaignMedia.media_id,
         play_as_spot: campaignMedia.play_as_spot,
         play_as_sweep: campaignMedia.play_as_sweep,
+        weight: campaignMedia.weight,
         created_at: campaignMedia.created_at,
         title: media.title,
         artist: media.artist,
@@ -371,6 +377,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       media_id: parsed.data.media_id,
       play_as_spot: parsed.data.play_as_spot ?? true,
       play_as_sweep: parsed.data.play_as_sweep ?? false,
+      weight: parsed.data.weight ?? 1,
     }).returning();
     // Re-fetch with media join
     const [withMedia] = await db
@@ -380,6 +387,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
         media_id: campaignMedia.media_id,
         play_as_spot: campaignMedia.play_as_spot,
         play_as_sweep: campaignMedia.play_as_sweep,
+        weight: campaignMedia.weight,
         created_at: campaignMedia.created_at,
         title: media.title,
         artist: media.artist,
@@ -392,13 +400,16 @@ export async function customerRoutes(fastify: FastifyInstance) {
     return reply.status(201).send(withMedia);
   });
 
-  fastify.patch<{ Params: { id: string }; Body: { play_as_spot?: boolean; play_as_sweep?: boolean } }>(
+  fastify.patch<{ Params: { id: string }; Body: { play_as_spot?: boolean; play_as_sweep?: boolean; weight?: number } }>(
     '/campaign-media/:id',
     async (request, reply) => {
       const id = Number(request.params.id);
-      const patch: { play_as_spot?: boolean; play_as_sweep?: boolean } = {};
+      const patch: { play_as_spot?: boolean; play_as_sweep?: boolean; weight?: number } = {};
       if (request.body.play_as_spot !== undefined) patch.play_as_spot = request.body.play_as_spot;
       if (request.body.play_as_sweep !== undefined) patch.play_as_sweep = request.body.play_as_sweep;
+      if (request.body.weight !== undefined && Number.isInteger(request.body.weight) && request.body.weight >= 0 && request.body.weight <= 10) {
+        patch.weight = request.body.weight;
+      }
       const [updated] = await db.update(campaignMedia)
         .set(patch)
         .where(eq(campaignMedia.id, id))

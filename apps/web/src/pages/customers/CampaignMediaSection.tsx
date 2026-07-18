@@ -75,12 +75,14 @@ function MediaClipRow({
   item,
   hasSweeps,
   onToggle,
+  onWeight,
   onRemove,
   isPending,
 }: {
   item: CampaignMediaWithMedia;
   hasSweeps: boolean;
   onToggle: (id: number, spot: boolean, sweep: boolean) => void;
+  onWeight: (id: number, weight: number) => void;
   onRemove: (id: number) => void;
   isPending: boolean;
 }) {
@@ -98,6 +100,26 @@ function MediaClipRow({
       <span className="text-xs text-zinc-500 font-mono flex-shrink-0 w-10 text-right">
         {formatDuration(item.duration_seconds ?? 0)}
       </span>
+      <label
+        className="flex items-center gap-1 text-xs text-zinc-400 flex-shrink-0"
+        title="Rotation weight — spots rotate proportionally to their weights (delivery tracked from play history). 0 benches the spot without detaching it."
+      >
+        w
+        <input
+          type="number"
+          min={0}
+          max={10}
+          defaultValue={item.weight}
+          key={`w-${item.id}-${item.weight}`}
+          onBlur={(e) => {
+            const v = Math.max(0, Math.min(10, Math.round(Number(e.target.value))));
+            if (Number.isFinite(v) && v !== item.weight) onWeight(item.id, v);
+          }}
+          disabled={isPending}
+          className={`w-12 bg-zinc-800 border rounded px-1.5 py-0.5 text-xs text-zinc-200 ${item.weight === 0 ? 'border-amber-600 text-amber-300' : 'border-zinc-700'}`}
+        />
+        {item.weight === 0 && <span className="text-amber-400">benched</span>}
+      </label>
       <SpotSweepPills
         playAsSpot={item.play_as_spot}
         playAsSweep={item.play_as_sweep}
@@ -205,6 +227,7 @@ function LibraryPickerModal({
                       media_id: mediaItem.id,
                       play_as_spot: true,
                       play_as_sweep: false,
+                      weight: 1,
                       title: mediaItem.title,
                       artist: mediaItem.artist,
                       duration_seconds: mediaItem.duration_seconds,
@@ -291,6 +314,12 @@ export function CampaignMediaSection({
     onSuccess: invalidate,
   });
 
+  const weightMutation = useMutation({
+    mutationFn: ({ id, weight }: { id: number; weight: number }) =>
+      updateCampaignMedia(id, { weight }),
+    onSuccess: invalidate,
+  });
+
   const isPending =
     addMutation.isPending || toggleMutation.isPending || removeMutation.isPending;
 
@@ -328,6 +357,7 @@ export function CampaignMediaSection({
               item={item}
               hasSweeps={hasSweeps}
               onToggle={(id, spot, sweep) => toggleMutation.mutate({ id, play_as_spot: spot, play_as_sweep: sweep })}
+              onWeight={(id, weight) => weightMutation.mutate({ id, weight })}
               onRemove={(id) => removeMutation.mutate(id)}
               isPending={isPending}
             />

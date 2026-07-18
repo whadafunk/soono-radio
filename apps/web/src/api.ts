@@ -916,7 +916,7 @@ export function addCampaignMedia(campaignId: number, data: CampaignMediaAdd): Pr
 
 export function updateCampaignMedia(
   id: number,
-  patch_: { play_as_spot?: boolean; play_as_sweep?: boolean },
+  patch_: { play_as_spot?: boolean; play_as_sweep?: boolean; weight?: number },
 ): Promise<CampaignMediaWithMedia> {
   return patch(`/campaign-media/${id}`, patch_);
 }

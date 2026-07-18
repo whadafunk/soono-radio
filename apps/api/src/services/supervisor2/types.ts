@@ -8,8 +8,6 @@
 // in multiple slots (e.g. the same jingle as both an interstitial candidate
 // and a coasting-fill candidate).
 
-import type { PriorityLevel } from '@soono/shared';
-
 // ─── Music ────────────────────────────────────────────────────────────────────
 
 export type MusicCandidateSource = 'rotation' | 'hot_play' | 'heavy_rotation';
@@ -62,7 +60,6 @@ export interface CampaignCandidate {
   campaign_id: number;
   customer_id: number;
   name: string;
-  priority: PriorityLevel;
   // Urgency — higher means more behind the pacing target. Computed as the
   // worst of global / per-show / per-interval pacing deltas.
   pacing_score: number;
@@ -76,7 +73,8 @@ export interface CampaignCandidate {
   advertiser_separation_spots: number;
   // Spots whose effective duration fits the break.
   spot_pool: SpotCandidate[];
-  // Hard priority + significantly behind pacing. The Planner must place
+  // Significantly behind pacing (D96: was also gated on hard priority
+  // before the priority field was dropped). The Planner must place
   // these unless competing constraints make it impossible.
   mandatory: boolean;
 }
@@ -93,7 +91,7 @@ export interface PromoCandidate {
 
 export interface BreakSpaceEstimate {
   break_duration_seconds: number;
-  // Sum of minimum spot durations for mandatory hard-priority campaigns.
+  // Sum of minimum spot durations for mandatory campaigns.
   hard_claimed_seconds: number;
   // Sum of average spot durations for best-effort campaigns.
   contested_seconds: number;

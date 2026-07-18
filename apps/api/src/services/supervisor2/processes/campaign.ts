@@ -134,8 +134,6 @@ export class CampaignProcess {
       .where(eq(clockSegments.id, segmentId));
 
     const today = ymdFromMs(nowMs);
-    const todayHHMM = hhmmFromMs(nowMs);
-    const dow = isoDayOfWeek(nowMs);
     const midnightMsToday = midnightMs(nowMs);
 
     // Decision 75: campaign-driven recovery multiplier, reusing the existing
@@ -174,12 +172,10 @@ export class CampaignProcess {
 
     for (const campaign of rawCampaigns) {
       // ── Binary eligibility filters ────────────────────────────────────────
-      if (!isWithinTimeWindow(campaign.time_window_start, campaign.time_window_end, todayHHMM)) {
-        continue;
-      }
-      if (!isDayOfWeekAllowed(campaign.days_of_week, dow)) {
-        continue;
-      }
+      // D96 Phase A: time_window/days_of_week are gone (subsumed by
+      // allowed_interval_ids, enforced by the Phase B eligibility rewrite).
+      // The show/interval fences below are also slated to become guarantee
+      // scopes (minimums) in Phase B — kept as-is until then.
       if (campaign.show_id != null && campaign.show_id !== showId) {
         continue;
       }
@@ -190,6 +186,17 @@ export class CampaignProcess {
       if (campaign.max_plays_per_day != null && playsToday >= campaign.max_plays_per_day) {
         continue;
       }
+
+      // D96 hard wall: the contract volume is a ceiling, never advisory. A
+      // campaign that has delivered its total is done — this is the check
+      // whose absence let 2,563 plays air against a 90/month quota. Also
+      // correctly retires legacy rows migrated with total_plays=0.
+      const deliveredTotal = await this.countPlaysInRange(
+        campaign.id,
+        dateStringToMs(campaign.starts_on),
+        nowMs,
+      );
+      if (deliveredTotal >= campaign.total_plays) continue;
 
       // ── Spot pool (filtered to fit the break) ─────────────────────────────
       const spotPool = await this.loadSpotPool(campaign.id, durationNeededSeconds);
@@ -226,22 +233,22 @@ export class CampaignProcess {
             : 'slot_1_preferred')
         : 'any';
 
-      const mandatory =
-        campaign.priority === 'hard' && pacingScore >= MANDATORY_PACING_THRESHOLD;
+      // D96: priority is dropped — mandatoriness is pacing-only until Phase B
+      // replaces it with guarantee urgency.
+      const mandatory = pacingScore >= MANDATORY_PACING_THRESHOLD;
 
       const minSpotDuration = Math.min(...spotPool.map((s) => s.duration_seconds));
       const avgSpotDuration =
         spotPool.reduce((sum, s) => sum + s.duration_seconds, 0) / spotPool.length;
 
       if (mandatory) hardClaimedSeconds += minSpotDuration;
-      else if (campaign.priority === 'best_effort') contestedSeconds += avgSpotDuration;
+      else contestedSeconds += avgSpotDuration;
 
       candidates.push({
         id: campaign.id,
         campaign_id: campaign.id,
         customer_id: campaign.customer_id,
         name: campaign.name,
-        priority: campaign.priority,
         pacing_score: pacingScore,
         position_constraint: positionConstraint,
         slot_1_satisfied_today: slot1Satisfied,
@@ -392,17 +399,17 @@ export class CampaignProcess {
       campaign.interval_id != null &&
       intervalId != null &&
       campaign.interval_id === intervalId &&
-      campaign.interval_plays_per_week != null
+      campaign.interval_plays_per_day != null
     ) {
-      const weekStartMs = startOfIsoWeekMs(nowMs);
-      const playsThisWeek = await this.countPlaysInRange(
+      // D96: the interval guarantee is N plays per DAILY occurrence.
+      const playsToday = await this.countPlaysInRange(
         campaign.id,
-        weekStartMs,
+        midnightMs(nowMs),
         nowMs,
       );
       perIntervalBehind = Math.max(
         0,
-        1 - playsThisWeek / campaign.interval_plays_per_week,
+        1 - playsToday / campaign.interval_plays_per_day,
       );
     }
 
@@ -425,12 +432,10 @@ export class CampaignProcess {
     const elapsedMs = Math.max(0, Math.min(totalMs, nowMs - startMs));
     if (totalMs <= 0) return 0;
 
-    // plays_per_month is a per-month target; the campaign date range can
-    // exceed (or fall short of) a month. Project to total expected plays
-    // across the campaign window using calendar months.
-    const months = totalMs / (30 * 24 * 3600 * 1000);
-    const totalPlanned = campaign.plays_per_month * months;
-    const expectedByNow = totalPlanned * (elapsedMs / totalMs);
+    // D96: total_plays IS the contract volume over the campaign window — no
+    // per-month projection (the old plays_per_month × 30-day-months math and
+    // its approximation error are gone).
+    const expectedByNow = campaign.total_plays * (elapsedMs / totalMs);
     if (expectedByNow <= 0) return 0;
 
     const actual = await this.countPlaysInRange(campaign.id, startMs, nowMs);
@@ -628,27 +633,6 @@ function effectiveDuration(m: MediaDurationCols): number {
     if (eff > 0) return eff;
   }
   return m.duration_seconds;
-}
-
-function isWithinTimeWindow(
-  start: string | null,
-  end: string | null,
-  hhmm: string,
-): boolean {
-  if (!start && !end) return true;
-  if (start && hhmm < start) return false;
-  if (end && hhmm >= end) return false;
-  return true;
-}
-
-function isDayOfWeekAllowed(daysCsv: string | null, dow: number): boolean {
-  if (!daysCsv) return true;
-  const allowed = daysCsv
-    .split(',')
-    .map((s) => parseInt(s.trim(), 10))
-    .filter((n) => Number.isFinite(n));
-  if (allowed.length === 0) return true;
-  return allowed.includes(dow);
 }
 
 function parseIdList(raw: unknown): number[] {

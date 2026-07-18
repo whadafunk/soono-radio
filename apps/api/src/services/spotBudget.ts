@@ -602,17 +602,16 @@ async function computeDemand(
     if (totalDays <= 0 || daysInPeriod <= 0) continue;
 
     // P = planned plays in period (projection) or remaining plays (live).
-    // campaigns.plays_per_month is monthly — pro-rate to the analysis window.
-    // For simplicity, we treat "month" as 30 days.
-    const DAYS_PER_MONTH = 30;
-    const playsInPeriodFull = (c.plays_per_month / DAYS_PER_MONTH) * daysInPeriod;
+    // D96: total_plays is the contract volume over the campaign's own range —
+    // pro-rate by days to the analysis window (no month approximation).
+    const playsInPeriodFull = (c.total_plays / totalDays) * daysInPeriod;
 
     let P: number;
     let D: number; // campaign days in period
 
     if (mode === 'remaining') {
       const actualPlays = actualPlaysByCampaign.get(c.id) ?? 0;
-      const plannedTotal = (c.plays_per_month / DAYS_PER_MONTH) * totalDays;
+      const plannedTotal = c.total_plays;
       const remaining = Math.max(0, plannedTotal - actualPlays);
       // For live: P = remaining plays (proportional to remaining days in period).
       const now2 = new Date();
@@ -785,7 +784,6 @@ export async function getCampaignAvailable(
     scopedL3 = l3.global;
   }
 
-  const DAYS_PER_MONTH = 30;
   const campStart = campaign.starts_on > periodStartStr ? campaign.starts_on : periodStartStr;
   const campEnd = campaign.ends_on < periodEndStr ? campaign.ends_on : periodEndStr;
   const campStartDate = new Date(campStart);
@@ -843,11 +841,15 @@ export async function getCampaignAvailable(
         const fullStart2 = new Date(partner.starts_on);
         const fullEnd2 = new Date(partner.ends_on);
         fullEnd2.setDate(fullEnd2.getDate() + 1);
-        const totalDays2 = daysBetween(fullStart2, fullEnd2);
-        const plannedTotal2 = (partner.plays_per_month / DAYS_PER_MONTH) * totalDays2;
-        partnerP = Math.max(0, plannedTotal2 - actual);
+        const totalDays2 = Math.max(1, daysBetween(fullStart2, fullEnd2));
+        partnerP = Math.max(0, partner.total_plays - actual);
+        void totalDays2;
       } else {
-        partnerP = (partner.plays_per_month / DAYS_PER_MONTH) * daysInPeriod;
+        const fullStart3 = new Date(partner.starts_on);
+        const fullEnd3 = new Date(partner.ends_on);
+        fullEnd3.setDate(fullEnd3.getDate() + 1);
+        const partnerTotalDays = Math.max(1, daysBetween(fullStart3, fullEnd3));
+        partnerP = (partner.total_plays / partnerTotalDays) * daysInPeriod;
       }
 
       totalPartnerBreaks += partnerP;
@@ -917,9 +919,8 @@ export async function getPacing(campaignId: number): Promise<CampaignPacingDetai
   const fullEnd = new Date(campaign.ends_on);
   fullEnd.setDate(fullEnd.getDate() + 1); // exclusive
 
-  const DAYS_PER_MONTH = 30;
   const totalDays = Math.max(1, daysBetween(fullStart, fullEnd));
-  const totalPlanned = Math.round((campaign.plays_per_month / DAYS_PER_MONTH) * totalDays);
+  const totalPlanned = campaign.total_plays;
 
   const elapsedStart = now > fullStart ? fullStart : fullStart;
   const elapsedEnd = now < fullEnd ? now : fullEnd;

@@ -808,25 +808,38 @@ export const campaigns = sqliteTable(
     name: text('name').notNull(),
     starts_on: text('starts_on').notNull(),       // ISO date "2026-01-01"
     ends_on: text('ends_on').notNull(),
-    plays_per_month: integer('plays_per_month').notNull(),
+    // D96: contract volume over [starts_on, ends_on] — NOT a monthly figure.
+    // Invoicing derives monthly amounts from the delivery ledger
+    // (play_history, aborted=false). Default 0 exists only for the column
+    // add on legacy rows (wiped for D96); forms always set it.
+    total_plays: integer('total_plays').notNull().default(0),
     duration_bracket: integer('duration_bracket').notNull().default(30),
     max_plays_per_day: integer('max_plays_per_day'),
+    // D96: minimum minutes between two plays of this campaign (anti-clustering).
+    min_gap_minutes: integer('min_gap_minutes'),
+    // D96: 'even' = derived daily quota (remaining ÷ remaining eligible days);
+    // 'asap' = no quota gate, only caps bind (burst campaigns).
+    pacing_mode: text('pacing_mode', { enum: ['even', 'asap'] }).notNull().default('even'),
+    // D96: per-campaign override of the station's catch-up limit (× original
+    // even pace). Null = inherit station default.
+    catch_up_factor: real('catch_up_factor'),
+    // D96 restriction: JSON array of broadcast_interval ids the campaign may
+    // air in. Null = inherit station default_allowed_interval_ids.
+    allowed_interval_ids: text('allowed_interval_ids', { mode: 'json' }),
     sweeps_per_month: integer('sweeps_per_month'),
     max_sweeps_per_day: integer('max_sweeps_per_day'),
-    time_window_start: text('time_window_start'), // "06:00"
-    time_window_end: text('time_window_end'),
-    days_of_week: text('days_of_week'),           // comma-separated "1,2,3,4,5"
     advertiser_separation_spots: integer('advertiser_separation_spots')
       .notNull()
       .default(1),
     competing_exclusions: text('competing_exclusions', { mode: 'json' })
       .notNull()
       .default('[]'),
-    priority: text('priority', { enum: PRIORITY_LEVELS }).notNull().default('best_effort'),
     show_id: integer('show_id').references(() => shows.id, { onDelete: 'set null' }),
     plays_per_show: integer('plays_per_show'),
     interval_id: integer('interval_id').references(() => broadcastIntervals.id, { onDelete: 'set null' }),
-    interval_plays_per_week: integer('interval_plays_per_week'),
+    // D96 guarantee: N plays per DAILY OCCURRENCE of interval_id (was
+    // interval_plays_per_week pre-D96). Guarantee scope, never a fence.
+    interval_plays_per_day: integer('interval_plays_per_day'),
     first_in_slot: integer('first_in_slot', { mode: 'boolean' }).notNull().default(false),
     first_in_slot_mode: text('first_in_slot_mode', { enum: FIRST_IN_SLOT_MODES }),
     notes: text('notes'),
@@ -860,6 +873,9 @@ export const campaignMedia = sqliteTable(
       .references(() => media.id, { onDelete: 'cascade' }),
     play_as_spot: integer('play_as_spot', { mode: 'boolean' }).notNull().default(true),
     play_as_sweep: integer('play_as_sweep', { mode: 'boolean' }).notNull().default(false),
+    // D96 spot rotation: weighted stateless pick (lowest delivered ÷ weight
+    // from play_history). 0 = deliberately benched, shown as such in the UI.
+    weight: integer('weight').notNull().default(1),
     created_at: integer('created_at', { mode: 'timestamp' })
       .notNull()
       .default(sql`(unixepoch())`),
@@ -1146,6 +1162,14 @@ export const stationSettings = sqliteTable('station_settings', {
   // T-30s hard-adjacency re-check. Default 300s ≈ one average track plus
   // headroom (validated against live data 2026-07-03).
   runway_worth_it_threshold_s: real('runway_worth_it_threshold_s').notNull().default(300),
+  // D96: the "standard commercial day" — interval ids every campaign inherits
+  // as its allowed-airtime restriction unless it overrides. Null/empty =
+  // unrestricted (any break qualifies).
+  default_allowed_interval_ids: text('default_allowed_interval_ids', { mode: 'json' }),
+  // D96: catch-up ceiling as a multiple of a campaign's original even pace.
+  // Redistributed debt may raise the daily quota up to this; the excess goes
+  // to the shortfall alert instead of being crammed.
+  default_catch_up_factor: real('default_catch_up_factor').notNull().default(2),
 });
 
 export type StationSettings = typeof stationSettings.$inferSelect;

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, AlertCircle, Loader } from 'lucide-react';
-import { fetchStationSettings, updateStationSettings, fetchClocks } from '../../api';
+import { fetchStationSettings, updateStationSettings, fetchClocks, fetchIntervals } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
 
 export function SchedulingSettings() {
@@ -12,12 +12,14 @@ export function SchedulingSettings() {
   const [localRealityCheckInterval, setLocalRealityCheckInterval] = useState(3);
   const [localFullAuthority, setLocalFullAuthority] = useState(100);
   const [localRunway, setLocalRunway] = useState(300);
+  const [localCatchUp, setLocalCatchUp] = useState(2);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['station-settings'],
     queryFn: fetchStationSettings,
   });
   const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
+  const { data: intervals = [] } = useQuery({ queryKey: ['intervals'], queryFn: fetchIntervals });
 
   useEffect(() => {
     if (data) setLocalPct(Math.round(data.promo_margin * 100));
@@ -37,6 +39,10 @@ export function SchedulingSettings() {
 
   useEffect(() => {
     if (data) setLocalRunway(data.runway_worth_it_threshold_s);
+  }, [data]);
+
+  useEffect(() => {
+    if (data) setLocalCatchUp(data.default_catch_up_factor);
   }, [data]);
 
   const mutation = useMutation({
@@ -96,7 +102,7 @@ export function SchedulingSettings() {
         <div>
           <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
             Promo margin
-            <HelpTooltip text="Percentage of total stop-set time reserved for station promos, IDs, and non-campaign content. This is deducted from the gross inventory before campaign budgets are calculated. Typical range: 10–15%." />
+            <HelpTooltip text="Percentage of stop-set time reserved for station promos and non-campaign content — campaigns are sold against the remainder, which makes this the station's sellable-capacity ceiling. It doubles as outage insurance: campaign catch-up plays may temporarily displace promos inside breaks until the debt clears. Typical range: 10–20%." />
           </label>
           <div className="flex items-center gap-4">
             <input
@@ -113,6 +119,76 @@ export function SchedulingSettings() {
           </div>
           <p className="text-zinc-500 text-xs mt-1">
             {localPct}% of stop-set time is reserved — campaigns compete for the remaining {100 - localPct}%.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-4">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Advertising defaults</p>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
+            Standard commercial day
+            <HelpTooltip text="The airing windows every campaign inherits as its allowed airtime unless the campaign overrides them. Nothing selected = campaigns may air in any break, including overnight." />
+          </label>
+          <div className="flex flex-wrap gap-2">
+            {intervals.map((iv) => {
+              const current = data.default_allowed_interval_ids ?? [];
+              const on = current.includes(iv.id);
+              return (
+                <button
+                  key={iv.id}
+                  type="button"
+                  onClick={() => {
+                    const next = on ? current.filter((x) => x !== iv.id) : [...current, iv.id];
+                    mutation.mutate({ default_allowed_interval_ids: next.length > 0 ? next : null });
+                  }}
+                  className={`px-2.5 py-1 text-xs border rounded-md transition-colors ${
+                    on
+                      ? 'bg-brand-600/20 border-brand-500 text-brand-300'
+                      : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:bg-zinc-700'
+                  }`}
+                >
+                  {iv.name}
+                </button>
+              );
+            })}
+            {intervals.length === 0 && (
+              <p className="text-xs text-zinc-400">No broadcast intervals defined yet — create them on the Intervals page first.</p>
+            )}
+          </div>
+          {(data.default_allowed_interval_ids ?? []).length === 0 && intervals.length > 0 && (
+            <p className="text-zinc-500 text-xs mt-1">
+              Nothing selected — campaigns without their own airing windows may air at any hour.
+            </p>
+          )}
+        </div>
+
+        <div>
+          <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center gap-1">
+            Catch-up limit
+            <HelpTooltip text="After missed days (outage, tight breaks), a campaign's daily rate may rise up to this multiple of its original even pace. Debt that can't fit under the limit surfaces as a shortfall alert (extend or credit) instead of being crammed into the schedule. Campaigns can override this individually." />
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="number"
+              min={1}
+              max={10}
+              step={0.5}
+              value={localCatchUp}
+              onChange={(e) => setLocalCatchUp(Number(e.target.value))}
+              onBlur={() => {
+                if (!Number.isFinite(localCatchUp)) { setLocalCatchUp(data.default_catch_up_factor); return; }
+                const clamped = Math.max(1, Math.min(10, localCatchUp));
+                setLocalCatchUp(clamped);
+                if (clamped !== data.default_catch_up_factor) mutation.mutate({ default_catch_up_factor: clamped });
+              }}
+              className="w-28 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+            />
+            <span className="text-zinc-400 text-sm">× even pace</span>
+          </div>
+          <p className="text-zinc-500 text-xs mt-1">
+            Default 2× — a campaign sold at 3 plays/day may catch up at up to 6/day after missed days.
           </p>
         </div>
       </div>

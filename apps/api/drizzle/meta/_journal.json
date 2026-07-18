@@ -456,6 +456,20 @@
       "when": 1784386047762,
       "tag": "0064_lucky_william_stryker",
       "breakpoints": true
+    },
+    {
+      "idx": 65,
+      "version": "6",
+      "when": 1784398960893,
+      "tag": "0065_many_emma_frost",
+      "breakpoints": true
+    },
+    {
+      "idx": 66,
+      "version": "6",
+      "when": 1784398977964,
+      "tag": "0066_stiff_gunslinger",
+      "breakpoints": true
     }
   ]
 }

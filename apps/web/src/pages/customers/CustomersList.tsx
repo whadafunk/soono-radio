@@ -204,20 +204,80 @@ function SpotPacingCell({ campaignId }: { campaignId: number }) {
 
 // ─── Budget impact summary (used in create/edit forms) ────────────────────────
 
+function AllowedIntervalsPicker({
+  intervals,
+  value,
+  onChange,
+  disabled,
+}: {
+  intervals: BroadcastInterval[];
+  value: number[] | null;
+  onChange: (v: number[] | null) => void;
+  disabled: boolean;
+}) {
+  const inherit = value == null;
+  const toggle = (id: number) => {
+    const current = value ?? [];
+    onChange(current.includes(id) ? current.filter((x) => x !== id) : [...current, id]);
+  };
+  return (
+    <div className="space-y-2">
+      <label className="flex items-center gap-2 text-sm text-zinc-300">
+        <input
+          type="checkbox"
+          checked={inherit}
+          onChange={(e) => onChange(e.target.checked ? null : [])}
+          disabled={disabled}
+          className="rounded border-zinc-700 text-brand-600 h-4 w-4"
+        />
+        Use station default airing windows
+        <HelpTooltip text="Restriction: the windows this campaign may air in AT ALL. Inherited from the station's standard commercial day unless overridden here. This is the fence — guarantees are minimums inside it." />
+      </label>
+      {!inherit && (
+        <div className="flex flex-wrap gap-2">
+          {intervals.map((iv) => {
+            const on = (value ?? []).includes(iv.id);
+            return (
+              <button
+                key={iv.id}
+                type="button"
+                onClick={() => toggle(iv.id)}
+                disabled={disabled}
+                className={`px-2.5 py-1 text-xs border rounded-md transition-colors disabled:opacity-50 ${
+                  on
+                    ? 'bg-brand-600/20 border-brand-500 text-brand-300'
+                    : 'bg-zinc-800 border-zinc-700 text-zinc-400 hover:bg-zinc-700'
+                }`}
+              >
+                {iv.name}
+              </button>
+            );
+          })}
+          {(value ?? []).length === 0 && (
+            <p className="text-xs text-amber-400 w-full">
+              No windows selected — treated as station default until you pick at least one.
+            </p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function BudgetImpactRow({
   startsOn,
   endsOn,
-  playsPerMonth,
+  totalPlays,
   durationBracket,
   firstInSlot,
 }: {
   startsOn: string;
   endsOn: string;
-  playsPerMonth: number;
+  totalPlays: number;
   durationBracket: number;
   firstInSlot: boolean;
 }) {
-  const isValid = startsOn.length === 10 && endsOn.length === 10 && playsPerMonth > 0;
+  const isValid = startsOn.length === 10 && endsOn.length === 10 && totalPlays > 0;
 
   // Always use the 30-day rolling reference window, not the campaign's own dates.
   const today = new Date().toISOString().slice(0, 10);
@@ -240,7 +300,11 @@ function BudgetImpactRow({
   const overlapDays = Math.max(0, Math.ceil(
     (new Date(overlapEnd).getTime() - new Date(overlapStart).getTime()) / 86400000,
   ));
-  const playsInWindow = (overlapDays / 30) * playsPerMonth;
+  // D96: total_plays covers the whole campaign — pro-rate by day overlap.
+  const campaignDays = Math.max(1, Math.round(
+    (new Date(endsOn).getTime() - new Date(startsOn).getTime()) / 86400000,
+  ) + 1);
+  const playsInWindow = (overlapDays / campaignDays) * totalPlays;
   const estimatedMinutes = (playsInWindow * durationBracket) / 60;
 
   const remaining = data ? data.available.global.minutes : null;
@@ -996,12 +1060,12 @@ export function CustomersList() {
                         onSort={() => toggleSort('name', setCampaignSort, campaignSort)}
                       />
                       <SortableHeader
-                        label="Plays/mo"
-                        column="plays_per_month"
-                        isActive={campaignSort?.column === 'plays_per_month'}
+                        label="Total plays"
+                        column="total_plays"
+                        isActive={campaignSort?.column === 'total_plays'}
                         direction={campaignSort?.direction}
                         onSort={() =>
-                          toggleSort('plays_per_month', setCampaignSort, campaignSort)
+                          toggleSort('total_plays', setCampaignSort, campaignSort)
                         }
                       />
                       <SortableHeader
@@ -1510,10 +1574,11 @@ function CreateCampaignForm({
     resolver: zodResolver(CampaignCreateSchema),
     defaultValues: {
       customer_id: defaultCustomerId,
-      plays_per_month: 30,
+      total_plays: 90,
+      pacing_mode: 'even',
+      allowed_interval_ids: null,
       advertiser_separation_spots: 1,
       competing_exclusions: [],
-      priority: 'hard',
       first_in_slot: false,
       first_in_slot_mode: 'always',
       show_id: null,
@@ -1522,17 +1587,18 @@ function CreateCampaignForm({
   });
 
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
+  const { field: allowedField } = useController({ name: 'allowed_interval_ids', control });
   const firstInSlot    = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId = useWatch({ control, name: 'show_id' });
   const selectedIntervalId = useWatch({ control, name: 'interval_id' });
   const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? '';
   const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? '';
-  const watchedPlays       = useWatch({ control, name: 'plays_per_month' }) ?? 0;
+  const watchedPlays       = useWatch({ control, name: 'total_plays' }) ?? 0;
   const watchedDuration    = useWatch({ control, name: 'duration_bracket' }) ?? 30;
 
   // Broadcast Interval and Associated Show are mutually exclusive
   useEffect(() => { if (selectedIntervalId) { setValue('show_id', null); setValue('plays_per_show', null); } }, [selectedIntervalId]);
-  useEffect(() => { if (selectedShowId) { setValue('interval_id', null); setValue('interval_plays_per_week', null); } }, [selectedShowId]);
+  useEffect(() => { if (selectedShowId) { setValue('interval_id', null); setValue('interval_plays_per_day', null); } }, [selectedShowId]);
 
   return (
     <form onSubmit={handleSubmit(onSubmit)}>
@@ -1580,7 +1646,7 @@ function CreateCampaignForm({
             </label>
             <select {...register('duration_bracket', { valueAsNumber: true })} disabled={isLoading} className={INPUT}>
               <option value="" className="bg-zinc-900">— Select —</option>
-              {[10,20,30,40,50,60,70,80,90].map((s) => (
+              {[15,30,45,60,90].map((s) => (
                 <option key={s} value={s} className="bg-zinc-900">{s}s</option>
               ))}
             </select>
@@ -1589,11 +1655,11 @@ function CreateCampaignForm({
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={LABEL}>
-                Plays / Month *
-                <HelpTooltip text="Target number of spot airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
+                Total Plays *
+                <HelpTooltip text="Total number of spot airings sold for the whole campaign period (start to end date). Daily pacing is derived automatically and self-corrects; the monthly invoice bills what actually aired." />
               </label>
-              <input type="number" min={1} {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
-              {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
+              <input type="number" min={1} {...register('total_plays', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+              {formState.errors.total_plays && <p className="text-red-400 text-xs mt-1">{formState.errors.total_plays.message}</p>}
             </div>
             <div>
               <label className={LABEL}>
@@ -1608,6 +1674,22 @@ function CreateCampaignForm({
                 disabled={isLoading}
                 className={INPUT}
               />
+            </div>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>
+                Min Gap Between Plays
+                <HelpTooltip text="Minimum minutes between two plays of this campaign — keeps spots from clustering ('not twice in the same hour'). Blank = no gap rule." />
+              </label>
+              <input type="number" min={1} placeholder="No gap rule" {...register('min_gap_minutes', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })} disabled={isLoading} className={INPUT} />
+            </div>
+            <div>
+              <label className={LABEL}>
+                Catch-up Limit (× pace)
+                <HelpTooltip text="After missed days, the daily rate may rise up to this multiple of the campaign's original even pace. Blank = station default. Debt that can't fit under the limit surfaces as a shortfall alert instead of being crammed." />
+              </label>
+              <input type="number" min={1} step={0.5} placeholder="Station default" {...register('catch_up_factor', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })} disabled={isLoading} className={INPUT} />
             </div>
           </div>
         </div>
@@ -1647,12 +1729,22 @@ function CreateCampaignForm({
         </div>
 
         <div className="space-y-2">
-          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Interval</p>
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Airing Windows</p>
+          <AllowedIntervalsPicker
+            intervals={intervals}
+            value={allowedField.value ?? null}
+            onChange={allowedField.onChange}
+            disabled={isLoading}
+          />
+        </div>
+
+        <div className="space-y-2">
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Guarantees</p>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={LABEL + (selectedShowId ? ' opacity-40' : '')}>
-                Broadcast Interval
-                <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window. Mutually exclusive with Associated Show." />
+                Guaranteed Interval
+                <HelpTooltip text="Pay-extra guarantee: at least N plays every day inside this named window. A minimum, not a fence — other plays still land anywhere in the allowed airing windows. Mutually exclusive with a show guarantee." />
               </label>
               <select
                 {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
@@ -1667,49 +1759,24 @@ function CreateCampaignForm({
             </div>
             <div>
               <label className={LABEL + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}>
-                Plays / Day (interval)
-                <HelpTooltip text="How many times this campaign must air within the selected interval per day." />
+                Guaranteed Plays / Day
+                <HelpTooltip text="How many plays are guaranteed inside the selected interval each day. Counts within Total Plays, never on top of it." />
               </label>
               <input
                 type="number"
                 min={1}
                 placeholder="—"
-                {...register('interval_plays_per_week', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+                {...register('interval_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
                 disabled={isLoading || !selectedIntervalId || !!selectedShowId}
                 className={INPUT + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}
               />
             </div>
           </div>
-        </div>
-
-        <div className="pt-1 space-y-3">
-          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Placement</p>
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className={LABEL}>
-                Priority
-                <HelpTooltip text="Hard: the scheduler must hit the monthly play target, bumping best-effort campaigns when there isn't room. Best Effort: plays are distributed opportunistically." />
-              </label>
-              <select {...register('priority')} disabled={isLoading} className={INPUT}>
-                <option value="hard">Hard</option>
-                <option value="best_effort">Best Effort</option>
-              </select>
-            </div>
-            <div>
-              <label className={LABEL}>
-                Intra-break Separation
-                <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
-              </label>
-              <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
-            </div>
-          </div>
-
           <div className="grid grid-cols-2 gap-3">
             <div>
               <label className={LABEL + (selectedIntervalId ? ' opacity-40' : '')}>
                 Associated Show
-                <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots. Mutually exclusive with Broadcast Interval." />
+                <HelpTooltip text="Guarantee: at least N plays in every airing of this show. A minimum, not a fence. Mutually exclusive with an interval guarantee." />
               </label>
               <select
                 {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
@@ -1724,8 +1791,8 @@ function CreateCampaignForm({
             </div>
             <div>
               <label className={LABEL + (!selectedShowId || selectedIntervalId ? ' opacity-40' : '')}>
-                Plays per Show
-                <HelpTooltip text="Target number of spot airings per show occurrence. Works alongside the monthly target." />
+                Guaranteed Plays / Airing
+                <HelpTooltip text="How many plays are guaranteed in each airing of the selected show. Counts within Total Plays." />
               </label>
               <input
                 type="number"
@@ -1737,6 +1804,31 @@ function CreateCampaignForm({
               />
             </div>
           </div>
+        </div>
+
+        <div className="pt-1 space-y-3">
+          <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Placement Constraints</p>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className={LABEL}>
+                Pacing
+                <HelpTooltip text="Even: plays spread across the whole period at a derived daily rate that self-corrects after missed days. ASAP: no daily quota — plays air as fast as caps and airing windows allow (burst campaigns)." />
+              </label>
+              <select {...register('pacing_mode')} disabled={isLoading} className={INPUT}>
+                <option value="even">Even (default)</option>
+                <option value="asap">ASAP (burst)</option>
+              </select>
+            </div>
+            <div>
+              <label className={LABEL}>
+                Intra-break Separation
+                <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
+              </label>
+              <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+            </div>
+          </div>
+
 
           <div className="grid grid-cols-2 gap-3 items-end">
             <div className="flex items-center gap-2 pb-2">
@@ -1785,7 +1877,7 @@ function CreateCampaignForm({
         <BudgetImpactRow
           startsOn={watchedStartsOn}
           endsOn={watchedEndsOn}
-          playsPerMonth={watchedPlays}
+          totalPlays={watchedPlays}
           durationBracket={watchedDuration}
           firstInSlot={firstInSlot}
         />
@@ -1919,7 +2011,7 @@ function CampaignTableRow({
         <td className="px-6 py-3 text-zinc-400">{campaign.customer_name}</td>
       )}
       <td className="px-6 py-3 font-medium text-white">{campaign.name}</td>
-      <td className="px-6 py-3 text-zinc-300">{campaign.plays_per_month}</td>
+      <td className="px-6 py-3 text-zinc-300">{campaign.total_plays}</td>
       <td className="px-6 py-3 text-zinc-300">
         {campaign.starts_on} → {campaign.ends_on}
       </td>
@@ -2524,14 +2616,17 @@ function CampaignEditForm({
       name: campaign.name,
       starts_on: campaign.starts_on,
       ends_on: campaign.ends_on,
-      plays_per_month: campaign.plays_per_month,
+      total_plays: campaign.total_plays,
       duration_bracket: campaign.duration_bracket,
       max_plays_per_day: campaign.max_plays_per_day ?? undefined,
+      min_gap_minutes: campaign.min_gap_minutes ?? undefined,
+      pacing_mode: campaign.pacing_mode,
+      catch_up_factor: campaign.catch_up_factor ?? undefined,
+      allowed_interval_ids: campaign.allowed_interval_ids,
       sweeps_per_month: campaign.sweeps_per_month ?? undefined,
       max_sweeps_per_day: campaign.max_sweeps_per_day ?? undefined,
       interval_id: campaign.interval_id ?? undefined,
-      interval_plays_per_week: campaign.interval_plays_per_week ?? undefined,
-      priority: campaign.priority,
+      interval_plays_per_day: campaign.interval_plays_per_day ?? undefined,
       show_id: campaign.show_id ?? undefined,
       plays_per_show: campaign.plays_per_show ?? undefined,
       first_in_slot: campaign.first_in_slot,
@@ -2544,6 +2639,7 @@ function CampaignEditForm({
   });
 
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
+  const { field: allowedField } = useController({ name: 'allowed_interval_ids', control });
   const sweepsPerMonth     = useWatch({ control, name: 'sweeps_per_month' });
   const firstInSlot        = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId     = useWatch({ control, name: 'show_id' });
@@ -2551,10 +2647,10 @@ function CampaignEditForm({
 
   // Broadcast Interval and Associated Show are mutually exclusive
   useEffect(() => { if (selectedIntervalId) { setValue('show_id', null); setValue('plays_per_show', null); } }, [selectedIntervalId]);
-  useEffect(() => { if (selectedShowId) { setValue('interval_id', null); setValue('interval_plays_per_week', null); } }, [selectedShowId]);
+  useEffect(() => { if (selectedShowId) { setValue('interval_id', null); setValue('interval_plays_per_day', null); } }, [selectedShowId]);
   const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? campaign.starts_on;
   const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? campaign.ends_on;
-  const watchedPlays       = useWatch({ control, name: 'plays_per_month' }) ?? campaign.plays_per_month;
+  const watchedPlays       = useWatch({ control, name: 'total_plays' }) ?? campaign.total_plays;
   const watchedDuration    = useWatch({ control, name: 'duration_bracket' }) ?? campaign.duration_bracket;
   const [mediaError, setMediaError] = useState<string | null>(null);
 
@@ -2639,7 +2735,7 @@ function CampaignEditForm({
             <HelpTooltip text="The sold slot length for this campaign. Clips longer than this bracket cannot be attached." />
           </label>
           <select {...register('duration_bracket', { valueAsNumber: true })} disabled={isLoading} className={INPUT}>
-            {[10,20,30,40,50,60,70,80,90].map((s) => (
+            {[15,30,45,60,90].map((s) => (
               <option key={s} value={s} className="bg-zinc-900">{s}s</option>
             ))}
           </select>
@@ -2648,11 +2744,11 @@ function CampaignEditForm({
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={LABEL}>
-              Plays / Month *
-              <HelpTooltip text="Target number of spot airings per calendar month. The scheduler distributes plays evenly across broadcast days to hit this number." />
+              Total Plays *
+              <HelpTooltip text="Total number of spot airings sold for the whole campaign period (start to end date). Daily pacing is derived automatically and self-corrects; the monthly invoice bills what actually aired." />
             </label>
-            <input type="number" {...register('plays_per_month', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
-            {formState.errors.plays_per_month && <p className="text-red-400 text-xs mt-1">{formState.errors.plays_per_month.message}</p>}
+            <input type="number" {...register('total_plays', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+            {formState.errors.total_plays && <p className="text-red-400 text-xs mt-1">{formState.errors.total_plays.message}</p>}
           </div>
           <div>
             <label className={LABEL}>
@@ -2667,6 +2763,22 @@ function CampaignEditForm({
               disabled={isLoading}
               className={INPUT}
             />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Min Gap Between Plays
+              <HelpTooltip text="Minimum minutes between two plays of this campaign — keeps spots from clustering ('not twice in the same hour'). Blank = no gap rule." />
+            </label>
+            <input type="number" min={1} placeholder="No gap rule" {...register('min_gap_minutes', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })} disabled={isLoading} className={INPUT} />
+          </div>
+          <div>
+            <label className={LABEL}>
+              Catch-up Limit (× pace)
+              <HelpTooltip text="After missed days, the daily rate may rise up to this multiple of the campaign's original even pace. Blank = station default. Debt that can't fit under the limit surfaces as a shortfall alert instead of being crammed." />
+            </label>
+            <input type="number" min={1} step={0.5} placeholder="Station default" {...register('catch_up_factor', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })} disabled={isLoading} className={INPUT} />
           </div>
         </div>
       </div>
@@ -2719,12 +2831,22 @@ function CampaignEditForm({
       )}
 
       <div className="space-y-2">
-        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Interval</p>
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Airing Windows</p>
+        <AllowedIntervalsPicker
+          intervals={intervals}
+          value={allowedField.value ?? null}
+          onChange={allowedField.onChange}
+          disabled={isLoading}
+        />
+      </div>
+
+      <div className="space-y-2">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Guarantees</p>
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={LABEL + (selectedShowId ? ' opacity-40' : '')}>
-              Broadcast Interval
-              <HelpTooltip text="Guaranteed time bracket for this campaign. The scheduler will ensure plays fall within this named time window. Mutually exclusive with Associated Show." />
+              Guaranteed Interval
+              <HelpTooltip text="Pay-extra guarantee: at least N plays every day inside this named window. A minimum, not a fence — other plays still land anywhere in the allowed airing windows. Mutually exclusive with a show guarantee." />
             </label>
             <select
               {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
@@ -2739,49 +2861,24 @@ function CampaignEditForm({
           </div>
           <div>
             <label className={LABEL + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}>
-              Plays / Day (interval)
-              <HelpTooltip text="How many times this campaign must air within the selected interval per day." />
+              Guaranteed Plays / Day
+              <HelpTooltip text="How many plays are guaranteed inside the selected interval each day. Counts within Total Plays, never on top of it." />
             </label>
             <input
               type="number"
               min={1}
               placeholder="—"
-              {...register('interval_plays_per_week', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
+              {...register('interval_plays_per_day', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
               disabled={isLoading || !selectedIntervalId || !!selectedShowId}
               className={INPUT + (!selectedIntervalId || selectedShowId ? ' opacity-40' : '')}
             />
           </div>
         </div>
-      </div>
-
-      <div className="space-y-3">
-        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Placement</p>
-
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <label className={LABEL}>
-              Priority
-              <HelpTooltip text="Hard: the scheduler must hit the monthly play target, bumping best-effort campaigns when there isn't room. Best Effort: plays are distributed opportunistically." />
-            </label>
-            <select {...register('priority')} disabled={isLoading} className={INPUT}>
-              <option value="hard">Hard</option>
-              <option value="best_effort">Best Effort</option>
-            </select>
-          </div>
-          <div>
-            <label className={LABEL}>
-              Intra-break Separation
-              <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
-            </label>
-            <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
-          </div>
-        </div>
-
         <div className="grid grid-cols-2 gap-3">
           <div>
             <label className={LABEL + (selectedIntervalId ? ' opacity-40' : '')}>
               Associated Show
-              <HelpTooltip text="When set, this campaign is targeted for airings during this show's time slots. Mutually exclusive with Broadcast Interval." />
+              <HelpTooltip text="Guarantee: at least N plays in every airing of this show. A minimum, not a fence. Mutually exclusive with an interval guarantee." />
             </label>
             <select
               {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
@@ -2796,8 +2893,8 @@ function CampaignEditForm({
           </div>
           <div>
             <label className={LABEL + (!selectedShowId || selectedIntervalId ? ' opacity-40' : '')}>
-              Plays per Show
-              <HelpTooltip text="Target number of spot airings per show occurrence. Works alongside the monthly target." />
+              Guaranteed Plays / Airing
+              <HelpTooltip text="How many plays are guaranteed in each airing of the selected show. Counts within Total Plays." />
             </label>
             <input
               type="number"
@@ -2809,6 +2906,31 @@ function CampaignEditForm({
             />
           </div>
         </div>
+      </div>
+
+      <div className="space-y-3">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Placement Constraints</p>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div>
+            <label className={LABEL}>
+              Pacing
+              <HelpTooltip text="Even: plays spread across the whole period at a derived daily rate that self-corrects after missed days. ASAP: no daily quota — plays air as fast as caps and airing windows allow (burst campaigns)." />
+            </label>
+            <select {...register('pacing_mode')} disabled={isLoading} className={INPUT}>
+              <option value="even">Even (default)</option>
+              <option value="asap">ASAP (burst)</option>
+            </select>
+          </div>
+          <div>
+            <label className={LABEL}>
+              Intra-break Separation
+              <HelpTooltip text="Minimum number of other spots that must air between two plays from the same advertiser within a single commercial break." />
+            </label>
+            <input type="number" min={0} {...register('advertiser_separation_spots', { valueAsNumber: true })} disabled={isLoading} className={INPUT} />
+          </div>
+        </div>
+
 
         <div className="grid grid-cols-2 gap-3 items-end">
           <div className="flex items-center gap-2 pb-2">
@@ -2865,7 +2987,7 @@ function CampaignEditForm({
       <BudgetImpactRow
         startsOn={watchedStartsOn}
         endsOn={watchedEndsOn}
-        playsPerMonth={watchedPlays}
+        totalPlays={watchedPlays}
         durationBracket={watchedDuration}
         firstInSlot={firstInSlot ?? false}
       />

@@ -1351,7 +1351,7 @@ export class PlannerProcess {
 
     // (a) First-in-slot resolution: among candidates with slot_1_required AND
     // !slot_1_satisfied_today, pick the one with the highest pacing_score.
-    // Tie-break: hard priority over best_effort, then lowest campaign_id.
+    // Tie-break: lowest campaign_id (D96: priority dropped).
     const slot1Pool = pool.candidates.filter(
       (c) => c.position_constraint === 'slot_1_required' && !c.slot_1_satisfied_today,
     );
@@ -1431,9 +1431,6 @@ export class PlannerProcess {
       eligible.sort((a, b) => {
         if (a.mandatory !== b.mandatory) return a.mandatory ? -1 : 1;
         if (a.pacing_score !== b.pacing_score) return b.pacing_score - a.pacing_score;
-        const ap = a.priority === 'hard' ? 0 : 1;
-        const bp = b.priority === 'hard' ? 0 : 1;
-        if (ap !== bp) return ap - bp;
         return a.campaign_id - b.campaign_id;
       });
 
@@ -1442,8 +1439,7 @@ export class PlannerProcess {
       if (!spot) break;
 
       const reason =
-        `campaign='${chosen.name}' pacing_score=${chosen.pacing_score.toFixed(2)} ` +
-        `priority=${chosen.priority}`;
+        `campaign='${chosen.name}' pacing_score=${chosen.pacing_score.toFixed(2)} `;
       const item = withCutSkip(campaignToItem(chosen, spot, placed.length, reason), config);
       items.push(item);
       placed.push(item);
@@ -1512,8 +1508,7 @@ export class PlannerProcess {
           overshoot,
           place: () => {
             const reason =
-              `campaign='${c.name}' pacing_score=${c.pacing_score.toFixed(2)} ` +
-              `priority=${c.priority} (boundary overshoot)`;
+              `campaign='${c.name}' pacing_score=${c.pacing_score.toFixed(2)} (boundary overshoot)`;
             const item = withCutSkip(campaignToItem(c, shortest, placed.length, reason), config);
             items.push(item);
             placed.push(item);
@@ -2281,9 +2276,6 @@ function pickFirstInSlot(pool: CampaignCandidate[]): CampaignCandidate | null {
   if (pool.length === 0) return null;
   const sorted = pool.slice().sort((a, b) => {
     if (a.pacing_score !== b.pacing_score) return b.pacing_score - a.pacing_score;
-    const ap = a.priority === 'hard' ? 0 : 1;
-    const bp = b.priority === 'hard' ? 0 : 1;
-    if (ap !== bp) return ap - bp;
     return a.campaign_id - b.campaign_id;
   });
   return sorted[0] ?? null;
