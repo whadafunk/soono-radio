@@ -35,6 +35,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import { campaignCompletedPlayFilter } from '../playHistoryViews.js';
+import { computeDailyQuota } from '@soono/shared';
 import type {
   BreakSpaceEstimate,
   CampaignCandidate,
@@ -256,14 +257,17 @@ export class CampaignProcess {
       // quota = remaining ÷ remaining days, capped by the catch-up limit
       // (× original even pace) and the daily cap. Guarantee urgency bypasses
       // the quota gate — a promised play is owed regardless of pace.
-      const totalDays = Math.max(1, daysInclusive(campaign.starts_on, campaign.ends_on));
-      const remainingDays = Math.max(1, daysInclusive(today, campaign.ends_on));
-      const evenPace = campaign.total_plays / totalDays;
-      const catchUpFactor = campaign.catch_up_factor ?? stationDefaults.catchUpFactor;
-      const catchUpCap = Math.max(1, Math.ceil(evenPace * catchUpFactor));
-      let quota = Math.ceil((campaign.total_plays - deliveredTotal) / remainingDays);
-      quota = Math.min(quota, catchUpCap);
-      if (campaign.max_plays_per_day != null) quota = Math.min(quota, campaign.max_plays_per_day);
+      // One formula, three consumers: this gate, the delivery ledger, and
+      // the day-by-day forecast (Phase D) — they can never disagree.
+      const quota = computeDailyQuota({
+        totalPlays: campaign.total_plays,
+        delivered: deliveredTotal,
+        totalDays: daysInclusive(campaign.starts_on, campaign.ends_on),
+        remainingDays: daysInclusive(today, campaign.ends_on),
+        catchUpFactor: campaign.catch_up_factor ?? stationDefaults.catchUpFactor,
+        maxPlaysPerDay: campaign.max_plays_per_day,
+        pacingMode: campaign.pacing_mode,
+      });
 
       let pacingScore: number;
       if (campaign.pacing_mode === 'asap') {

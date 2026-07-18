@@ -68,7 +68,7 @@ import {
   associateContact,
   dissociateContact,
   setContactPrimary,
-  fetchCampaignPacing,
+  fetchCampaignLedger,
   fetchCampaignMedia,
   removeCampaignMedia,
   updateCampaignMedia,
@@ -274,6 +274,62 @@ function CampaignProblemBadge({ campaignId }: { campaignId: number }) {
     <span title={row.headline ?? 'Validation problem'} className="inline-block ml-1.5 align-middle">
       <AlertTriangle className={`w-3.5 h-3.5 inline -mt-0.5 ${row.verdict === 'refuse' ? 'text-red-400' : 'text-amber-400'}`} />
     </span>
+  );
+}
+
+// D96 Phase D — delivery ledger: sold / delivered / today's quota /
+// shortfall / per-spot rotation / day-by-day forecast, all from
+// play_history and the same quota formula the engine gates with.
+function CampaignDeliveryPanel({ campaignId }: { campaignId: number }) {
+  const { data: ledger } = useQuery({
+    queryKey: ['campaign-ledger', campaignId],
+    queryFn: () => fetchCampaignLedger(campaignId),
+    staleTime: 30_000,
+  });
+  if (!ledger) return null;
+  const pct = ledger.total_plays > 0 ? Math.round((ledger.delivered / ledger.total_plays) * 100) : 0;
+  return (
+    <div className="space-y-2">
+      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Delivery</p>
+      <div className="flex items-center gap-3">
+        <div className="flex-1 bg-zinc-700 rounded-full h-2">
+          <div
+            className={`h-2 rounded-full ${ledger.shortfall > 0 ? 'bg-red-500' : 'bg-green-500'}`}
+            style={{ width: `${Math.min(pct, 100)}%` }}
+          />
+        </div>
+        <span className="text-xs text-zinc-300 whitespace-nowrap">
+          {ledger.delivered} / {ledger.total_plays} delivered ({pct}%)
+        </span>
+      </div>
+      <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-zinc-400">
+        <span>Today: <span className="text-zinc-200">{ledger.delivered_today} / {ledger.quota_today}</span></span>
+        <span>Remaining: <span className="text-zinc-200">{ledger.remaining} plays · {ledger.remaining_days} days</span></span>
+        {ledger.aborted > 0 && <span>Cut mid-air (not billed): <span className="text-amber-300">{ledger.aborted}</span></span>}
+      </div>
+      {ledger.shortfall > 0 && (
+        <p className="text-xs text-red-300 bg-red-900/20 border border-red-800/60 rounded px-2 py-1.5">
+          ⚠ Even at the catch-up limit, {ledger.shortfall} plays cannot be delivered by the end date — extend the campaign or settle the difference.
+        </p>
+      )}
+      {ledger.per_spot.length > 1 && (
+        <div className="text-xs text-zinc-400 space-y-0.5">
+          {ledger.per_spot.map((sp) => (
+            <p key={sp.media_id}>
+              <span className="text-zinc-300">{sp.title ?? `media #${sp.media_id}`}</span>
+              {' — '}{sp.delivered} plays (weight {sp.weight}{sp.weight === 0 ? ', benched' : ''})
+            </p>
+          ))}
+        </div>
+      )}
+      {ledger.forecast.length > 0 && ledger.remaining > 0 && (
+        <div className="text-xs text-zinc-400">
+          <span className="text-zinc-500">Next days: </span>
+          {ledger.forecast.slice(0, 14).map((f) => `${f.date.slice(5)}×${f.planned}`).join(' · ')}
+          {ledger.forecast.length > 14 && ' …'}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -2676,10 +2732,6 @@ function CampaignEditForm({
 }) {
   const queryClient = useQueryClient();
 
-  const { data: pacing } = useQuery({
-    queryKey: ['campaign-pacing', campaign.id],
-    queryFn: () => fetchCampaignPacing(campaign.id),
-  });
 
   const { data: campaignMedia = [] } = useQuery({
     queryKey: ['campaign-media', campaign.id],
@@ -2897,18 +2949,7 @@ function CampaignEditForm({
         </div>
       </div>
 
-      {pacing && (
-        <div className="space-y-1">
-          <label className={LABEL}>Pacing this month</label>
-          <div className="flex items-center gap-3">
-            <div className="flex-1 bg-zinc-700 rounded-full h-2">
-              <div className={`h-2 rounded-full ${pacing.on_track ? 'bg-green-500' : 'bg-amber-500'}`} style={{ width: `${Math.min(pacing.pct, 100)}%` }} />
-            </div>
-            <span className="text-xs text-zinc-300 whitespace-nowrap">{pacing.plays_this_month} / {pacing.target} ({pacing.pct}%)</span>
-            <span className={`text-xs ${pacing.on_track ? 'text-green-400' : 'text-amber-400'}`}>{pacing.on_track ? 'On track' : 'Behind'}</span>
-          </div>
-        </div>
-      )}
+      <CampaignDeliveryPanel campaignId={campaign.id} />
 
       <div className="space-y-2">
         <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Airing Windows</p>

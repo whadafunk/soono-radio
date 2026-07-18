@@ -488,8 +488,66 @@ export const CampaignValidationDraftSchema = z.object({
   first_in_slot: z.boolean().default(false),
   first_in_slot_mode: z.enum(FIRST_IN_SLOT_MODES).nullable().optional(),
   competing_exclusions: z.array(z.number().int()).default([]),
+  // Pacing caps — used by the delivery-pace (shortfall) check.
+  max_plays_per_day: z.number().int().positive().nullable().optional(),
+  catch_up_factor: z.number().positive().nullable().optional(),
+  pacing_mode: z.enum(PACING_MODES).optional(),
 });
 export type CampaignValidationDraft = z.infer<typeof CampaignValidationDraftSchema>;
+
+// ─── D96 Phase D: pacing quota + delivery ledger ─────────────────────────────
+
+// THE daily-quota formula — the engine's eligibility gate, the delivery
+// ledger, and the day-by-day forecast all call this one function, so the
+// forecast can never drift from what the engine will actually do.
+export function computeDailyQuota(args: {
+  totalPlays: number;
+  delivered: number;
+  totalDays: number;      // inclusive campaign length in days
+  remainingDays: number;  // inclusive, today..end
+  catchUpFactor: number;  // × original even pace
+  maxPlaysPerDay: number | null;
+  pacingMode: PacingMode;
+}): number {
+  const remaining = Math.max(0, args.totalPlays - args.delivered);
+  if (remaining === 0) return 0;
+  if (args.pacingMode === 'asap') {
+    return args.maxPlaysPerDay ?? remaining;
+  }
+  const evenPace = args.totalPlays / Math.max(1, args.totalDays);
+  const catchUpCap = Math.max(1, Math.ceil(evenPace * args.catchUpFactor));
+  let quota = Math.ceil(remaining / Math.max(1, args.remainingDays));
+  quota = Math.min(quota, catchUpCap);
+  if (args.maxPlaysPerDay != null) quota = Math.min(quota, args.maxPlaysPerDay);
+  return quota;
+}
+
+export const CampaignLedgerSchema = z.object({
+  campaign_id: z.number().int(),
+  total_plays: z.number().int(),
+  delivered: z.number().int(),
+  aborted: z.number().int(), // cut mid-air — never billed (D63)
+  remaining: z.number().int(),
+  remaining_days: z.number().int(),
+  quota_today: z.number().int(),
+  delivered_today: z.number().int(),
+  // remaining plays that cannot fit under the catch-up limit by the end
+  // date — the operator decision trigger (extend / credit).
+  shortfall: z.number().int(),
+  per_spot: z.array(z.object({
+    media_id: z.number().int(),
+    title: z.string().nullable(),
+    weight: z.number().int(),
+    delivered: z.number().int(),
+  })),
+  // Day-by-day pacing forecast from today to the end date (same quota
+  // formula the engine gates with).
+  forecast: z.array(z.object({
+    date: z.string(),
+    planned: z.number().int(),
+  })),
+});
+export type CampaignLedger = z.infer<typeof CampaignLedgerSchema>;
 
 export const CampaignValidationSummaryRowSchema = z.object({
   campaign_id: z.number().int(),

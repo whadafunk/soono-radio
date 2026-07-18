@@ -34,6 +34,7 @@ import type {
   CampaignValidationResult,
   CampaignValidationSummaryRow,
 } from '@soono/shared';
+import { computeDailyQuota } from '@soono/shared';
 
 interface IntervalWindow { startMin: number; endMin: number }
 // dow (1-7) → interval id → window
@@ -315,6 +316,41 @@ export async function validateCampaignDraft(
       } else {
         push('first_in_slot', 'ok', 'A daily opening position is available alongside existing every-play campaigns.');
       }
+    }
+  }
+
+  // ── Delivery pace: can the caps still deliver the remaining plays? ────────
+  {
+    const catchUp = draft.catch_up_factor
+      ?? (await db.select({ f: stationSettingsTable.default_catch_up_factor })
+            .from(stationSettingsTable).where(eq(stationSettingsTable.id, 1)))[0]?.f
+      ?? 2;
+    const totalDays = Math.max(1, Math.round(
+      (new Date(`${draft.ends_on}T00:00:00`).getTime() - new Date(`${draft.starts_on}T00:00:00`).getTime()) / 86400000,
+    ) + 1);
+    const remainingDays = Math.max(1, Math.round(
+      (periodEnd.getTime() - periodStart.getTime()) / 86400000,
+    ) + 1);
+    // Simulate the daily quota forward — each day delivers its quota, the
+    // remainder shrinks, the quota recomputes (identical to the engine).
+    let rem = draftRemaining;
+    for (let d = 0; d < remainingDays && rem > 0; d++) {
+      rem -= computeDailyQuota({
+        totalPlays: draft.total_plays,
+        delivered: draft.total_plays - rem,
+        totalDays,
+        remainingDays: remainingDays - d,
+        catchUpFactor: catchUp,
+        maxPlaysPerDay: draft.max_plays_per_day ?? null,
+        pacingMode: draft.pacing_mode ?? 'even',
+      });
+    }
+    const shortfall = Math.max(0, rem);
+    if (shortfall > 0) {
+      push('delivery_pace', 'fail',
+        `Even at the catch-up limit, ${shortfall} of the remaining plays cannot be delivered by the end date — extend the campaign or settle the difference.`);
+    } else {
+      push('delivery_pace', 'ok', 'The remaining plays fit under the daily pacing caps by the end date.');
     }
   }
 

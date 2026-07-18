@@ -2896,6 +2896,22 @@ Phase D's simulation will dry-run. Verified against known numbers: 5000-play dra
 at 235 breaks/564 effective minutes; 50/day interval guarantee refused at weakest-day 4
 breaks; fit case with slot supply; legacy campaigns all trivially fit.
 
+**Phase D implemented and verified on dev (2026-07-19):** `computeDailyQuota` moves to
+@soono/shared as THE pacing formula — the engine's eligibility gate, the delivery ledger,
+and the day-by-day forecast all call the one function, so the forecast can never disagree
+with what the engine will do (the Part 3 "dry-run the same code path" principle, applied at
+the quota layer; a full per-break fill simulation remains possible later but adds little
+over validator + forecast). GET /campaigns/:id/ledger: sold / delivered / aborted-never-
+billed (D63) / remaining / today's quota / per-spot rotation state (weight + delivered) /
+day-by-day forecast / **shortfall** (simulated quota forward — plays that cannot fit under
+the catch-up limit by the end date). The same shortfall check joins the validator as
+`delivery_pace`, so problem badges also fire on pace-impossible campaigns. UI: the Delivery
+panel replaces the edit form's decorative "Pacing this month" bar (which read a stub route
+that hardcoded zeros); shortfall renders as the operator alert with the extend-or-settle
+choice. The old BudgetImpactRow estimate stays alongside the validator's exact numbers.
+Verified: ledger on the over-served legacy campaign reads 43,598 delivered / contract 0 /
+2 aborted; shortfall math exact (100 plays, 5 days, cap 2/day → 90 undeliverable, refuse).
+
 ---
 
 ### Decision 97 — Boundary and runway refinements: greedy prefix, min-overshoot boundary pick, runway threshold as a setting

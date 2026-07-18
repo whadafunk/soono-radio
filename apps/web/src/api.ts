@@ -55,6 +55,8 @@ import {
   CampaignValidationResultSchema,
   CampaignValidationSummaryRow,
   CampaignValidationSummaryRowSchema,
+  CampaignLedger,
+  CampaignLedgerSchema,
 } from '@soono/shared';
 
 const API_BASE = '/api';
@@ -1477,6 +1479,12 @@ export async function fetchMediaIntegrityState(): Promise<MediaIntegrityState> {
   const res = await fetch(`${API_BASE}/maintenance/media-integrity`);
   if (!res.ok) throw new Error(`Failed to fetch integrity state: ${res.statusText}`);
   return MediaIntegrityStateSchema.parse(await res.json());
+}
+
+export async function fetchCampaignLedger(campaignId: number): Promise<CampaignLedger> {
+  const res = await fetch(`${API_BASE}/campaigns/${campaignId}/ledger`);
+  if (!res.ok) throw new Error(`Failed to fetch delivery ledger: ${res.statusText}`);
+  return CampaignLedgerSchema.parse(await res.json());
 }
 
 export async function validateCampaign(draft: CampaignValidationDraft): Promise<CampaignValidationResult> {

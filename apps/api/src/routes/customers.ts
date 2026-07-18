@@ -21,6 +21,10 @@ import {
 } from '../db/schema.js';
 import { invalidateInventory, invalidateDemand } from '../services/spotBudget.js';
 import { validateCampaignDraft, validationSummary } from '../services/campaignValidator.js';
+import { computeDailyQuota } from '@soono/shared';
+import { campaignCompletedPlayFilter } from '../services/supervisor2/playHistoryViews.js';
+import { playHistory, stationSettings } from '../db/schema.js';
+import { and as andOp, isNotNull as isNotNullOp } from 'drizzle-orm';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -343,6 +347,94 @@ export async function customerRoutes(fastify: FastifyInstance) {
       target: campaign.total_plays,
       pct: 0,
       on_track: false,
+    });
+  });
+
+  // ─── D96 Phase D: delivery ledger + pacing forecast ──────────────────────────
+  // sold / delivered / remaining / today's quota / shortfall / per-spot
+  // delivery / day-by-day forecast — all derived from play_history and the
+  // SAME computeDailyQuota the engine gates with.
+
+  fastify.get<{ Params: { id: string } }>('/campaigns/:id/ledger', async (request, reply) => {
+    const id = Number(request.params.id);
+    const [c] = await db.select().from(campaigns).where(eq(campaigns.id, id));
+    if (!c) return reply.status(404).send({ error: 'Campaign not found' });
+
+    const now = new Date();
+    const todayStr = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
+    const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    const playRows = await db
+      .select({ media_id: playHistory.media_id, started_at: playHistory.started_at, aborted: playHistory.aborted })
+      .from(playHistory)
+      .where(andOp(eq(playHistory.campaign_id, id), isNotNullOp(playHistory.started_at)));
+    const delivered = playRows.filter((r) => !r.aborted).length;
+    const abortedCount = playRows.filter((r) => r.aborted).length;
+    const deliveredToday = playRows.filter((r) => !r.aborted && r.started_at >= midnight).length;
+    const deliveredByMedia = new Map<number, number>();
+    for (const r of playRows) {
+      if (!r.aborted && r.media_id != null) {
+        deliveredByMedia.set(r.media_id, (deliveredByMedia.get(r.media_id) ?? 0) + 1);
+      }
+    }
+
+    const spots = await db
+      .select({ media_id: campaignMedia.media_id, weight: campaignMedia.weight, title: media.title, original_filename: media.original_filename })
+      .from(campaignMedia)
+      .leftJoin(media, eq(media.id, campaignMedia.media_id))
+      .where(andOp(eq(campaignMedia.campaign_id, id), eq(campaignMedia.play_as_spot, true)));
+
+    const [st] = await db.select({ f: stationSettings.default_catch_up_factor })
+      .from(stationSettings).where(eq(stationSettings.id, 1));
+    const catchUp = c.catch_up_factor ?? st?.f ?? 2;
+
+    const dayMs = 86400000;
+    const startMs = new Date(`${c.starts_on}T00:00:00`).getTime();
+    const endMs = new Date(`${c.ends_on}T00:00:00`).getTime();
+    const totalDays = Math.max(1, Math.round((endMs - startMs) / dayMs) + 1);
+    const fromMs = Math.max(midnight.getTime(), startMs);
+    const remainingDays = Math.max(0, Math.round((endMs - fromMs) / dayMs) + 1);
+
+    const remaining = Math.max(0, c.total_plays - delivered);
+    const forecast: Array<{ date: string; planned: number }> = [];
+    let rem = remaining;
+    let quotaToday = 0;
+    for (let d = 0; d < remainingDays; d++) {
+      const q = computeDailyQuota({
+        totalPlays: c.total_plays,
+        delivered: c.total_plays - rem,
+        totalDays,
+        remainingDays: remainingDays - d,
+        catchUpFactor: catchUp,
+        maxPlaysPerDay: c.max_plays_per_day,
+        pacingMode: c.pacing_mode,
+      });
+      const planned = Math.min(q, rem);
+      const date = new Date(fromMs + d * dayMs);
+      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+      if (d === 0) quotaToday = q;
+      if (forecast.length < 120) forecast.push({ date: dateStr, planned });
+      rem -= planned;
+    }
+    void todayStr;
+
+    return reply.send({
+      campaign_id: id,
+      total_plays: c.total_plays,
+      delivered,
+      aborted: abortedCount,
+      remaining,
+      remaining_days: remainingDays,
+      quota_today: quotaToday,
+      delivered_today: deliveredToday,
+      shortfall: Math.max(0, rem),
+      per_spot: spots.map((sp) => ({
+        media_id: sp.media_id,
+        title: sp.title ?? sp.original_filename ?? null,
+        weight: sp.weight,
+        delivered: deliveredByMedia.get(sp.media_id) ?? 0,
+      })),
+      forecast,
     });
   });
 
