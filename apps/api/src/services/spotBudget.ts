@@ -954,47 +954,9 @@ export async function getPacing(campaignId: number): Promise<CampaignPacingDetai
   };
 }
 
-// ─── Decision 75 — campaign-driven stop-set recovery multiplier ────────────
-//
-// Supersedes Decision 74's recovery calculation (not its eligibility-
-// exclusion half, which stays in campaign.ts). D74 pre-allocated a fixed
-// absolute-seconds share to each of today's scheduled stop-sets, cached for
-// the day — which broke whenever a stop-set got skipped (D62 skip-ahead, or
-// an operator crossing over one), silently losing whatever share had been
-// reserved for it. It also reinvented pacing math this file already does
-// more completely (promo margin, show/interval-scoped pool sharing).
-//
-// This reuses the existing L1 (getInventory)/L2 (getDemand)/L3 (getAvailable)
-// system directly: if campaign demand exceeds scheduled stop-set capacity
-// for the rest of the month, getAvailable's global minutes goes negative —
-// that's the real, already-correct shortfall signal. No caching needed here
-// (getAvailable/getInventory already hit this file's own inventoryCache/
-// demandCache internally), and no per-segment pre-allocation to lose when a
-// stop-set gets skipped — this is recomputed fresh every time a stop-set is
-// actually drafted, same as CampaignProcess.buildPool already recomputes
-// pacing fresh from play_history on every call.
-//
-// Returns the raw, uncapped ratio — the safety ceiling (MAX_RECOVERY_MULTIPLIER)
-// is applied where it's consumed (planner.ts's assembleStopSetPlan), keeping
-// "how behind are we" (pacing) separate from "how big can a break get"
-// (scheduling safety).
-export async function getStopSetRecoveryMultiplier(nowMs: number): Promise<number> {
-  const now = new Date(nowMs);
-  const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 1); // exclusive
-  const period: DateRange = { start: now, end: monthEnd };
-  const mode: BudgetMode = 'remaining';
-
-  const [available, inventory] = await Promise.all([
-    getAvailable(period, mode),
-    getInventory(period, mode),
-  ]);
-
-  const totalMinutes = inventory.effective.global.minutes;
-  if (totalMinutes <= 0) return 1;
-
-  const shortfallMinutes = Math.max(0, -available.global.minutes);
-  return 1 + shortfallMinutes / totalMinutes;
-}
+// D96: getStopSetRecoveryMultiplier (Decision 75) retired — breaks stay
+// nominal-sized; campaign catch-up redistributes across days and displaces
+// promos inside breaks, never stretches them.
 
 export async function getOverview(
   period: DateRange,

@@ -15,7 +15,7 @@
 // the Supervisor. When there is nothing to push the feeder logs QUEUE_STALL
 // and exits; the Supervisor's next tick resolves it.
 
-import { and, asc, eq, inArray } from 'drizzle-orm';
+import { and, asc, eq, inArray, sql } from 'drizzle-orm';
 import type { SLogger } from '../supervisorLogger.js';
 
 import { db as defaultDb } from '../../../db/index.js';
@@ -242,6 +242,23 @@ export class QueueFeederProcess {
 
   private async pushPlanItem(item: PlanItem, mediaRow: Media): Promise<void> {
     const pushedAtMs = Date.now();
+    // D96: campaign spots record their 1-based position within the break —
+    // derived from ground truth (campaign plays already recorded for this
+    // plan), so it survives mid-flight replans that renumber plan_items.
+    let stopSetPosition: number | null = null;
+    if (item.content_type === 'campaign') {
+      const [row] = await this.db
+        .select({ n: sql<number>`COUNT(*)`.as('n') })
+        .from(playHistoryTable)
+        .innerJoin(planItemsTable, eq(planItemsTable.id, playHistoryTable.plan_item_id))
+        .where(
+          and(
+            eq(planItemsTable.plan_id, item.plan_id),
+            eq(planItemsTable.content_type, 'campaign'),
+          ),
+        );
+      stopSetPosition = Number(row?.n ?? 0) + 1;
+    }
     const playHistoryId = await insertPushed(this.db, {
       media_id: mediaRow.id,
       source: 'auto',
@@ -250,6 +267,7 @@ export class QueueFeederProcess {
       music_campaign_id: item.music_campaign_id ?? null,
       pushed_at_ms: pushedAtMs,
       pick_reason: item.reason,
+      stop_set_position: stopSetPosition,
     });
 
     const annotated = buildAnnotatedUri(mediaRow, {

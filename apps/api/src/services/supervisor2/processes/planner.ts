@@ -100,8 +100,6 @@ const CANDIDATE_REQUEST_TIMEOUT_MS = 10_000;
 const MIN_VIABLE_SPOT_DURATION_SECONDS = 15;
 // Decision 75: safety ceiling on the campaign-driven recovery multiplier —
 // a stop-set can grow to at most this much of its own nominal duration,
-// regardless of computed shortfall.
-const MAX_RECOVERY_MULTIPLIER = 1.5;
 
 interface PendingAssemblyItem {
   media_id: number;
@@ -1310,18 +1308,14 @@ export class PlannerProcess {
   ): Promise<AssemblyResult> {
     const { config } = showCtx;
     const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
-    // Decision 75: request with a generous upper bound (not the raw target)
-    // so spot-pool filtering (campaign.ts's loadSpotPool) doesn't prematurely
-    // exclude a candidate that would fit once the real recovery multiplier
-    // (computed inside buildPool) is known. The actual fill budget is
-    // derived below, after the pool comes back, and can only ever be <=
-    // this bound.
-    const requestBound = targetDurationSeconds * MAX_RECOVERY_MULTIPLIER;
+    // D96: Decision 75's recovery boost is retired — breaks stay
+    // nominal-sized. Catch-up happens across days (quota pacing) and by
+    // displacing promos inside breaks, never by stretching the break.
     const pool = await this.requestPool<StopSetCandidatePool>(
       'campaign',
       segment,
       instance,
-      requestBound,
+      targetDurationSeconds,
       nowMs,
     );
 
@@ -1334,46 +1328,63 @@ export class PlannerProcess {
     const placedCampaignIds = new Set<number>();
     const usedPromoIds = new Set<number>();
     const excluded = new Set<number>();
-    // Only boost when targetDurationSeconds is already at-or-above nominal —
-    // if it's below nominal, a tighter external constraint is already in
-    // force (Decision 69's hard-boundary cap, which computes
-    // min(nominal, realRemaining) specifically because a hard segment is
-    // imminent) and must win outright; inflating it here would risk
-    // overshooting that boundary. Comparing against the segment's own known
-    // nominal is sufficient — no new flag needs threading through
-    // finalizePlan/bus messages for this.
-    const nominal = segment.duration_seconds;
-    const boostEligible = targetDurationSeconds >= nominal;
-    const appliedMultiplier = boostEligible
-      ? Math.min(pool.recovery_multiplier, MAX_RECOVERY_MULTIPLIER)
-      : 1;
-    let remainingSeconds = targetDurationSeconds * appliedMultiplier;
+    let remainingSeconds = targetDurationSeconds;
 
-    // (a) First-in-slot resolution: among candidates with slot_1_required AND
-    // !slot_1_satisfied_today, pick the one with the highest pacing_score.
-    // Tie-break: lowest campaign_id (D96: priority dropped).
-    const slot1Pool = pool.candidates.filter(
-      (c) => c.position_constraint === 'slot_1_required' && !c.slot_1_satisfied_today,
+    // (a) First-in-slot resolution (D96).
+    // 'always' (slot_1_required) means EVERY play opens a break — such a
+    // campaign contests slot 1 in every eligible break and is placeable
+    // nowhere else (the fill loop and boundary decision skip it). Contest
+    // winner: highest pacing_score, lowest campaign_id tie-break. Losers sit
+    // this break out entirely. Sale-time validation (Phase C) owns
+    // feasibility of the combined always-demand; air time just picks.
+    const slot1Required = pool.candidates.filter(
+      (c) => c.position_constraint === 'slot_1_required',
     );
-    if (slot1Pool.length > 0) {
-      const winner = pickFirstInSlot(slot1Pool);
+    let slot1Claimed = false;
+    if (slot1Required.length > 0) {
+      const winner = pickFirstInSlot(slot1Required);
       if (winner) {
-        const spot = pickLongestSpotThatFits(winner.spot_pool, remainingSeconds);
+        const spot = pickSpotWeighted(winner.spot_pool, remainingSeconds);
         if (spot) {
           const item = withCutSkip(
-            campaignToItem(winner, spot, 0, 'slot_1 winner (first-in-slot)'),
+            campaignToItem(winner, spot, 0, 'slot_1 winner (first-in-slot: every play)'),
             config,
           );
           items.push(item);
           placed.push(item);
           remainingSeconds -= spot.duration_seconds;
           placedCampaignIds.add(winner.id);
-          // (b) Apply exclusions after placing.
+          slot1Claimed = true;
           for (const id of winner.competing_exclusions) excluded.add(id);
-          // All other slot_1_required candidates drop out of the break.
-          for (const other of slot1Pool) {
-            if (other.id !== winner.id) excluded.add(other.id);
-          }
+        }
+      }
+    }
+    // Every 'always' campaign is now spoken for in this break: the winner
+    // placed at slot 1, the losers excluded (they may never appear mid-break).
+    for (const c of slot1Required) {
+      if (!placedCampaignIds.has(c.id)) excluded.add(c.id);
+    }
+    // 'at_least_one' (slot_1_preferred): if no 'always' campaign claimed the
+    // opener, the most-behind not-yet-satisfied preferred candidate takes it —
+    // this is what makes "at least once a day" real (it was dead code before
+    // D96). The campaign stays an ordinary candidate for the rest of the day.
+    if (!slot1Claimed) {
+      const preferred = pool.candidates
+        .filter((c) => c.position_constraint === 'slot_1_preferred' && !c.slot_1_satisfied_today && !excluded.has(c.id))
+        .sort((a, b) => b.pacing_score - a.pacing_score || a.campaign_id - b.campaign_id);
+      const first = preferred[0];
+      if (first) {
+        const spot = pickSpotWeighted(first.spot_pool, remainingSeconds);
+        if (spot) {
+          const item = withCutSkip(
+            campaignToItem(first, spot, 0, 'slot_1 (first-in-slot: at least once daily)'),
+            config,
+          );
+          items.push(item);
+          placed.push(item);
+          remainingSeconds -= spot.duration_seconds;
+          placedCampaignIds.add(first.id);
+          for (const id of first.competing_exclusions) excluded.add(id);
         }
       }
     }
@@ -1396,6 +1407,8 @@ export class PlannerProcess {
       }
       let eligible = pool.candidates.filter((c) => {
         if (excluded.has(c.id)) return false;
+        // 'always' first-in-slot campaigns exist only at position 0.
+        if (c.position_constraint === 'slot_1_required') return false;
         return c.spot_pool.some((s) => s.duration_seconds >= 1 && s.duration_seconds <= remainingSeconds);
       });
 
@@ -1414,7 +1427,10 @@ export class PlannerProcess {
             return orig?.customer_id;
           })
           .filter((id): id is number => id != null);
-        return !tailCustomerIds.every((cid) => cid === c.customer_id);
+        // D96 fix: block when the customer appears ANYWHERE in the last N
+        // campaign items — the old .every() only caught an all-same-customer
+        // tail, so any configured separation > 1 behaved as adjacency-only.
+        return !tailCustomerIds.some((cid) => cid === c.customer_id);
       });
 
       if (eligible.length === 0) break;
@@ -1435,7 +1451,7 @@ export class PlannerProcess {
       });
 
       const chosen = eligible[0];
-      const spot = pickLongestSpotThatFits(chosen.spot_pool, remainingSeconds);
+      const spot = pickSpotWeighted(chosen.spot_pool, remainingSeconds);
       if (!spot) break;
 
       const reason =
@@ -1473,7 +1489,9 @@ export class PlannerProcess {
     // smaller than the gap left by not placing it.
     if (remainingSeconds > 0) {
       const last = placed[placed.length - 1];
-      let stillEligible = pool.candidates.filter((c) => !excluded.has(c.id));
+      let stillEligible = pool.candidates.filter(
+        (c) => !excluded.has(c.id) && c.position_constraint !== 'slot_1_required',
+      );
       stillEligible = stillEligible.filter((c) => {
         if (c.advertiser_separation_spots <= 0) return true;
         const tail = placed
@@ -1486,7 +1504,10 @@ export class PlannerProcess {
             return orig?.customer_id;
           })
           .filter((id): id is number => id != null);
-        return !tailCustomerIds.every((cid) => cid === c.customer_id);
+        // D96 fix: block when the customer appears ANYWHERE in the last N
+        // campaign items — the old .every() only caught an all-same-customer
+        // tail, so any configured separation > 1 behaved as adjacency-only.
+        return !tailCustomerIds.some((cid) => cid === c.customer_id);
       });
       if (last && last.content_type === 'campaign' && last.campaign_candidate_id != null) {
         const lastCandidateId = last.campaign_candidate_id;
@@ -2281,16 +2302,24 @@ function pickFirstInSlot(pool: CampaignCandidate[]): CampaignCandidate | null {
   return sorted[0] ?? null;
 }
 
-function pickLongestSpotThatFits(
+// D96 weighted rotation: among fitting spots, the one most behind its
+// weighted share airs next (lowest delivered ÷ weight; ties → fewer
+// delivered, then media_id). Stateless — delivered counts come from
+// play_history via the pool. Decision 99's ≥1s floor stays: termination of
+// the fill loop depends on every placement shrinking the remainder.
+function pickSpotWeighted(
   pool: SpotCandidate[],
   remainingSeconds: number,
 ): SpotCandidate | null {
-  // Decision 99: the ≥1s floor keeps a zero-duration spot (corrupt ingest)
-  // from being "placed" without consuming any break time — the fill loop's
-  // termination depends on every placement shrinking the remainder.
   const fits = pool.filter((s) => s.duration_seconds >= 1 && s.duration_seconds <= remainingSeconds);
   if (fits.length === 0) return null;
-  fits.sort((a, b) => b.duration_seconds - a.duration_seconds);
+  fits.sort((a, b) => {
+    const ra = a.delivered / Math.max(1, a.weight);
+    const rb = b.delivered / Math.max(1, b.weight);
+    if (ra !== rb) return ra - rb;
+    if (a.delivered !== b.delivered) return a.delivered - b.delivered;
+    return a.media_id - b.media_id;
+  });
   return fits[0] ?? null;
 }
 
@@ -2383,7 +2412,7 @@ function pickReplacement(
       .sort((a, b) => b.pacing_score - a.pacing_score);
     const pick = sorted[0];
     if (pick) {
-      const spot = pickLongestSpotThatFits(pick.spot_pool, item.planned_duration_seconds);
+      const spot = pickSpotWeighted(pick.spot_pool, item.planned_duration_seconds);
       if (spot) {
         return withCutSkip(
           campaignToItem(pick, spot, 0, `replacement: ${pick.name} pacing_score=${pick.pacing_score.toFixed(2)}`),

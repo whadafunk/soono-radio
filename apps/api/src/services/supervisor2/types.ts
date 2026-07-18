@@ -50,6 +50,10 @@ export interface SpotCandidate {
   media_id: number;
   duration_seconds: number;
   campaign_id: number;
+  // D96 weighted rotation: pick = lowest delivered ÷ weight among fitting
+  // spots. Pool excludes weight-0 (benched) spots outright.
+  weight: number;
+  delivered: number;
 }
 
 export type PositionConstraint = 'any' | 'slot_1_required' | 'slot_1_preferred';
@@ -105,15 +109,13 @@ export interface BreakSpaceEstimate {
   candidate_count: number;
 }
 
+// D96: Decision 75's recovery_multiplier is retired — breaks stay
+// nominal-sized; catch-up redistributes plays across days (quota pacing)
+// and may displace promos inside breaks, never stretch them.
 export interface StopSetCandidatePool {
   candidates: CampaignCandidate[];
   promos: PromoCandidate[];
   space_estimate: BreakSpaceEstimate;
-  // Decision 75: campaign-driven recovery multiplier (>= 1) — how much
-  // bigger than nominal this break should be, if campaign demand exceeds
-  // scheduled stop-set capacity for the rest of the month. Raw/uncapped;
-  // the consumer (assembleStopSetPlan) applies the safety ceiling.
-  recovery_multiplier: number;
 }
 
 // ─── Branding ─────────────────────────────────────────────────────────────────

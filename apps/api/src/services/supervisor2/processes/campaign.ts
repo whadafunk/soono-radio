@@ -6,11 +6,13 @@
 //   - eligible promos (embedded — Decision 16: no separate promo process)
 //   - a BreakSpaceEstimate over the break duration
 //
-// Eligibility filters are binary per-campaign (date range, days of week,
-// time window, daily cap, show targeting, interval targeting, spot pool
-// non-empty after duration filtering). Placement constraints
-// (advertiser_separation, competing_exclusions, first-in-slot competition)
-// are NOT applied here — the Planner enforces those per Decision 22.
+// D96 eligibility gates, in order, per campaign: date range → allowed
+// airing windows (the only fence) → hard wall (delivered ≥ total_plays) →
+// daily cap + min gap → weighted spot pool non-empty → guarantee urgency
+// (interval/show scopes are minimums, never filters) → derived daily quota
+// with in-day spread. Placement constraints (advertiser_separation,
+// competing_exclusions, first-in-slot competition) are NOT applied here —
+// the Planner enforces those per Decision 22.
 //
 // State changes happen only on CONFIRM_USED. The request handler is a pure
 // read against play_history, campaigns, promos, and their media tables.
@@ -29,10 +31,10 @@ import {
   playHistory as playHistoryTable,
   promoMedia as promoMediaTable,
   promos as promosTable,
+  stationSettings as stationSettingsTable,
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import { campaignCompletedPlayFilter } from '../playHistoryViews.js';
-import { getStopSetRecoveryMultiplier } from '../../spotBudget.js';
 import type {
   BreakSpaceEstimate,
   CampaignCandidate,
@@ -45,13 +47,8 @@ import type {
 const PROCESS_NAME: ContentProcessName = 'campaign';
 // occupation_ratio above this is flagged oversubscribed (Decision 14).
 const OVERSUBSCRIBED_THRESHOLD = 0.9;
-// Pacing score above this AND priority=hard => mandatory.
-const MANDATORY_PACING_THRESHOLD = 0.2;
-// Decision 74: a campaign/promo this far ahead of its own pace target (ratio
-// of actual-vs-expected) is no longer eligible as a stop-set candidate.
-// Mirrors BEHIND_PACE_RECOVERY_THRESHOLD in spotBudget.ts — same value,
-// separate literal (different file, different query path); keep them in sync
-// by hand if this ever changes.
+// Promos only (campaign eligibility uses D96 quota pacing instead): a promo
+// this far ahead of its min_plays_per_day target stops being offered.
 const AHEAD_OF_PACE_THRESHOLD = 0.05;
 
 export class CampaignProcess {
@@ -136,16 +133,21 @@ export class CampaignProcess {
     const today = ymdFromMs(nowMs);
     const midnightMsToday = midnightMs(nowMs);
 
-    // Decision 75: campaign-driven recovery multiplier, reusing the existing
-    // L1/L2/L3 budget system (spotBudget.ts) rather than recomputing pacing
-    // shortfall independently. Recomputed fresh on every buildPool call —
-    // no caching needed, spotBudget.ts already caches its own inventory/
-    // demand queries internally.
-    const recoveryMultiplier = await getStopSetRecoveryMultiplier(nowMs);
+    // The break's SCHEDULED start (clock instance start + the segment's
+    // offset within its clock), not the request time — plans are drafted
+    // minutes ahead, and a break at 14:02 must be judged against a window
+    // opening at 14:00 even when the draft happens at 13:58.
+    const breakStartMs = await this.scheduledBreakStartMs(segment, clockInstanceStartedAt);
+    const breakDow = isoDayOfWeek(breakStartMs);
+    const breakMinOfDay = minutesOfDay(breakStartMs);
 
-    // Resolve the show and broadcast interval that scope this stop-set, if any.
+    // Interval windows for the break's day-of-week (per-day slot overrides
+    // the interval's default times) + station-level advertising defaults.
+    const windowsByIntervalId = await this.loadIntervalWindows(breakDow);
+    const stationDefaults = await this.loadStationAdDefaults();
+
+    // Resolve the show airing over this instance, if any (guarantee scope).
     const showId = await this.resolveShowId(clockInstanceStartedAt);
-    const intervalId = await this.resolveIntervalId(nowMs);
 
     // Pull every active spot campaign whose date range covers today.
     const rawCampaigns = await this.db
@@ -159,38 +161,38 @@ export class CampaignProcess {
         ),
       );
 
-    // Per-campaign play counts today (for daily cap + per-show pacing).
+    // Per-campaign play counts + last-play timestamps today's gates need.
+    const campaignIds = rawCampaigns.map((c) => c.id);
     const todayPlaysByCampaign = await this.countPlaysByCampaign(
-      rawCampaigns.map((c) => c.id),
+      campaignIds,
       midnightMsToday,
       nowMs,
     );
+    const lastPlayMsByCampaign = await this.lastPlayMsByCampaign(campaignIds);
 
     const candidates: CampaignCandidate[] = [];
     let hardClaimedSeconds = 0;
     let contestedSeconds = 0;
 
     for (const campaign of rawCampaigns) {
-      // ── Binary eligibility filters ────────────────────────────────────────
-      // D96 Phase A: time_window/days_of_week are gone (subsumed by
-      // allowed_interval_ids, enforced by the Phase B eligibility rewrite).
-      // The show/interval fences below are also slated to become guarantee
-      // scopes (minimums) in Phase B — kept as-is until then.
-      if (campaign.show_id != null && campaign.show_id !== showId) {
-        continue;
-      }
-      if (campaign.interval_id != null && campaign.interval_id !== intervalId) {
-        continue;
-      }
-      const playsToday = todayPlaysByCampaign.get(campaign.id) ?? 0;
-      if (campaign.max_plays_per_day != null && playsToday >= campaign.max_plays_per_day) {
-        continue;
+      // ── Gate 2: allowed-airtime restriction (D96) ─────────────────────────
+      // Campaign's own windows, else the station's standard commercial day,
+      // else unrestricted. Empty array = inherit (no meaningful "nothing
+      // allowed" state). This is the ONLY fence — show/interval associations
+      // below are guarantee scopes (minimums), never eligibility filters.
+      const allowedIds = normalizeIdList(campaign.allowed_interval_ids)
+        ?? stationDefaults.allowedIntervalIds;
+      if (allowedIds != null && allowedIds.length > 0) {
+        const inWindow = allowedIds.some((id) => {
+          const w = windowsByIntervalId.get(id);
+          return w != null && breakMinOfDay >= w.startMin && breakMinOfDay < w.endMin;
+        });
+        if (!inWindow) continue;
       }
 
-      // D96 hard wall: the contract volume is a ceiling, never advisory. A
-      // campaign that has delivered its total is done — this is the check
-      // whose absence let 2,563 plays air against a 90/month quota. Also
-      // correctly retires legacy rows migrated with total_plays=0.
+      // ── Gate 3: hard wall — contract volume is a ceiling, never advisory.
+      // The check whose absence let 2,563 plays air against a 90/month
+      // quota. Also retires legacy rows migrated with total_plays=0.
       const deliveredTotal = await this.countPlaysInRange(
         campaign.id,
         dateStringToMs(campaign.starts_on),
@@ -198,29 +200,89 @@ export class CampaignProcess {
       );
       if (deliveredTotal >= campaign.total_plays) continue;
 
-      // ── Spot pool (filtered to fit the break) ─────────────────────────────
+      // ── Gate 4: daily cap + minimum gap between plays ─────────────────────
+      const playsToday = todayPlaysByCampaign.get(campaign.id) ?? 0;
+      if (campaign.max_plays_per_day != null && playsToday >= campaign.max_plays_per_day) {
+        continue;
+      }
+      if (campaign.min_gap_minutes != null) {
+        const lastMs = lastPlayMsByCampaign.get(campaign.id);
+        if (lastMs != null && breakStartMs - lastMs < campaign.min_gap_minutes * 60_000) {
+          continue;
+        }
+      }
+
+      // ── Gate 5: spot pool (weighted, benched excluded, fits the break) ────
       const spotPool = await this.loadSpotPool(campaign.id, durationNeededSeconds);
       if (spotPool.length === 0) continue;
 
-      // ── Pacing (global, per-show, per-interval) ──────────────────────────
-      const pacing = await this.computePacingScore(
-        campaign,
-        showId,
-        intervalId,
-        clockInstanceStartedAt,
-        nowMs,
-      );
-      // Decision 74: a campaign already ≥5% ahead of its global pace target
-      // isn't eligible — don't let a stop-set serve a campaign that's already
-      // over-achieving its plan, no matter how it ranks otherwise.
-      if (pacing.globalRatio >= AHEAD_OF_PACE_THRESHOLD) continue;
-      const pacingScore = pacing.score;
+      // ── Gate 6: guarantee urgency (replaces `mandatory`) ──────────────────
+      // Interval guarantee: this break sits inside the guaranteed interval's
+      // window today and today's plays INSIDE that window are below N.
+      // Show guarantee: this instance is the guaranteed show and plays this
+      // airing are below N. Scopes are minimums — a campaign whose guarantee
+      // scope doesn't match this break is still an ordinary candidate.
+      let guaranteeBehind = 0;
+      if (campaign.interval_id != null && campaign.interval_plays_per_day != null) {
+        const w = windowsByIntervalId.get(campaign.interval_id);
+        if (w != null && breakMinOfDay >= w.startMin && breakMinOfDay < w.endMin) {
+          const winStartMs = midnightMsToday + w.startMin * 60_000;
+          const winEndMs = midnightMsToday + w.endMin * 60_000;
+          const inWindowPlays = await this.countPlaysInWindow(campaign.id, winStartMs, winEndMs);
+          if (inWindowPlays < campaign.interval_plays_per_day) {
+            guaranteeBehind = Math.max(
+              guaranteeBehind,
+              1 - inWindowPlays / campaign.interval_plays_per_day,
+            );
+          }
+        }
+      }
+      if (campaign.show_id != null && campaign.plays_per_show != null && campaign.show_id === showId) {
+        const playsThisAiring = await this.countPlaysInRange(
+          campaign.id,
+          clockInstanceStartedAt,
+          nowMs,
+        );
+        if (playsThisAiring < campaign.plays_per_show) {
+          guaranteeBehind = Math.max(
+            guaranteeBehind,
+            1 - playsThisAiring / campaign.plays_per_show,
+          );
+        }
+      }
+      const mandatory = guaranteeBehind > 0;
 
-      // ── slot_1_satisfied_today: did this campaign already air in slot 1
-      // today? Until plan_items is the source of truth at runtime, derive
-      // from play_history via stop_set_position = 1. Plays that predate the
-      // V2 stop_set_position column lack this signal; conservatively treat
-      // them as not satisfying slot 1.
+      // ── Gate 7: derived daily quota + in-day spread (replaces D74) ────────
+      // quota = remaining ÷ remaining days, capped by the catch-up limit
+      // (× original even pace) and the daily cap. Guarantee urgency bypasses
+      // the quota gate — a promised play is owed regardless of pace.
+      const totalDays = Math.max(1, daysInclusive(campaign.starts_on, campaign.ends_on));
+      const remainingDays = Math.max(1, daysInclusive(today, campaign.ends_on));
+      const evenPace = campaign.total_plays / totalDays;
+      const catchUpFactor = campaign.catch_up_factor ?? stationDefaults.catchUpFactor;
+      const catchUpCap = Math.max(1, Math.ceil(evenPace * catchUpFactor));
+      let quota = Math.ceil((campaign.total_plays - deliveredTotal) / remainingDays);
+      quota = Math.min(quota, catchUpCap);
+      if (campaign.max_plays_per_day != null) quota = Math.min(quota, campaign.max_plays_per_day);
+
+      let pacingScore: number;
+      if (campaign.pacing_mode === 'asap') {
+        // Burst: no quota gate; eager but below any guarantee urgency.
+        pacingScore = 1;
+      } else {
+        if (!mandatory && playsToday >= quota) continue;
+        // Spread today's quota across the day: expected-by-now runs linearly
+        // over the campaign's allowed airtime (whole day when unrestricted).
+        const dayFraction = allowedWindowsElapsedFraction(
+          allowedIds, windowsByIntervalId, breakMinOfDay,
+        );
+        const expectedByNow = quota * dayFraction;
+        pacingScore = quota > 0 ? Math.max(0, expectedByNow - playsToday) / quota : 0;
+      }
+      if (mandatory) pacingScore = 1 + guaranteeBehind;
+
+      // slot_1_satisfied_today: did this campaign already open a break today?
+      // Consumed by the planner's at_least_one handling (slot_1_preferred).
       const slot1Satisfied = await this.checkSlot1SatisfiedToday(
         campaign.id,
         midnightMsToday,
@@ -232,10 +294,6 @@ export class CampaignProcess {
             ? 'slot_1_required'
             : 'slot_1_preferred')
         : 'any';
-
-      // D96: priority is dropped — mandatoriness is pacing-only until Phase B
-      // replaces it with guarantee urgency.
-      const mandatory = pacingScore >= MANDATORY_PACING_THRESHOLD;
 
       const minSpotDuration = Math.min(...spotPool.map((s) => s.duration_seconds));
       const avgSpotDuration =
@@ -294,7 +352,6 @@ export class CampaignProcess {
       candidates,
       promos: promosPool,
       space_estimate: spaceEstimate,
-      recovery_multiplier: recoveryMultiplier,
     };
   }
 
@@ -310,6 +367,7 @@ export class CampaignProcess {
         duration_seconds: mediaTable.duration_seconds,
         cue_in_seconds: mediaTable.cue_in_seconds,
         cue_out_seconds: mediaTable.cue_out_seconds,
+        weight: campaignMediaTable.weight,
       })
       .from(campaignMediaTable)
       .innerJoin(mediaTable, eq(campaignMediaTable.media_id, mediaTable.id))
@@ -319,11 +377,34 @@ export class CampaignProcess {
           eq(campaignMediaTable.play_as_spot, true),
         ),
       );
+    // Per-spot delivered counts since campaign start — the weighted rotation
+    // pick (planner) is lowest delivered ÷ weight, derived from play_history
+    // like all rotation state (no cursor rows).
+    const deliveredRows = await this.db
+      .select({
+        media_id: playHistoryTable.media_id,
+        n: sql<number>`COUNT(*)`.as('n'),
+      })
+      .from(playHistoryTable)
+      .where(
+        and(
+          eq(playHistoryTable.campaign_id, campaignId),
+          campaignCompletedPlayFilter,
+        ),
+      )
+      .groupBy(playHistoryTable.media_id);
+    const deliveredByMedia = new Map<number, number>();
+    for (const r of deliveredRows) {
+      if (r.media_id != null) deliveredByMedia.set(r.media_id, Number(r.n));
+    }
     return rows
+      .filter((r) => r.weight > 0) // weight 0 = deliberately benched
       .map((r) => ({
         media_id: r.media_id,
         duration_seconds: effectiveDuration(r),
         campaign_id: campaignId,
+        weight: r.weight,
+        delivered: deliveredByMedia.get(r.media_id) ?? 0,
       }))
       .filter((s) => s.duration_seconds <= maxDurationSeconds);
   }
@@ -356,90 +437,6 @@ export class CampaignProcess {
       out.set(r.campaign_id, Number(r.n));
     }
     return out;
-  }
-
-  // Pacing score = max(global_behind, per_show_behind, per_interval_behind).
-  // Each level is a [0, 1+] value where 0 = on/ahead of target and 1 = none
-  // delivered of the expected amount by now.
-  // Returns both the one-sided pacing score (existing behavior — higher means
-  // more behind, floors at 0) and the raw signed global ratio (negative =
-  // behind, positive = ahead) so callers needing the ahead-of-pace signal
-  // (Decision 74's eligibility exclusion) don't have to re-run the same
-  // date-range/play-count query a second time.
-  private async computePacingScore(
-    campaign: typeof campaignsTable.$inferSelect,
-    showId: number | null,
-    intervalId: number | null,
-    clockInstanceStartedAt: number,
-    nowMs: number,
-  ): Promise<{ score: number; globalRatio: number }> {
-    const globalRatio = await this.globalPacingRatio(campaign, nowMs);
-    const globalBehind = Math.max(0, -globalRatio);
-
-    let perShowBehind = 0;
-    if (
-      campaign.show_id != null &&
-      showId != null &&
-      campaign.show_id === showId &&
-      campaign.plays_per_show != null
-    ) {
-      const playsThisShowInstance = await this.countPlaysInRange(
-        campaign.id,
-        clockInstanceStartedAt,
-        nowMs,
-      );
-      perShowBehind = Math.max(
-        0,
-        1 - playsThisShowInstance / campaign.plays_per_show,
-      );
-    }
-
-    let perIntervalBehind = 0;
-    if (
-      campaign.interval_id != null &&
-      intervalId != null &&
-      campaign.interval_id === intervalId &&
-      campaign.interval_plays_per_day != null
-    ) {
-      // D96: the interval guarantee is N plays per DAILY occurrence.
-      const playsToday = await this.countPlaysInRange(
-        campaign.id,
-        midnightMs(nowMs),
-        nowMs,
-      );
-      perIntervalBehind = Math.max(
-        0,
-        1 - playsToday / campaign.interval_plays_per_day,
-      );
-    }
-
-    return { score: Math.max(globalBehind, perShowBehind, perIntervalBehind), globalRatio };
-  }
-
-  // Linear-interpolated global pacing ratio: (actual - expected) / expected,
-  // over the campaign's own date range. Negative = behind pace, positive =
-  // ahead. Shared basis for computePacingScore's one-sided "how behind"
-  // value (Math.max(0, -ratio)) and Decision 74's ahead-of-pace eligibility
-  // exclusion in buildPool — one query serves both.
-  private async globalPacingRatio(
-    campaign: typeof campaignsTable.$inferSelect,
-    nowMs: number,
-  ): Promise<number> {
-    const startMs = dateStringToMs(campaign.starts_on);
-    const endMs = dateStringToMs(campaign.ends_on) + 24 * 3600 * 1000;
-    if (!(nowMs > startMs)) return 0;
-    const totalMs = endMs - startMs;
-    const elapsedMs = Math.max(0, Math.min(totalMs, nowMs - startMs));
-    if (totalMs <= 0) return 0;
-
-    // D96: total_plays IS the contract volume over the campaign window — no
-    // per-month projection (the old plays_per_month × 30-day-months math and
-    // its approximation error are gone).
-    const expectedByNow = campaign.total_plays * (elapsedMs / totalMs);
-    if (expectedByNow <= 0) return 0;
-
-    const actual = await this.countPlaysInRange(campaign.id, startMs, nowMs);
-    return (actual - expectedByNow) / expectedByNow;
   }
 
   private async countPlaysInRange(
@@ -593,29 +590,120 @@ export class CampaignProcess {
     return null;
   }
 
-  // Resolve the broadcast interval that contains now_ms by matching its
-  // per-day slot for today.
-  private async resolveIntervalId(nowMs: number): Promise<number | null> {
-    const dow = isoDayOfWeek(nowMs);
-    const hhmm = hhmmFromMs(nowMs);
+
+  // ── D96 helpers ───────────────────────────────────────────────────────────
+
+  // The break's scheduled start = clock instance start + the sum of segment
+  // durations before it in its clock.
+  private async scheduledBreakStartMs(
+    segment: { id: number; clock_id: number; sort_order: number } | undefined,
+    clockInstanceStartedAt: number,
+  ): Promise<number> {
+    if (!segment) return clockInstanceStartedAt;
     const rows = await this.db
       .select({
+        duration_seconds: clockSegments.duration_seconds,
+        sort_order: clockSegments.sort_order,
+      })
+      .from(clockSegments)
+      .where(eq(clockSegments.clock_id, segment.clock_id));
+    let offsetSec = 0;
+    for (const r of rows) {
+      if (r.sort_order < segment.sort_order) offsetSec += r.duration_seconds;
+    }
+    return clockInstanceStartedAt + offsetSec * 1000;
+  }
+
+  // Interval windows for a day-of-week: the per-day slot overrides the
+  // interval's default times (same resolution rule as spotBudget.ts).
+  private async loadIntervalWindows(
+    dow: number,
+  ): Promise<Map<number, { startMin: number; endMin: number }>> {
+    const [intervalRows, slotRows] = await Promise.all([
+      this.db.select({
+        id: broadcastIntervalsTable.id,
+        default_start_time: broadcastIntervalsTable.default_start_time,
+        default_end_time: broadcastIntervalsTable.default_end_time,
+      }).from(broadcastIntervalsTable),
+      this.db.select({
         interval_id: broadcastIntervalSlotsTable.interval_id,
         start_time: broadcastIntervalSlotsTable.start_time,
         end_time: broadcastIntervalSlotsTable.end_time,
-      })
-      .from(broadcastIntervalSlotsTable)
-      .innerJoin(
-        broadcastIntervalsTable,
-        eq(broadcastIntervalsTable.id, broadcastIntervalSlotsTable.interval_id),
-      )
-      .where(eq(broadcastIntervalSlotsTable.day_of_week, dow));
-    for (const r of rows) {
-      if (r.start_time <= hhmm && hhmm < r.end_time) {
-        return r.interval_id;
-      }
+      }).from(broadcastIntervalSlotsTable)
+        .where(eq(broadcastIntervalSlotsTable.day_of_week, dow)),
+    ]);
+    const slotByInterval = new Map(slotRows.map((r) => [r.interval_id, r]));
+    const out = new Map<number, { startMin: number; endMin: number }>();
+    for (const iv of intervalRows) {
+      const slot = slotByInterval.get(iv.id);
+      out.set(iv.id, {
+        startMin: hhmmToMin(slot ? slot.start_time : iv.default_start_time),
+        endMin: hhmmToMin(slot ? slot.end_time : iv.default_end_time),
+      });
     }
-    return null;
+    return out;
+  }
+
+  private async loadStationAdDefaults(): Promise<{
+    allowedIntervalIds: number[] | null;
+    catchUpFactor: number;
+  }> {
+    const [row] = await this.db
+      .select({
+        default_allowed_interval_ids: stationSettingsTable.default_allowed_interval_ids,
+        default_catch_up_factor: stationSettingsTable.default_catch_up_factor,
+      })
+      .from(stationSettingsTable)
+      .where(eq(stationSettingsTable.id, 1));
+    return {
+      allowedIntervalIds: normalizeIdList(row?.default_allowed_interval_ids),
+      catchUpFactor: row?.default_catch_up_factor ?? 2,
+    };
+  }
+
+  private async lastPlayMsByCampaign(campaignIds: number[]): Promise<Map<number, number>> {
+    if (campaignIds.length === 0) return new Map();
+    const rows = await this.db
+      .select({
+        campaign_id: playHistoryTable.campaign_id,
+        last: sql<number>`MAX(unixepoch(${playHistoryTable.started_at}))`.as('last'),
+      })
+      .from(playHistoryTable)
+      .where(
+        and(
+          isNotNull(playHistoryTable.campaign_id),
+          inArray(playHistoryTable.campaign_id, campaignIds),
+          campaignCompletedPlayFilter,
+        ),
+      )
+      .groupBy(playHistoryTable.campaign_id);
+    const out = new Map<number, number>();
+    for (const r of rows) {
+      if (r.campaign_id != null && r.last != null) out.set(r.campaign_id, Number(r.last) * 1000);
+    }
+    return out;
+  }
+
+  // Plays whose start landed inside [winStartMs, winEndMs) — the honest
+  // measure for an interval guarantee (plays outside the window don't count
+  // toward it even on the same day).
+  private async countPlaysInWindow(
+    campaignId: number,
+    winStartMs: number,
+    winEndMs: number,
+  ): Promise<number> {
+    const rows = await this.db
+      .select({ n: sql<number>`COUNT(*)`.as('n') })
+      .from(playHistoryTable)
+      .where(
+        and(
+          eq(playHistoryTable.campaign_id, campaignId),
+          gte(playHistoryTable.started_at, new Date(winStartMs)),
+          sql`${playHistoryTable.started_at} < ${new Date(winEndMs)}`,
+          campaignCompletedPlayFilter,
+        ),
+      );
+    return Number(rows[0]?.n ?? 0);
   }
 }
 
@@ -648,6 +736,52 @@ function parseIdList(raw: unknown): number[] {
     }
   }
   return [];
+}
+
+// JSON id-array column → number[] | null; empty/invalid = null (inherit).
+function normalizeIdList(raw: unknown): number[] | null {
+  const list = parseIdList(raw);
+  return list.length > 0 ? list : null;
+}
+
+function hhmmToMin(hhmm: string): number {
+  const [h, m] = hhmm.split(':').map((x) => parseInt(x, 10));
+  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
+}
+
+function minutesOfDay(ms: number): number {
+  const d = new Date(ms);
+  return d.getHours() * 60 + d.getMinutes();
+}
+
+// Inclusive day count between two YYYY-MM-DD dates (same day = 1).
+function daysInclusive(fromYmd: string, toYmd: string): number {
+  const from = new Date(fromYmd + 'T00:00:00');
+  const to = new Date(toYmd + 'T00:00:00');
+  return Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
+}
+
+// How far through the campaign's allowed airtime today the break sits, in
+// [0, 1] — drives the in-day spread of the daily quota. Unrestricted
+// campaigns spread over the whole day.
+function allowedWindowsElapsedFraction(
+  allowedIds: number[] | null,
+  windowsByIntervalId: Map<number, { startMin: number; endMin: number }>,
+  breakMinOfDay: number,
+): number {
+  if (allowedIds == null || allowedIds.length === 0) {
+    return Math.max(0, Math.min(1, breakMinOfDay / (24 * 60)));
+  }
+  let total = 0;
+  let elapsed = 0;
+  for (const id of allowedIds) {
+    const w = windowsByIntervalId.get(id);
+    if (!w || w.endMin <= w.startMin) continue;
+    total += w.endMin - w.startMin;
+    elapsed += Math.max(0, Math.min(breakMinOfDay, w.endMin) - w.startMin);
+  }
+  if (total <= 0) return 0;
+  return Math.max(0, Math.min(1, elapsed / total));
 }
 
 function midnightMs(nowMs: number): number {

@@ -2848,6 +2848,40 @@ tie-break on priority, `pickLongestSpotThatFits`, `resolveIntervalId` singular r
    bind — burst campaigns). **Empty-break behavior stays:** no eligible demand → empty plan
    → D94 skip; promos remain the only non-campaign break filler.
 
+#### D96 Part 4 — Phase A + B implementation notes (2026-07-18/19)
+
+**Phase A shipped** (b38e805, deployed): schema migrations 0065/0066, form rework, hard
+wall pulled forward (also retires legacy total_plays=0 rows — deploy-safe pre-wipe).
+
+**Phase B implemented and live-verified on dev** (campaign.ts 7-gate pipeline, planner
+first-in-slot enforcement + weighted rotation + separation `.some` fix + D75 boost removal).
+Live-shaped verification on the dev station (test campaign, real breaks, calendar overlay,
+all debris cleaned): allowed-windows gate excluded a daytime-restricted campaign from a
+night break; hard wall held out all legacy campaigns; `at_least_one` placed the break
+opener (the formerly dead slot_1_preferred path); weighted rotation picked correctly on
+three consecutive assemblies including a mid-flight replan (delivered ÷ weight flipped the
+pick as designed); the quota gate stopped a 2/day campaign after its second play; a
+campaign spot's `stop_set_position` is stamped at push.
+
+**Two findings out of the live test:**
+1. **`stop_set_position` had a reader but no writer since Phase 2** —
+   `checkSlot1SatisfiedToday` could never see a slot-1 play, so first-in-slot satisfaction
+   was permanently false (visible symptom: a mid-flight replan placed a second "slot-1"
+   item into the same break). FIXED in Phase B: the queue feeder stamps the 1-based
+   campaign-spot ordinal per break, derived from existing campaign plays of the same plan
+   (survives replans that renumber plan_items).
+2. **Empty-stop-set redraft churn (OPEN — own decision needed).** When an active plan
+   exhausts long before its window ends AND the next stop-set assembles empty, the skip
+   (D94) reconciles past it, but the tick's next-draft request re-resolves the same
+   still-future occurrence → redraft → empty → skip: 65 terminal plans in 24 min on dev
+   (one per ~22s). Bounded and self-terminating (station kept playing; plans end
+   'completed' and get swept), invisible on prod because music plans fill their windows so
+   exhaustion happens near boundaries. Same family as the flagged "D75-boost finalize
+   churn". Proposed fix shape: remember empty-skipped occurrences per
+   (segment_id, clock_instance_started_at) and have next-occurrence resolution jump past
+   them — needs a traced pass through resolveNextOccurrence/reconcileNext before touching
+   supervisor.ts.
+
 ---
 
 ### Decision 97 — Boundary and runway refinements: greedy prefix, min-overshoot boundary pick, runway threshold as a setting

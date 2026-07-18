@@ -26,6 +26,10 @@ export interface InsertPushedFields {
   music_campaign_id: number | null;
   pushed_at_ms: number; // unix ms — when the push was sent to LS
   pick_reason: string | null;
+  // 1-based ordinal of this campaign spot within its break (D96). The column
+  // existed since Phase 2 with a reader (checkSlot1SatisfiedToday) but no
+  // writer — first-in-slot satisfaction was permanently false until this.
+  stop_set_position: number | null;
 }
 
 // Inserts a play_history row at push time. started_at is left null and is
@@ -53,6 +57,7 @@ export async function insertPushed(
     campaign_id: fields.campaign_id,
     music_campaign_id: fields.music_campaign_id,
     plan_item_id: fields.plan_item_id,
+    stop_set_position: fields.stop_set_position,
   };
   const inserted = await db
     .insert(playHistoryTable)
