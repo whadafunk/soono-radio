@@ -138,9 +138,15 @@ function addToSubScope(cuts: BudgetCuts, scopeKey: string, value: Budget): void 
 interface CacheEntry {
   inventory: SpotBudgetInventory;
   occurrences: StopSetOccurrence[];
+  computedAtMs: number;
 }
 
 const inventoryCache = new Map<string, CacheEntry>();
+
+// Remaining-mode inventory depends on the wall clock (today's already-aired
+// breaks are excluded), so a cached entry goes stale on its own even with no
+// schedule mutation. Estimated-mode entries stay valid until invalidated.
+const REMAINING_INVENTORY_TTL_MS = 10 * 60 * 1000;
 
 function makeCacheKey(period: DateRange, mode: BudgetMode): string {
   const raw = `${dateToString(period.start)}:${dateToString(period.end)}:${mode}`;
@@ -176,8 +182,10 @@ export function invalidateAll(): void {
  * Project all stop-set segments over the calendar for the given period and
  * return the raw + effective (after promo margin) inventory.
  *
- * In live mode, `period.start` is clamped to `max(period.start, now)` before
- * enumeration — past breaks have already aired and their capacity is gone.
+ * In remaining mode, past capacity is excluded at two granularities: whole
+ * days before today are never enumerated, and within today only breaks whose
+ * real start time (D95 tiling) is still ahead of the wall clock are counted —
+ * a break that already aired (or is airing) has spent its capacity.
  */
 async function computeInventory(
   period: DateRange,
@@ -187,6 +195,9 @@ async function computeInventory(
   const effectiveStart = mode === 'remaining' && now > period.start ? now : period.start;
   const effectiveStartStr = dateToString(effectiveStart);
   const endStr = dateToString(period.end);
+  // Time-of-day cutoff applied to today's breaks in remaining mode.
+  const todayStr = mode === 'remaining' ? dateToString(now) : null;
+  const nowSecOfDay = now.getHours() * 3600 + now.getMinutes() * 60 + now.getSeconds();
 
   // ── Load full clock layouts (Decision 95) ─────────────────────────────────
   // The old projection counted each stop-set ONCE per schedule entry,
@@ -354,6 +365,8 @@ async function computeInventory(
       for (const ss of layout.stopSets) {
         const occStartSec = tileStartSec + ss.offsetSec;
         if (occStartSec >= winEndSec) break;
+        // Remaining mode: a break earlier today already aired — skip it.
+        if (dateStr === todayStr && occStartSec < nowSecOfDay) continue;
         occurrences.push({
           date: dateStr,
           dow,
@@ -495,10 +508,19 @@ async function getOrComputeInventory(
 ): Promise<CacheEntry> {
   const key = makeCacheKey(period, mode);
   const cached = inventoryCache.get(key);
-  if (cached) return cached;
+  if (
+    cached &&
+    (mode !== 'remaining' || Date.now() - cached.computedAtMs < REMAINING_INVENTORY_TTL_MS)
+  ) {
+    return cached;
+  }
 
   const result = await computeInventory(period, mode);
-  const entry: CacheEntry = { inventory: result.inventory, occurrences: result.occurrences };
+  const entry: CacheEntry = {
+    inventory: result.inventory,
+    occurrences: result.occurrences,
+    computedAtMs: Date.now(),
+  };
   inventoryCache.set(key, entry);
   return entry;
 }
