@@ -14,6 +14,7 @@ import {
   TrendingUp,
   TrendingDown,
   Minus,
+  AlertTriangle,
 } from 'lucide-react';
 import {
   Customer,
@@ -35,6 +36,8 @@ import {
   ContactPatchSchema,
   User,
   Show,
+  CampaignValidationDraft,
+  CampaignValidationDraftSchema,
 } from '@soono/shared';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
@@ -43,6 +46,8 @@ import { BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, INPUT, LABEL } fr
 import { SaveStatus } from '../../components/SaveStatus';
 import {
   fetchCustomers,
+  validateCampaign,
+  fetchCampaignValidationSummary,
   createCustomer,
   updateCustomer,
   deleteCustomer,
@@ -203,6 +208,74 @@ function SpotPacingCell({ campaignId }: { campaignId: number }) {
 }
 
 // ─── Budget impact summary (used in create/edit forms) ────────────────────────
+
+// D96 Phase C — live sale-time validation. Debounces the form state, asks the
+// validator, and renders per-check verdicts with the numbers. The same checks
+// re-run for every active campaign after schedule edits (problem badges).
+function CampaignValidationPanel({ raw }: { raw: unknown }) {
+  const [debounced, setDebounced] = useState<CampaignValidationDraft | null>(null);
+  const rawJson = JSON.stringify(raw);
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const parsed = CampaignValidationDraftSchema.safeParse(raw);
+      setDebounced(parsed.success ? parsed.data : null);
+    }, 600);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawJson]);
+
+  const { data, isFetching } = useQuery({
+    queryKey: ['campaign-validate', debounced],
+    queryFn: () => validateCampaign(debounced!),
+    enabled: debounced != null,
+    staleTime: 30_000,
+  });
+
+  if (!debounced) return null;
+  const tone =
+    data?.verdict === 'refuse' ? 'border-red-800 bg-red-900/15'
+    : data?.verdict === 'warnings' ? 'border-amber-800 bg-amber-900/15'
+    : 'border-zinc-700/50 bg-zinc-800/40';
+  return (
+    <div className={`rounded-lg border px-3 py-2 space-y-1 ${tone}`}>
+      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+        Can the schedule keep this promise?
+        {isFetching && <Loader className="w-3 h-3 animate-spin" />}
+        {data && (
+          <span className={
+            data.verdict === 'refuse' ? 'text-red-400'
+            : data.verdict === 'warnings' ? 'text-amber-400'
+            : 'text-green-400'
+          }>
+            {data.verdict === 'refuse' ? 'No — see below' : data.verdict === 'warnings' ? 'Yes, barely' : 'Yes'}
+          </span>
+        )}
+      </p>
+      {data?.checks.map((c) => (
+        <p key={c.key} className={`text-xs ${
+          c.level === 'fail' ? 'text-red-300' : c.level === 'warn' ? 'text-amber-300' : 'text-zinc-400'
+        }`}>
+          {c.level === 'fail' ? '✕ ' : c.level === 'warn' ? '⚠ ' : '✓ '}{c.message}
+        </p>
+      ))}
+    </div>
+  );
+}
+
+function CampaignProblemBadge({ campaignId }: { campaignId: number }) {
+  const { data } = useQuery({
+    queryKey: ['campaign-validation-summary'],
+    queryFn: fetchCampaignValidationSummary,
+    staleTime: 60_000,
+  });
+  const row = data?.find((r) => r.campaign_id === campaignId);
+  if (!row || row.verdict === 'fit') return null;
+  return (
+    <span title={row.headline ?? 'Validation problem'} className="inline-block ml-1.5 align-middle">
+      <AlertTriangle className={`w-3.5 h-3.5 inline -mt-0.5 ${row.verdict === 'refuse' ? 'text-red-400' : 'text-amber-400'}`} />
+    </span>
+  );
+}
 
 function AllowedIntervalsPicker({
   intervals,
@@ -1588,6 +1661,7 @@ function CreateCampaignForm({
 
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
   const { field: allowedField } = useController({ name: 'allowed_interval_ids', control });
+  const allFormValues  = useWatch({ control });
   const firstInSlot    = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId = useWatch({ control, name: 'show_id' });
   const selectedIntervalId = useWatch({ control, name: 'interval_id' });
@@ -1881,6 +1955,8 @@ function CreateCampaignForm({
           durationBracket={watchedDuration}
           firstInSlot={firstInSlot}
         />
+
+        <CampaignValidationPanel raw={allFormValues} />
       </div>
       <div className="px-6 py-4 border-t border-zinc-700 flex justify-end gap-2 bg-zinc-800/50 rounded-b-xl">
         <button type="button" onClick={onCancel} disabled={isLoading} className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
@@ -2010,7 +2086,10 @@ function CampaignTableRow({
       {showCustomer && (
         <td className="px-6 py-3 text-zinc-400">{campaign.customer_name}</td>
       )}
-      <td className="px-6 py-3 font-medium text-white">{campaign.name}</td>
+      <td className="px-6 py-3 font-medium text-white">
+        {campaign.name}
+        <CampaignProblemBadge campaignId={campaign.id} />
+      </td>
       <td className="px-6 py-3 text-zinc-300">{campaign.total_plays}</td>
       <td className="px-6 py-3 text-zinc-300">
         {campaign.starts_on} → {campaign.ends_on}
@@ -2640,6 +2719,7 @@ function CampaignEditForm({
 
   const { field: exclusionsField } = useController({ name: 'competing_exclusions', control });
   const { field: allowedField } = useController({ name: 'allowed_interval_ids', control });
+  const allFormValues      = useWatch({ control });
   const sweepsPerMonth     = useWatch({ control, name: 'sweeps_per_month' });
   const firstInSlot        = useWatch({ control, name: 'first_in_slot' });
   const selectedShowId     = useWatch({ control, name: 'show_id' });
@@ -2991,6 +3071,8 @@ function CampaignEditForm({
         durationBracket={watchedDuration}
         firstInSlot={firstInSlot ?? false}
       />
+
+      <CampaignValidationPanel raw={{ ...allFormValues, id: campaign.id }} />
 
       <div>
         <label className={LABEL}>Notes</label>

@@ -795,7 +795,9 @@ export type BroadcastIntervalSlotInsert = typeof broadcastIntervalSlots.$inferIn
 export const PRIORITY_LEVELS = ['hard', 'best_effort'] as const;
 export type PriorityLevel = (typeof PRIORITY_LEVELS)[number];
 
-export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one', 'at_least_one_shared'] as const;
+// D96: 'at_least_one_shared' dropped — it was behaviorally identical to
+// 'at_least_one' (both mapped to the then-dead slot_1_preferred constraint).
+export const FIRST_IN_SLOT_MODES = ['always', 'at_least_one'] as const;
 export type FirstInSlotMode = (typeof FIRST_IN_SLOT_MODES)[number];
 
 export const campaigns = sqliteTable(

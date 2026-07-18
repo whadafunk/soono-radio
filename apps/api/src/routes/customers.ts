@@ -6,6 +6,7 @@ import {
   ContactCreateSchema,
   ContactPatchSchema,
   CampaignCreateSchema,
+  CampaignValidationDraftSchema,
   CampaignPatchSchema,
   CampaignMediaCreateSchema,
 } from '@soono/shared';
@@ -19,6 +20,7 @@ import {
   media,
 } from '../db/schema.js';
 import { invalidateInventory, invalidateDemand } from '../services/spotBudget.js';
+import { validateCampaignDraft, validationSummary } from '../services/campaignValidator.js';
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -342,6 +344,28 @@ export async function customerRoutes(fastify: FastifyInstance) {
       pct: 0,
       on_track: false,
     });
+  });
+
+  // ─── D96 Phase C: sale-time validation ───────────────────────────────────────
+
+  fastify.post<{ Body: unknown }>('/campaigns/validate', async (request, reply) => {
+    const parsed = CampaignValidationDraftSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+    try {
+      return reply.send(await validateCampaignDraft(parsed.data));
+    } catch (err) {
+      fastify.log.error(err, 'campaign validation failed');
+      return reply.status(500).send({ error: 'Validation failed' });
+    }
+  });
+
+  fastify.get('/campaigns/validation-summary', async (_request, reply) => {
+    try {
+      return reply.send(await validationSummary());
+    } catch (err) {
+      fastify.log.error(err, 'campaign validation summary failed');
+      return reply.status(500).send({ error: 'Validation summary failed' });
+    }
   });
 
   // ─── Campaign Media ──────────────────────────────────────────────────────────

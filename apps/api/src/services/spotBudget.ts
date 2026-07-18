@@ -721,6 +721,17 @@ export async function getInventory(
   return inventory;
 }
 
+// D96 Phase C: the sale-time validator needs the raw break occurrences (real
+// times via D95 tiling), not just the aggregated cuts — same cache.
+export type { StopSetOccurrence, DateRange };
+export async function getOccurrences(
+  period: DateRange,
+  mode: BudgetMode,
+): Promise<StopSetOccurrence[]> {
+  const { occurrences } = await getOrComputeInventory(period, mode);
+  return occurrences;
+}
+
 export async function getDemand(
   period: DateRange,
   mode: BudgetMode,

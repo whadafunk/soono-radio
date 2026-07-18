@@ -457,6 +457,48 @@ export const CampaignWithCustomerSchema = CampaignSchema.extend({
 });
 export type CampaignWithCustomer = z.infer<typeof CampaignWithCustomerSchema>;
 
+// ─── D96 Phase C: sale-time validation ────────────────────────────────────────
+
+export const CampaignValidationCheckSchema = z.object({
+  key: z.string(),
+  level: z.enum(['ok', 'warn', 'fail']),
+  // Plain-language sentence with the numbers in it.
+  message: z.string(),
+});
+export type CampaignValidationCheck = z.infer<typeof CampaignValidationCheckSchema>;
+
+export const CampaignValidationResultSchema = z.object({
+  verdict: z.enum(['fit', 'warnings', 'refuse']),
+  checks: z.array(CampaignValidationCheckSchema),
+});
+export type CampaignValidationResult = z.infer<typeof CampaignValidationResultSchema>;
+
+// Draft shape the validator needs — a campaign that may not exist yet.
+export const CampaignValidationDraftSchema = z.object({
+  id: z.number().int().nullable().optional(), // set when editing an existing campaign
+  starts_on: z.string(),
+  ends_on: z.string(),
+  total_plays: z.number().int().positive(),
+  duration_bracket: durationBracketField,
+  allowed_interval_ids: z.array(z.number().int()).nullable().optional(),
+  interval_id: z.number().int().nullable().optional(),
+  interval_plays_per_day: z.number().int().positive().nullable().optional(),
+  show_id: z.number().int().nullable().optional(),
+  plays_per_show: z.number().int().positive().nullable().optional(),
+  first_in_slot: z.boolean().default(false),
+  first_in_slot_mode: z.enum(FIRST_IN_SLOT_MODES).nullable().optional(),
+  competing_exclusions: z.array(z.number().int()).default([]),
+});
+export type CampaignValidationDraft = z.infer<typeof CampaignValidationDraftSchema>;
+
+export const CampaignValidationSummaryRowSchema = z.object({
+  campaign_id: z.number().int(),
+  verdict: z.enum(['fit', 'warnings', 'refuse']),
+  // First failing/warning message, for the badge tooltip.
+  headline: z.string().nullable(),
+});
+export type CampaignValidationSummaryRow = z.infer<typeof CampaignValidationSummaryRowSchema>;
+
 export const CampaignPacingSchema = z.object({
   plays_this_month: z.number().int().nonnegative(),
   target: z.number().int().positive(),

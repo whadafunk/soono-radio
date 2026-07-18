@@ -50,6 +50,11 @@ import {
   MaintenanceSettings,
   MediaIntegrityState,
   MediaIntegrityStateSchema,
+  CampaignValidationDraft,
+  CampaignValidationResult,
+  CampaignValidationResultSchema,
+  CampaignValidationSummaryRow,
+  CampaignValidationSummaryRowSchema,
 } from '@soono/shared';
 
 const API_BASE = '/api';
@@ -1472,6 +1477,26 @@ export async function fetchMediaIntegrityState(): Promise<MediaIntegrityState> {
   const res = await fetch(`${API_BASE}/maintenance/media-integrity`);
   if (!res.ok) throw new Error(`Failed to fetch integrity state: ${res.statusText}`);
   return MediaIntegrityStateSchema.parse(await res.json());
+}
+
+export async function validateCampaign(draft: CampaignValidationDraft): Promise<CampaignValidationResult> {
+  const res = await fetch(`${API_BASE}/campaigns/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(draft),
+  });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Validation failed: ${res.statusText}`);
+  }
+  return CampaignValidationResultSchema.parse(await res.json());
+}
+
+export async function fetchCampaignValidationSummary(): Promise<CampaignValidationSummaryRow[]> {
+  const res = await fetch(`${API_BASE}/campaigns/validation-summary`);
+  if (!res.ok) throw new Error(`Failed to fetch validation summary: ${res.statusText}`);
+  const data = await res.json();
+  return (data as unknown[]).map((r) => CampaignValidationSummaryRowSchema.parse(r));
 }
 
 export async function runMediaIntegritySweep(): Promise<MediaIntegrityState> {

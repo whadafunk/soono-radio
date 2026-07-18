@@ -2882,6 +2882,20 @@ campaign spot's `stop_set_position` is stamped at push.
    them — needs a traced pass through resolveNextOccurrence/reconcileNext before touching
    supervisor.ts.
 
+**Phase C implemented and verified on dev (2026-07-19):** `campaignValidator.ts` — one
+function, five check families (bracket vs smallest allowed break; volume at 1
+play/campaign/break with exclusion partners subtracted; seconds against EFFECTIVE capacity
+with other campaigns' demand overlap-scaled to their own eligible sets; interval/show
+guarantees bound by the weakest occurrence minus others' same-scope reservations;
+first-in-slot supply with always-demand overlap-scaled). Verdict fit | warnings | refuse
+with plain-language numbered messages. Consumed three ways: POST /campaigns/validate (live
+debounced panel in the create/edit forms — "Can the schedule keep this promise?"), GET
+/campaigns/validation-summary (problem badges on campaign rows; schedule edits invalidate
+the occurrence cache so badges are always current on read), and the same code path is what
+Phase D's simulation will dry-run. Verified against known numbers: 5000-play draft refused
+at 235 breaks/564 effective minutes; 50/day interval guarantee refused at weakest-day 4
+breaks; fit case with slot supply; legacy campaigns all trivially fit.
+
 ---
 
 ### Decision 97 — Boundary and runway refinements: greedy prefix, min-overshoot boundary pick, runway threshold as a setting
