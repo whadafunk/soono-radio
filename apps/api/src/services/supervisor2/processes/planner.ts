@@ -66,6 +66,11 @@ import type {
 
 // Minimum gap (seconds) below which we accept silence rather than try to fill.
 const MIN_FILL_GAP_SECONDS = 5;
+// Reason strings for segment envelopes — an internal contract: the replan
+// path recognizes a plan's trailing pending closer BY THIS STRING (D104), so
+// the write sites and the detection must never drift apart.
+const SEGMENT_START_ENVELOPE_REASON = 'segment_start envelope';
+const SEGMENT_END_ENVELOPE_REASON = 'segment_end envelope';
 
 // ── Decision 92: fill texture rule ────────────────────────────────────────────
 // Music is the fabric; promo/station-ID/jingle are single stitches. In fill
@@ -756,16 +761,25 @@ export class PlannerProcess {
       return;
     }
 
-    const dropping = await this.db
+    // D104: the live replan callers all APPEND (top-up/fill) — fromPosition
+    // is past the plan's last item. Read the full pending list so the plan's
+    // trailing closer, when still pending, can be pulled into the swap and
+    // re-placed AFTER the chunk: the segment keeps ending on its closer
+    // instead of the closer airing mid-plan with music glued behind it. An
+    // already-aired closer is never repeated — the extended segment then
+    // ends on plain content ("saying goodbye twice is worse than once").
+    const pendingAll = await this.db
       .select()
       .from(planItemsTable)
-      .where(
-        and(
-          eq(planItemsTable.plan_id, planId),
-          eq(planItemsTable.status, 'pending'),
-          gte(planItemsTable.position, fromPosition),
-        ),
-      );
+      .where(and(eq(planItemsTable.plan_id, planId), eq(planItemsTable.status, 'pending')))
+      .orderBy(asc(planItemsTable.position));
+    const lastPending = pendingAll[pendingAll.length - 1] ?? null;
+    const trailingCloser =
+      lastPending != null && lastPending.reason === SEGMENT_END_ENVELOPE_REASON ? lastPending : null;
+    const effectiveFrom = trailingCloser
+      ? Math.min(fromPosition, trailingCloser.position)
+      : fromPosition;
+    const dropping = pendingAll.filter((it) => it.position >= effectiveFrom);
 
     // Decision 98 — BUILD THEN SWAP (same rationale as finalizePlan): assemble
     // the replacement tail FIRST, while the existing tail is untouched. The
@@ -776,25 +790,44 @@ export class PlannerProcess {
     // when they're needed.
     const config = await this.loadSupervisorConfig();
 
-    // For mid-segment replanning, the show context is unchanged (show
-    // envelopes played at the start/end are not re-inserted). Pass show_id
-    // for branding pool selection but disable envelope insertion.
-    const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
-    const showCtx: ShowContext = {
-      showId: showResolved?.show_id ?? null,
-      showName: showResolved?.show_name ?? null,
-      isShowStart: false,
-      isShowEnd: false,
-      config,
-    };
-
-    const result = await this.assembleForSegment(
-      segment,
-      plan.clock_instance_started_at,
-      remainingSeconds,
-      nowMs,
-      showCtx,
+    // D104: a chunk appended to an already-airing music plan is CONTINUATION
+    // content — more of the same segment, not a fresh one — so it goes
+    // through its own assembly routine (no envelopes, no end-reserve beyond
+    // the re-placed closer below). Non-music segments keep the full
+    // assembler as before.
+    const chunkBudgetSeconds = Math.max(
+      0,
+      remainingSeconds - (trailingCloser?.planned_duration_seconds ?? 0),
     );
+    let result: AssemblyResult;
+    if (segment.type === 'music') {
+      result = await this.assembleContinuationChunk(
+        segment,
+        plan.clock_instance_started_at,
+        chunkBudgetSeconds,
+        nowMs,
+        config,
+      );
+    } else {
+      // For mid-segment replanning, the show context is unchanged (show
+      // envelopes played at the start/end are not re-inserted). Pass show_id
+      // for branding pool selection but disable envelope insertion.
+      const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
+      const showCtx: ShowContext = {
+        showId: showResolved?.show_id ?? null,
+        showName: showResolved?.show_name ?? null,
+        isShowStart: false,
+        isShowEnd: false,
+        config,
+      };
+      result = await this.assembleForSegment(
+        segment,
+        plan.clock_instance_started_at,
+        remainingSeconds,
+        nowMs,
+        showCtx,
+      );
+    }
 
     // Same stale-snapshot guard as finalize — the feeder can promote a
     // snapshotted tail item to 'playing' while assembly runs.
@@ -835,10 +868,28 @@ export class PlannerProcess {
       await this.deleteSnapshotRows(planId, dropping.map((it) => it.id), 'replan');
     }
 
-    // Re-insert from fromPosition.
-    let pos = fromPosition;
+    // Re-insert from the effective start, then re-place the plan's own
+    // pending closer (same media, same values) at the true end (D104).
+    let pos = effectiveFrom;
     for (const item of result.items) {
       await this.db.insert(planItemsTable).values(toInsertRow(planId, pos, item));
+      pos += 1;
+    }
+    if (trailingCloser) {
+      await this.db.insert(planItemsTable).values({
+        plan_id: planId,
+        position: pos,
+        media_id: trailingCloser.media_id,
+        content_type: trailingCloser.content_type,
+        campaign_id: trailingCloser.campaign_id,
+        music_campaign_id: trailingCloser.music_campaign_id,
+        planned_duration_seconds: trailingCloser.planned_duration_seconds,
+        mandatory: trailingCloser.mandatory,
+        reason: trailingCloser.reason,
+        status: 'pending',
+        cut_allowed: trailingCloser.cut_allowed,
+        skip_allowed: trailingCloser.skip_allowed,
+      });
       pos += 1;
     }
 
@@ -852,10 +903,57 @@ export class PlannerProcess {
         segment_id: segment.id,
         dropped_count: dropping.length,
         added_count: result.items.length,
-        from_position: fromPosition,
+        from_position: effectiveFrom,
+        continuation: segment.type === 'music',
+        closer_restored: trailingCloser != null,
       },
       'planner: replan complete',
     );
+  }
+
+  // D104 — continuation chunk: content appended to an already-airing music
+  // plan by the top-up/fill paths. A chunk is MORE OF THE SAME SEGMENT, not
+  // a fresh one: no opening envelope (the segment already opened on air), no
+  // closing envelope and no end-reserve (the replan caller re-places the
+  // plan's own pending closer after the chunk when one exists). Interstitial
+  // jingles/IDs still apply — mid-segment content keeps its cadence — and the
+  // fill core brings D103's heavy-first and hot-play-by-cadence with it.
+  private async assembleContinuationChunk(
+    segment: ClockSegment,
+    clockInstanceStartedAt: number,
+    budgetSeconds: number,
+    nowMs: number,
+    config: SupervisorConfig,
+  ): Promise<AssemblyResult> {
+    const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
+    const music = await this.requestPool<MusicCandidatePool>(
+      'music',
+      segment,
+      instance,
+      budgetSeconds,
+      nowMs,
+    );
+    const branding = await this.requestPool<BrandingCandidatePool>(
+      'branding',
+      segment,
+      instance,
+      budgetSeconds,
+      nowMs,
+    );
+    const items: PendingAssemblyItem[] = [];
+    const usedMusicIds = new Set<number>();
+    const usedBrandingIds = new Set<number>();
+    this.fillMusicItems(music, branding, segment, config, budgetSeconds, items, usedMusicIds, usedBrandingIds);
+    return {
+      items,
+      unused_music_ids: music.candidates
+        .filter((c) => !usedMusicIds.has(c.id))
+        .map((c) => c.id),
+      unused_branding_ids: collectUnusedBrandingIds(branding, usedBrandingIds),
+      unused_campaign_ids: [],
+      unused_promo_ids: [],
+      unused_rundown_ids: [],
+    };
   }
 
   // ─── Segment-type dispatch ──────────────────────────────────────────────────
@@ -939,63 +1037,22 @@ export class PlannerProcess {
   // available for the end-of-segment fit even after the main loop places its fill.
   // No arrangement-trying occurs — the pass is a single greedy sweep.
 
-  private async assembleMusicPlan(
+  // The music-fill core shared by full segment assembly and continuation
+  // chunks (D104): heavy rotation first, hot-play by cadence, rotation walk
+  // with interstitial jingles/IDs, single boundary decision (D101/D97).
+  // Mutates items and the used-id sets; returns the unfilled remainder of
+  // budgetSeconds.
+  private fillMusicItems(
+    music: MusicCandidatePool,
+    branding: BrandingCandidatePool,
     segment: ClockSegment,
-    clockInstanceStartedAt: number,
-    targetDurationSeconds: number,
-    nowMs: number,
-    showCtx: ShowContext,
-  ): Promise<AssemblyResult> {
-    const { config } = showCtx;
-    const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
-    const music = await this.requestPool<MusicCandidatePool>(
-      'music',
-      segment,
-      instance,
-      targetDurationSeconds,
-      nowMs,
-    );
-    const branding = await this.requestPool<BrandingCandidatePool>(
-      'branding',
-      segment,
-      instance,
-      targetDurationSeconds,
-      nowMs,
-      showCtx.showId,
-    );
-
-    const items: PendingAssemblyItem[] = [];
-    const usedMusicIds = new Set<number>();
-    const usedBrandingIds = new Set<number>();
-
-    const segmentStart = branding.segment_start;
-    const segmentEnd = branding.segment_end;
-
-    // Reserve durations up-front so music fill stays within budget.
-    const showStartDur = (showCtx.isShowStart && branding.show_start)
-      ? branding.show_start.duration_seconds : 0;
-    const showEndReserve = (showCtx.isShowEnd && branding.show_end)
-      ? branding.show_end.duration_seconds : 0;
-    const segStartDur = segmentStart?.duration_seconds ?? 0;
-    const segEndReserve = segmentEnd?.duration_seconds ?? 0;
-
-    let remaining = targetDurationSeconds - showStartDur - segStartDur - segEndReserve - showEndReserve;
-
-    // (0) Show-start envelope — placed before segment-start envelope (D40).
-    if (showCtx.isShowStart && branding.show_start) {
-      items.push(showEnvelopeItem(branding.show_start, 'show_start envelope'));
-      usedBrandingIds.add(branding.show_start.id);
-    }
-
-    // (a) Segment-start envelope.
-    if (segmentStart) {
-      items.push(withCutSkip(
-        brandingToItem(segmentStart, 'segment_start envelope'),
-        config,
-      ));
-      usedBrandingIds.add(segmentStart.id);
-    }
-
+    config: SupervisorConfig,
+    budgetSeconds: number,
+    items: PendingAssemblyItem[],
+    usedMusicIds: Set<number>,
+    usedBrandingIds: Set<number>,
+  ): number {
+    let remaining = budgetSeconds;
     // (b/c) Music + interstitial cadence.
     const jinglesEnabled = segment.interstitial_jingles_enabled;
     const jingleEveryN = segment.jingle_every_n_tracks ?? 0;
@@ -1150,11 +1207,74 @@ export class PlannerProcess {
         musicCount += 1;
       }
     }
+    return remaining;
+  }
+
+  private async assembleMusicPlan(
+    segment: ClockSegment,
+    clockInstanceStartedAt: number,
+    targetDurationSeconds: number,
+    nowMs: number,
+    showCtx: ShowContext,
+  ): Promise<AssemblyResult> {
+    const { config } = showCtx;
+    const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
+    const music = await this.requestPool<MusicCandidatePool>(
+      'music',
+      segment,
+      instance,
+      targetDurationSeconds,
+      nowMs,
+    );
+    const branding = await this.requestPool<BrandingCandidatePool>(
+      'branding',
+      segment,
+      instance,
+      targetDurationSeconds,
+      nowMs,
+      showCtx.showId,
+    );
+
+    const items: PendingAssemblyItem[] = [];
+    const usedMusicIds = new Set<number>();
+    const usedBrandingIds = new Set<number>();
+
+    const segmentStart = branding.segment_start;
+    const segmentEnd = branding.segment_end;
+
+    // Reserve durations up-front so music fill stays within budget.
+    const showStartDur = (showCtx.isShowStart && branding.show_start)
+      ? branding.show_start.duration_seconds : 0;
+    const showEndReserve = (showCtx.isShowEnd && branding.show_end)
+      ? branding.show_end.duration_seconds : 0;
+    const segStartDur = segmentStart?.duration_seconds ?? 0;
+    const segEndReserve = segmentEnd?.duration_seconds ?? 0;
+
+    let remaining = targetDurationSeconds - showStartDur - segStartDur - segEndReserve - showEndReserve;
+
+    // (0) Show-start envelope — placed before segment-start envelope (D40).
+    if (showCtx.isShowStart && branding.show_start) {
+      items.push(showEnvelopeItem(branding.show_start, 'show_start envelope'));
+      usedBrandingIds.add(branding.show_start.id);
+    }
+
+    // (a) Segment-start envelope.
+    if (segmentStart) {
+      items.push(withCutSkip(
+        brandingToItem(segmentStart, SEGMENT_START_ENVELOPE_REASON),
+        config,
+      ));
+      usedBrandingIds.add(segmentStart.id);
+    }
+
+    remaining = this.fillMusicItems(
+      music, branding, segment, config, remaining, items, usedMusicIds, usedBrandingIds,
+    );
 
     // (e) Segment-end envelope.
     if (segmentEnd) {
       if (segmentEnd.duration_seconds <= remaining + segEndReserve + MIN_FILL_GAP_SECONDS) {
-        items.push(withCutSkip(brandingToItem(segmentEnd, 'segment_end envelope'), config));
+        items.push(withCutSkip(brandingToItem(segmentEnd, SEGMENT_END_ENVELOPE_REASON), config));
         usedBrandingIds.add(segmentEnd.id);
       }
     }
@@ -1493,7 +1613,7 @@ export class PlannerProcess {
     // (a) Segment-start envelope.
     if (branding.segment_start) {
       items.push(withCutSkip(
-        brandingToItem(branding.segment_start, 'segment_start envelope'),
+        brandingToItem(branding.segment_start, SEGMENT_START_ENVELOPE_REASON),
         config,
       ));
       usedBrandingIds.add(branding.segment_start.id);
@@ -1597,7 +1717,7 @@ export class PlannerProcess {
       branding.segment_end.duration_seconds <= remaining + segEndReserve + MIN_FILL_GAP_SECONDS
     ) {
       items.push(withCutSkip(
-        brandingToItem(branding.segment_end, 'segment_end envelope'),
+        brandingToItem(branding.segment_end, SEGMENT_END_ENVELOPE_REASON),
         config,
       ));
       usedBrandingIds.add(branding.segment_end.id);

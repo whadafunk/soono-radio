@@ -2667,6 +2667,38 @@ On reinstating the correction as a bar region: the 2026-07-15 round rejected it 
 
 ---
 
+### Decision 104 — Continuation chunks: mid-flight top-ups stop dressing as fresh segments
+
+**Status: decided with the operator & implemented 2026-07-18. Closes robustness item 5c. Latent on prod (no segment envelopes configured); audible on any envelope-configured station.**
+
+**The finding that reframed 5c:** the mid-flight replan is never a tail replacement — all three live callers (exhausted top-up, hard-start fill, remainder refill) APPEND via `nextAppendPosition`. The appended chunk was built by the full segment assembler, so every chunk came out shaped `[opening envelope, music…, closing envelope]` glued onto a segment that already opened on air — a mid-segment "welcome!", a duplicated "goodbye", and a doubled end-reserve shortchanging the fill. (The finalize rewrite of the next plan was always correct — it rebuilds from position 0.)
+
+**The fix, per the operator's notes:**
+1. **Chunks get their own assembly routine** (`assembleContinuationChunk`): the music-fill core (extracted into `fillMusicItems`, shared with full assembly — heavy-first, hot-play cadence, rotation walk, boundary decision, interstitial jingles/IDs) with no envelopes and no end-reserve. A chunk is more of the same segment, not a segment. Music segments only; other types keep the full assembler.
+2. **The closer stays last while it still exists to keep** (operator's rule): when the plan's trailing PENDING item is the segment closer (recognized by its reason string — now a named constant, an internal contract between write-site and detection), the replan pulls it into the swap, budgets the chunk at `remaining − closer`, and re-places the same closer after the chunk. The segment still ends on its closer, just later — the "getting close to the boundary" math holds because the closer's duration is pre-reserved, exactly as in full assembly (the operator re-derived this reserve mechanism independently; it was already the design).
+3. **An aired closer is never repeated** — physics: exhaustion usually means the closer already played; the extended segment then ends on plain content ("saying goodbye twice is worse than once").
+
+Verified by direct test on a scratch DB with stubbed pools: pending-closer case → `[opener, played music, chunk, chunk, closer]`, no new envelopes; aired-closer case → pure content appended, nothing repeated. Replan log now carries `continuation` and `closer_restored` fields.
+
+Clarified in the same discussion: exhausted top-up vs hard-start fill differ in WHEN, not what — the fill is proactive (predicts the shortfall while content still airs), the top-up is reactive (plan already dry, next segment not startable). Same goal, two lines of defense.
+
+---
+
+### Decision 105 — Envelopes are configured as specific clips, not playlists
+
+**Status: decided by the operator & implemented 2026-07-18.**
+
+Segment and show envelopes were configured via playlist dropdowns (offering jingle/promo playlists) with the branding process LRP-picking from the playlist — incoherent from the start, since envelopes were deliberately excluded from the playlist system (the one media category with no playlist type). Operator's call: a bookend is one specific piece of audio, not a rotation.
+
+- `clock_segments.start_clip_media_id` / `end_clip_media_id` and `shows.show_start_media_id` / `show_end_media_id` (migration 0062, four plain ADD COLUMNs — deliberately no FK: the ADD COLUMN + REFERENCES onDelete-drift gotcha; the branding process resolves a dangling id to "no envelope" gracefully).
+- Branding: `lrpSingle`-over-playlist replaced by `singleClip` — direct media fetch, `playlist_id: 0` per BrandingCandidate's long-standing single-media-source contract.
+- UI: both dropdowns now list library media with category 'envelope' only (Clocks → segment Transitions tab; Show detail → Envelopes).
+- The four old playlist columns stay DECLARED in schema.ts but deprecated-inert (removing them would force drizzle-kit's interactive rename resolution / table recreation; documented at the declaration). Existing playlist-based configs (dev only; prod had none) are simply no longer read — reconfigure via the new dropdowns.
+
+Verified: migration applied, branding resolves a configured clip end-to-end on a scratch DB, both pages render with the clip dropdown fed by `fetchLibrary({category:'envelope'})`.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
