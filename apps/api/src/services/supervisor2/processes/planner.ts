@@ -1011,41 +1011,32 @@ export class PlannerProcess {
 
   // ─── Music segment assembly ─────────────────────────────────────────────────
   //
-  // Assembly order and rules for a music segment:
+  // Assembly order for a music segment (assembleMusicPlan → fillMusicItems;
+  // the detailed rules live as comments on the steps themselves):
   //
   //  (0) Show-start envelope (if first segment of show block).
-  //  (a) Segment-start envelope.
-  //  (b/c) Music + interstitial cadence loop:
-  //    - Iterates music candidates in LRP rotation order.
-  //    - For each candidate: check tryFitItem FIRST (track must fit within
-  //      remaining + 30s overshoot tolerance) before injecting any interstitials.
-  //      This is critical — if the check came after, a station ID or jingle would
-  //      fire for every skipped candidate while musicCount stays constant,
-  //      exhausting the branding pool in a burst.
-  //    - When the track fits and musicCount % N == 0, inject the configured
-  //      interstitial (jingle and/or station ID) before placing the track.
-  //    - Loop exits when remaining ≤ −30s (overshoot limit) or all candidates
-  //      have been visited.
-  //  (d) End-of-segment gap handling — bidirectional ±30s tolerance:
-  //    - Runs only if remaining > 30s after the music loop (gap too large to accept).
-  //    - d1: try one branding item (station ID or jingle, longest first) that
-  //      lands remaining inside [−30, +30]. At most one item is placed.
-  //    - d2: if still > 30s, find the unplaced music candidate with the smallest
-  //      overshoot (duration − remaining). Apply the bidirectional rule:
-  //        · overshoot ≤ 30s            → place normally (overshoot < undershoot)
-  //        · overshoot > 30s, overshoot < remaining, next segment is hard
-  //                                     → place with cut_allowed=true; the audio
-  //                                       engine hard-stops at the boundary
-  //        · otherwise                  → leave the gap; for flexible next segments
-  //                                       drift self-corrects in the next plan; for
-  //                                       hard next segments the hard-start gate
-  //                                       handles ≤30s residuals at T−30s
-  //  (e) Segment-end envelope.
+  //  (a) Segment-start envelope. The segment-end and show-end envelope
+  //      durations are reserved from the fill budget up-front, so the
+  //      closers always have room.
+  //  (b/c) Music fill (fillMusicItems, shared with D104 continuation
+  //      chunks, which skip envelopes and the end reserve): heavy rotation
+  //      first, hot-play by cadence, then rotation candidates in pool order
+  //      (source-weight interleaved, D103), with interstitial jingles /
+  //      station-IDs on the musicCount cadence (mutually exclusive per
+  //      boundary, D70). A candidate longer than what's left is skipped,
+  //      never a stop signal (D101).
+  //  (d) Single boundary decision (D72/D97, retimed by D101): the
+  //      minimum-overshoot unused candidate is judged exactly once, placed
+  //      with cut_allowed iff its overshoot beats the gap.
+  //  (e) Segment-end envelope (from the reserve).
   //  (f) Show-end envelope (if last segment of show block).
   //
-  // The pool is overserved by POOL_MULTIPLIER (2.5×) so d2 has candidates
-  // available for the end-of-segment fit even after the main loop places its fill.
-  // No arrangement-trying occurs — the pass is a single greedy sweep.
+  // The pool arrives overserved (count-based POOL_MULTIPLIER, music.ts) and
+  // pre-filtered to tracks ≤ the requested target (D101), so skipping stays
+  // free and the boundary decision always has candidates. No
+  // arrangement-trying occurs — the pass is a single greedy sweep; the
+  // residual lands within ~half a track and the next plan's prediction
+  // sizing absorbs it (D91).
 
   // The music-fill core shared by full segment assembly and continuation
   // chunks (D104): heavy rotation first, hot-play by cadence, rotation walk
