@@ -172,6 +172,14 @@ function minutesToTime(min: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`;
 }
 
+// A stored end time of "00:00" is overloaded to mean "runs to end of day" for
+// the last interval on the ribbon (there's no other interval after it to bound it).
+// Unwrap it to 24*60 wherever it's used for math, not just at render time —
+// otherwise duration/bounds calculations during drag see it as 0 and go negative.
+function resolveIntervalEndMin(startMin: number, endMinRaw: number): number {
+  return endMinRaw === 0 && startMin > 0 ? 24 * 60 : endMinRaw;
+}
+
 function checkToday(day: Date): boolean {
   const now = new Date();
   return (
@@ -2620,7 +2628,7 @@ type RibbonBlockDrag  = {
   origStartMin: number;
   origEndMin: number;
 };
-type PlaceDrag        = { interval: BroadcastInterval; targetDayOfWeek: number | null };
+type PlaceDrag        = { interval: BroadcastInterval; targetDayOfWeek: number | null; offsetMin: number };
 type SlotBlockDrag    = {
   op: 'move' | 'resize-start' | 'resize-end';
   slot: BroadcastIntervalSlot;
@@ -2692,11 +2700,11 @@ function IntervalsTab() {
     document.addEventListener('mouseup', onUp);
   }
 
-  function startPlaceDrag(interval: BroadcastInterval) {
+  function startPlaceDrag(interval: BroadcastInterval, offsetMin: number) {
     placeDragTargetRef.current     = null;
     placeDragColumnRectRef.current = null;
     placeDragMouseYRef.current     = 0;
-    setPlaceDrag({ interval, targetDayOfWeek: null });
+    setPlaceDrag({ interval, targetDayOfWeek: null, offsetMin });
     document.body.style.cursor    = 'grabbing';
     document.body.style.userSelect = 'none';
 
@@ -2719,11 +2727,12 @@ function IntervalsTab() {
         (s) => s.interval_id === interval.id && s.day_of_week === targetDayOfWeek,
       );
       if (alreadyPlaced) return;
-      const dur = Math.max(15, timeToMinutes(interval.default_end_time) - timeToMinutes(interval.default_start_time));
+      const intervalStartMin = timeToMinutes(interval.default_start_time);
+      const dur = Math.max(15, resolveIntervalEndMin(intervalStartMin, timeToMinutes(interval.default_end_time)) - intervalStartMin);
       let startMin: number;
       if (columnRect && mouseY > 0) {
         const raw = (mouseY - columnRect.top) / TOTAL_HEIGHT * 24 * 60;
-        startMin  = Math.max(0, Math.min(24 * 60 - dur, Math.round(raw / 15) * 15));
+        startMin  = Math.max(0, Math.min(24 * 60 - dur, Math.round((raw - offsetMin) / 15) * 15));
       } else {
         startMin = timeToMinutes(interval.default_start_time);
       }
@@ -2778,7 +2787,7 @@ function IntervalsTab() {
               activeDrag={ribbonCreateDrag}
               placeDragIntervalId={placeDrag?.interval.id ?? null}
               onDragStart={(startMin, rect) => startRibbonCreateDrag(startMin, rect)}
-              onBlockDragStart={(iv) => startPlaceDrag(iv)}
+              onBlockDragStart={(iv, offsetMin) => startPlaceDrag(iv, offsetMin)}
               onBlockUpdate={(id, defaultStart, defaultEnd) =>
                 updateIntervalMut.mutate({ id, patch: { default_start_time: defaultStart, default_end_time: defaultEnd } })
               }
@@ -2800,6 +2809,7 @@ function IntervalsTab() {
                     isActiveTarget={placeDrag?.targetDayOfWeek === dayOfWeek}
                     isDraggingPlace={placeDrag !== null}
                     placeDragInterval={placeDrag?.interval ?? null}
+                    placeDragOffsetMin={placeDrag?.offsetMin ?? 0}
                     onSlotClick={(slot, x, y) => setDeletingSlot({ slot, x, y })}
                     onSlotUpdate={(id, startTime, endTime) =>
                       updateSlotMut.mutate({ id, patch: { start_time: startTime, end_time: endTime } })
@@ -2874,7 +2884,7 @@ function IntervalRibbonColumn({
   activeDrag: RibbonCreateDrag | null;
   placeDragIntervalId: number | null;
   onDragStart: (startMin: number, rect: DOMRect) => void;
-  onBlockDragStart: (iv: BroadcastInterval) => void;
+  onBlockDragStart: (iv: BroadcastInterval, offsetMin: number) => void;
   onBlockUpdate: (id: number, defaultStart: string, defaultEnd: string) => void;
   onBlockClick: (iv: BroadcastInterval, x: number, y: number) => void;
 }) {
@@ -2901,7 +2911,7 @@ function IntervalRibbonColumn({
     const startX       = e.clientX;
     const startY       = e.clientY;
     const origStartMin = timeToMinutes(iv.default_start_time);
-    const origEndMin   = timeToMinutes(iv.default_end_time);
+    const origEndMin   = resolveIntervalEndMin(origStartMin, timeToMinutes(iv.default_end_time));
     const dur          = origEndMin - origStartMin;
     const cursorMin    = (startY - rect.top) / TOTAL_HEIGHT * 24 * 60;
     const offsetMin    = Math.max(0, cursorMin - origStartMin);
@@ -2920,7 +2930,7 @@ function IntervalRibbonColumn({
         if (phase === 'placing') {
           document.removeEventListener('mousemove', onMove);
           document.removeEventListener('mouseup', onUp);
-          onBlockDragStart(iv);
+          onBlockDragStart(iv, offsetMin);
           return;
         }
         document.body.style.cursor     = 'grabbing';
@@ -2932,7 +2942,7 @@ function IntervalRibbonColumn({
         const raw      = (ev.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
         const clamped  = Math.max(0, Math.min(24 * 60, raw));
         const rawStart = Math.round((clamped - offsetMin) / 15) * 15;
-        const newStart = Math.max(prevEnd, Math.min(Math.min(nextStart, 24 * 60 - 15) - dur, rawStart));
+        const newStart = Math.max(prevEnd, Math.min(nextStart - dur, rawStart));
         current = { ...current, startMin: newStart, endMin: newStart + dur };
         setBlockDrag({ ...current });
       }
@@ -2952,7 +2962,7 @@ function IntervalRibbonColumn({
         return;
       }
       if (phase === 'moving' && drag.startMin !== drag.origStartMin) {
-        onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(Math.min(drag.endMin, 24 * 60 - 15)));
+        onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin));
       }
     };
 
@@ -2968,7 +2978,7 @@ function IntervalRibbonColumn({
     if (!rect) return;
 
     const origStartMin = timeToMinutes(iv.default_start_time);
-    const origEndMin   = timeToMinutes(iv.default_end_time);
+    const origEndMin   = resolveIntervalEndMin(origStartMin, timeToMinutes(iv.default_end_time));
     const { prevEnd, nextStart } = getNeighborBounds(iv);
 
     let current: RibbonBlockDrag = { op, iv, startMin: origStartMin, endMin: origEndMin, origStartMin, origEndMin };
@@ -2985,7 +2995,7 @@ function IntervalRibbonColumn({
       if (op === 'resize-start') {
         startMin = Math.max(prevEnd, Math.min(current.endMin - 15, snapped));
       } else {
-        endMin = Math.max(current.startMin + 15, Math.min(Math.min(nextStart, 24 * 60 - 15), snapped));
+        endMin = Math.max(current.startMin + 15, Math.min(nextStart, snapped));
       }
 
       current = { ...current, startMin, endMin };
@@ -3000,7 +3010,7 @@ function IntervalRibbonColumn({
       const drag = current;
       setBlockDrag(null);
       if (drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin) return;
-      onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(Math.min(drag.endMin, 24 * 60 - 15)));
+      onBlockUpdate(iv.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin));
     };
 
     document.addEventListener('mousemove', onMove);
@@ -3040,7 +3050,7 @@ function IntervalRibbonColumn({
         const isDragging  = blockDrag?.iv.id === iv.id;
         const startMin    = isDragging ? blockDrag!.startMin : timeToMinutes(iv.default_start_time);
         const rawEndMin   = isDragging ? blockDrag!.endMin   : timeToMinutes(iv.default_end_time);
-        const endMin      = rawEndMin === 0 && startMin > 0 ? 24 * 60 : rawEndMin;
+        const endMin      = resolveIntervalEndMin(startMin, rawEndMin);
         const top        = (startMin / (24 * 60)) * TOTAL_HEIGHT;
         const height     = Math.max(((endMin - startMin) / (24 * 60)) * TOTAL_HEIGHT, 8);
         const isPlacing  = placeDragIntervalId === iv.id;
@@ -3076,7 +3086,7 @@ function IntervalRibbonColumn({
 }
 
 function IntervalDayColumn({
-  slots, intervals, isValidTarget, isActiveTarget, isDraggingPlace, placeDragInterval,
+  slots, intervals, isValidTarget, isActiveTarget, isDraggingPlace, placeDragInterval, placeDragOffsetMin,
   onSlotClick, onSlotUpdate, onMouseEnter, onMouseLeave,
 }: {
   slots: BroadcastIntervalSlot[];
@@ -3085,6 +3095,7 @@ function IntervalDayColumn({
   isActiveTarget: boolean;
   isDraggingPlace: boolean;
   placeDragInterval: BroadcastInterval | null;
+  placeDragOffsetMin: number;
   onSlotClick: (slot: BroadcastIntervalSlot, x: number, y: number) => void;
   onSlotUpdate: (id: number, startTime: string, endTime: string) => void;
   onMouseEnter: (rect: DOMRect) => void;
@@ -3098,9 +3109,10 @@ function IntervalDayColumn({
     if (!isActiveTarget || !placeDragInterval || !ghostRef.current) return;
     const rect = ref.current?.getBoundingClientRect();
     if (!rect) return;
-    const dur     = Math.max(15, timeToMinutes(placeDragInterval.default_end_time) - timeToMinutes(placeDragInterval.default_start_time));
+    const intervalStartMin = timeToMinutes(placeDragInterval.default_start_time);
+    const dur     = Math.max(15, resolveIntervalEndMin(intervalStartMin, timeToMinutes(placeDragInterval.default_end_time)) - intervalStartMin);
     const raw     = (e.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
-    const snapped = Math.round(raw / 15) * 15;
+    const snapped = Math.round((raw - placeDragOffsetMin) / 15) * 15;
 
     // Find the free gap that contains the cursor
     const sorted = [...slots].sort((a, b) => timeToMinutes(a.start_time) - timeToMinutes(b.start_time));
