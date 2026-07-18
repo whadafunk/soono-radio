@@ -3152,7 +3152,7 @@ function IntervalDayColumn({
     if (!rect) return;
 
     const origStartMin = timeToMinutes(slot.start_time);
-    const origEndMin   = timeToMinutes(slot.end_time);
+    const origEndMin   = resolveIntervalEndMin(origStartMin, timeToMinutes(slot.end_time));
     const cursorMin    = (e.clientY - rect.top) / TOTAL_HEIGHT * 24 * 60;
     const offsetMin    = op === 'move' ? Math.max(0, cursorMin - origStartMin) : 0;
     const startX = e.clientX, startY = e.clientY;
@@ -3205,7 +3205,7 @@ function IntervalDayColumn({
         return;
       }
       if (drag.startMin === drag.origStartMin && drag.endMin === drag.origEndMin) return;
-      onSlotUpdate(slot.id, minutesToTime(drag.startMin), minutesToTime(Math.min(drag.endMin, 24 * 60 - 15)));
+      onSlotUpdate(slot.id, minutesToTime(drag.startMin), minutesToTime(drag.endMin));
     };
 
     document.addEventListener('mousemove', onMove);
@@ -3233,7 +3233,8 @@ function IntervalDayColumn({
         const color      = iv?.color ?? '#818cf8';
         const isDragging = blockDrag?.slot.id === slot.id;
         const startMin   = isDragging ? blockDrag!.startMin : timeToMinutes(slot.start_time);
-        const endMin     = isDragging ? blockDrag!.endMin   : timeToMinutes(slot.end_time);
+        const rawEndMin  = isDragging ? blockDrag!.endMin   : timeToMinutes(slot.end_time);
+        const endMin     = resolveIntervalEndMin(startMin, rawEndMin);
         const top        = (startMin / (24 * 60)) * TOTAL_HEIGHT;
         const height     = Math.max(((endMin - startMin) / (24 * 60)) * TOTAL_HEIGHT, 20);
         const timeLabel  = `${minutesToTime(startMin)}–${minutesToTime(endMin >= 24 * 60 ? 0 : endMin)}`;
