@@ -1,0 +1,1 @@
+ALTER TABLE `shows` ADD `station_id_playlist_id` integer;

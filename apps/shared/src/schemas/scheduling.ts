@@ -696,6 +696,9 @@ export const ShowSchema = z.object({
   producer: z.string().nullable(),
   default_clock_id: z.number().int().nullable(),
   jingle_playlist_id: z.number().int().nullable(),
+  // D106: show-level station-ID override; null = the clock owns station IDs
+  // while this show airs (whole-type fallback).
+  station_id_playlist_id: z.number().int().nullable(),
   bed_playlist_id: z.number().int().nullable(),
   // Direct envelope clips (library category 'envelope'), not playlists.
   show_start_media_id: z.number().int().nullable(),
@@ -728,6 +731,7 @@ export const ShowPatchSchema = z.object({
   producer: z.string().nullable().optional(),
   default_clock_id: z.number().int().nullable().optional(),
   jingle_playlist_id: z.number().int().nullable().optional(),
+  station_id_playlist_id: z.number().int().positive().nullable().optional(),
   bed_playlist_id: z.number().int().nullable().optional(),
   show_start_media_id: z.number().int().positive().nullable().optional(),
   show_end_media_id: z.number().int().positive().nullable().optional(),

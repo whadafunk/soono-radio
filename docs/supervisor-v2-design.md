@@ -2699,6 +2699,24 @@ Verified: migration applied, branding resolves a configured clip end-to-end on a
 
 ---
 
+### Decision 106 — Content ownership: shows override clock/segment content, whole-type, with fallback as a feature
+
+**Status: decided with the operator & implemented 2026-07-18.**
+
+**The gap:** there was no ownership rule — each content process hardcoded its own answer (branding: show??clock for jingles, clock-only for station IDs; music: segment.sources only). The show's entire music configuration (`show_playlists` — weights, rotations, tiers, a full editor on the show page) was written by the UI and **read by nothing** — the D65 class again.
+
+**The doctrine (operator's design):**
+- **Whole-type ownership, never blended.** Each content type resolves independently to exactly one owner. Music: the show owns it iff it has ≥1 music playlist configured — then the show's playlists (with THEIR rotation assignments) are the complete source set; else the segment's sources, complete. Jingles: show's playlist if set, else clock's. Station IDs: show's (new `shows.station_id_playlist_id`, mirroring the clock's content config) if set, else clock's. Never a show playlist weighted against a clock playlist.
+- **Fallback is a feature, not an error** — and it deletes the validation problem: a show that configures no music simply doesn't own music. No unsaveable states, no blind spots (an unfillable segment = empty plan = D94 skip = nominal injected as early drift — fallback is drift *prevention* at the content layer).
+- **Rotations travel with their playlists** — hot-play cadence and heavy rotation ride with whichever rotation each playlist references (D103), so show-owned music needs no extra hot-play/heavy UI.
+- Envelopes stay level-scoped; spots/promos/rundowns stay owned outside both.
+
+**Implementation:** one routine — `resolveContentOwnership(db, segment, showId)` (contentOwnership.ts) — consumed by the music and branding processes; the scattered inline rules are decommissioned. The planner passes `show_id` on ALL music pool requests (draft, finalize full + lightweight substitution, continuation chunks, gap fill) — the lightweight case is load-bearing: a fresh pool built under the wrong owner would mark valid show-owned items as vanished and substitute them away. Also fixed en route: the source dedup keyed on rotation_id, which would have dropped every show playlist after the first (sharing one rotation is the normal case) — now keyed on playlist_id. Migration 0063 (one plain ADD COLUMN, no-FK convention). Show page: Station IDs section added; all override sections' helper texts state the whole-type fallback contract; two pre-existing page bugs fixed (render loop from an unstable `[]` default; a D105-introduced hooks-order violation).
+
+**Verified on a scratch DB:** unconfigured show → segment owns / clock owns; configured show → show owns music (both playlists surviving a shared rotation, 70/30 weights intact) + station override recognized; the actual pool draws exclusively from show playlists when the show owns, segment sources otherwise.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

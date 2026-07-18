@@ -96,7 +96,11 @@ export function ShowDetailPage() {
   });
   const { data: clocks = [] } = useQuery({ queryKey: ['clocks'], queryFn: fetchClocks });
   const { data: templateEntries = [] } = useQuery({ queryKey: ['template-entries'], queryFn: fetchTemplateEntries });
-  const { data: showMusicPlaylists = [] } = useQuery<ShowPlaylist[]>({
+  // No `= []` default here: a fresh array identity on every loading render
+  // made the sync-effect below setState in a loop ("Maximum update depth"
+  // console errors on page load, long pre-existing). Guard on undefined
+  // instead — react-query's cached data has stable identity once loaded.
+  const { data: showMusicPlaylists } = useQuery<ShowPlaylist[]>({
     queryKey: ['show-playlists', showId],
     queryFn: () => fetchShowPlaylists(showId),
     enabled: !isNaN(showId),
@@ -111,6 +115,13 @@ export function ShowDetailPage() {
     queryFn: () => fetchShowCampaigns(showId),
     enabled: !isNaN(showId),
   });
+
+  const { data: envelopeLib } = useQuery({
+    queryKey: ['library', 'envelope-clips'],
+    queryFn: () => fetchLibrary({ category: 'envelope', limit: 500, sort: 'title', order: 'asc' }),
+    staleTime: 60_000,
+  });
+  const envelopeClips = envelopeLib?.items ?? [];
 
   const { data: supervisorConfig } = useQuery<SupervisorConfig>({
     queryKey: ['supervisor-config'],
@@ -127,10 +138,10 @@ export function ShowDetailPage() {
 
   // Sync from server when not dirty (initial load or after discard/save)
   useEffect(() => {
-    if (!playlistsDirty) {
-      setLocalPlaylists(showMusicPlaylists.map(toLocal));
+    if (!playlistsDirty && showMusicPlaylists) {
+      setLocalPlaylists((showMusicPlaylists ?? []).map(toLocal));
     }
-  }, [showMusicPlaylists]);
+  }, [showMusicPlaylists, playlistsDirty]);
 
   const updateMutation = useMutation({
     mutationFn: (patch: ShowPatch) => updateShow(showId, patch),
@@ -142,10 +153,11 @@ export function ShowDetailPage() {
 
   const playlistSyncMutation = useMutation({
     mutationFn: async (playlists: LocalShowPlaylist[]) => {
-      const toDelete = showMusicPlaylists.filter((sp) => !playlists.some((p) => p.id === sp.id));
+      const serverPlaylists = showMusicPlaylists ?? [];
+      const toDelete = serverPlaylists.filter((sp) => !playlists.some((p) => p.id === sp.id));
       const toAdd    = playlists.filter((p) => p.id === undefined);
       const toUpdate = playlists.filter((p) => p.id !== undefined).filter((p) => {
-        const sv = showMusicPlaylists.find((sp) => sp.id === p.id);
+        const sv = serverPlaylists.find((sp) => sp.id === p.id);
         return sv && (sv.weight !== p.weight || sv.rotation_id !== p.rotation_id || sv.rotation_tier !== p.rotation_tier || sv.fallback_tier !== p.fallback_tier);
       });
       await Promise.all([
@@ -181,6 +193,7 @@ export function ShowDetailPage() {
         default_clock_id:   show.default_clock_id,
         jingle_playlist_id:     show.jingle_playlist_id,
         bed_playlist_id:        show.bed_playlist_id,
+        station_id_playlist_id: show.station_id_playlist_id,
         show_start_media_id: show.show_start_media_id,
         show_end_media_id:   show.show_end_media_id,
         duration_minutes:       show.duration_minutes,
@@ -219,7 +232,7 @@ export function ShowDetailPage() {
 
   const handleDiscard = () => {
     reset();
-    setLocalPlaylists(showMusicPlaylists.map(toLocal));
+    setLocalPlaylists((showMusicPlaylists ?? []).map(toLocal));
     setPlaylistsDirty(false);
     setClockConflictError(null);
   };
@@ -259,13 +272,8 @@ export function ShowDetailPage() {
 
   const hex = COLOR_HEX[selectedColor ?? show.color];
 
+  const stationIdPlaylists = allPlaylists.filter((p) => p.type === 'jingle' && p.subcategory === 'stationid');
   const jinglePlaylists    = allPlaylists.filter((p) => p.type === 'jingle' && p.subcategory === 'show');
-  const { data: envelopeLib } = useQuery({
-    queryKey: ['library', 'envelope-clips'],
-    queryFn: () => fetchLibrary({ category: 'envelope', limit: 500, sort: 'title', order: 'asc' }),
-    staleTime: 60_000,
-  });
-  const envelopeClips = envelopeLib?.items ?? [];
   const bedPlaylists       = allPlaylists.filter((p) => p.type === 'bed');
   const musicPlaylists     = allPlaylists.filter((p) => p.type === 'music');
 
@@ -514,7 +522,7 @@ export function ShowDetailPage() {
                 </section>
 
                 <section className="border-t border-zinc-800 pt-5">
-                  <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Jingles <HelpTooltip text="Jingle playlist specific to this show. These play at jingle positions defined in the assigned clock, overriding the station's default jingle playlist." /></h2>
+                  <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Jingles <HelpTooltip text="Jingle playlist specific to this show, played at the jingle positions defined by the assigned clock. Leave empty and the clock's jingle playlist is used instead (whole-type: it's either the show's playlist or the clock's, never mixed)." /></h2>
                   <Controller
                     control={control}
                     name="jingle_playlist_id"
@@ -524,10 +532,31 @@ export function ShowDetailPage() {
                           playlists={jinglePlaylists}
                           value={field.value ?? null}
                           onChange={(v) => { field.onChange(v); setValue('jingle_playlist_id', v, { shouldDirty: true }); }}
-                          placeholder="No jingle playlist assigned"
+                          placeholder="Using the clock's jingle playlist"
                         />
                         {!field.value && (
-                          <p className="mt-1.5 text-xs text-amber-400">No jingle playlist — jingles won't play for this show.</p>
+                          <p className="mt-1.5 text-xs text-zinc-400">Empty — the clock's jingle playlist is used while this show airs.</p>
+                        )}
+                      </>
+                    )}
+                  />
+                </section>
+
+                <section className="border-t border-zinc-800 pt-5">
+                  <h2 className="flex items-center gap-1 text-xs font-semibold uppercase tracking-wider text-zinc-400 mb-3">Show Station IDs <HelpTooltip text="Station-ID playlist specific to this show, played at the station-ID positions defined by the assigned clock. Leave empty and the clock's station-ID playlist is used instead (whole-type, never mixed)." /></h2>
+                  <Controller
+                    control={control}
+                    name="station_id_playlist_id"
+                    render={({ field }) => (
+                      <>
+                        <PlaylistSelect
+                          playlists={stationIdPlaylists}
+                          value={field.value ?? null}
+                          onChange={(v) => { field.onChange(v); setValue('station_id_playlist_id', v, { shouldDirty: true }); }}
+                          placeholder="Using the clock's station-ID playlist"
+                        />
+                        {!field.value && (
+                          <p className="mt-1.5 text-xs text-zinc-400">Empty — the clock's station-ID playlist is used while this show airs.</p>
                         )}
                       </>
                     )}
@@ -555,6 +584,12 @@ export function ShowDetailPage() {
                   onChange={(playlists) => { setLocalPlaylists(playlists); setPlaylistsDirty(true); }}
                   allMusicPlaylists={musicPlaylists}
                 />
+                <p className="text-xs text-zinc-400 -mt-2">
+                  Configuring playlists here makes this show own music completely while it airs — the clock
+                  segments' own sources are ignored. Leave the list empty and the segments' sources are used
+                  instead (whole-type: never a mix of both). Hot-play and heavy rotation follow each playlist's
+                  rotation.
+                </p>
               </>
             )}
           </div>

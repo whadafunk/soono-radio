@@ -33,6 +33,7 @@ import {
   shows as showsTable,
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
+import { resolveContentOwnership } from '../contentOwnership.js';
 import type {
   BrandingCandidate,
   BrandingCandidatePool,
@@ -124,20 +125,15 @@ export class BrandingProcess {
       return { jingles: [], station_ids: [] };
     }
 
-    const [clock] = await this.db
-      .select()
-      .from(clocksTable)
-      .where(eq(clocksTable.id, segment.clock_id));
-
     // Use show_id passed explicitly from the planner (D40). When set, query
     // the show directly — no calendar lookup needed.
     const show = showId != null ? await this.fetchShow(showId) : null;
 
-    // Jingle source preference: assigned show's jingle playlist if set, else
-    // the clock-level jingle_playlist_id (used for unassigned clocks per the
-    // schema comment).
-    const jinglePlaylistId =
-      show?.jingle_playlist_id ?? clock?.jingle_playlist_id ?? null;
+    // D106: jingle/station-id ownership resolved by the shared routine
+    // (show's playlist when set, else the clock's — whole-type) instead of
+    // this process improvising the rule inline.
+    const ownership = await resolveContentOwnership(this.db, segment, showId);
+    const jinglePlaylistId = ownership.jingles.playlist_id;
     const jingles = jinglePlaylistId
       ? await this.lrpPlaylist(jinglePlaylistId, 'jingle', NS_JINGLE)
       : [];
@@ -145,7 +141,7 @@ export class BrandingProcess {
       this.logger?.warn({ process: 'branding', event: 'EMPTY_POOL', pool: 'jingles', playlist_id: jinglePlaylistId, segment_id: segmentId }, 'branding: jingle playlist is empty');
     }
 
-    const stationIdPlaylistId = clock?.station_id_playlist_id ?? null;
+    const stationIdPlaylistId = ownership.station_ids.playlist_id;
     const stationIds = stationIdPlaylistId
       ? await this.lrpPlaylist(stationIdPlaylistId, 'station_id', NS_STATION_ID)
       : [];
@@ -276,13 +272,11 @@ export class BrandingProcess {
   }
 
   private async fetchShow(showId: number): Promise<{
-    jingle_playlist_id: number | null;
     show_start_media_id: number | null;
     show_end_media_id: number | null;
   } | null> {
     const [show] = await this.db
       .select({
-        jingle_playlist_id: showsTable.jingle_playlist_id,
         show_start_media_id: showsTable.show_start_media_id,
         show_end_media_id: showsTable.show_end_media_id,
       })

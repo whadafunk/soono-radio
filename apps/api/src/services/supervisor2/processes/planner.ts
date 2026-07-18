@@ -581,9 +581,13 @@ export class PlannerProcess {
       // daily cap, etc.). Does not restructure the plan.
       if (pendingItems.length > 0) {
         const sumPending = pendingSumSeconds;
+        // D106: the fresh pool must resolve under the same content ownership
+        // the plan was assembled with — otherwise show-owned items would
+        // look absent from a segment-owned pool and get substituted away.
+        const lightweightShow = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
         const freshMusic =
           segment.type === 'music' || hasMusicGapNeeds(segment)
-            ? await this.requestPool<MusicCandidatePool>('music', segment, plan, sumPending, nowMs)
+            ? await this.requestPool<MusicCandidatePool>('music', segment, plan, sumPending, nowMs, lightweightShow?.show_id ?? null)
             : null;
         const freshCampaign =
           segment.type === 'stop_set'
@@ -799,6 +803,9 @@ export class PlannerProcess {
       0,
       remainingSeconds - (trailingCloser?.planned_duration_seconds ?? 0),
     );
+    // Show context resolved once for both paths — the chunk's pools must be
+    // built under the same content ownership (D106) as the plan they extend.
+    const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
     let result: AssemblyResult;
     if (segment.type === 'music') {
       result = await this.assembleContinuationChunk(
@@ -807,12 +814,12 @@ export class PlannerProcess {
         chunkBudgetSeconds,
         nowMs,
         config,
+        showResolved?.show_id ?? null,
       );
     } else {
       // For mid-segment replanning, the show context is unchanged (show
       // envelopes played at the start/end are not re-inserted). Pass show_id
       // for branding pool selection but disable envelope insertion.
-      const showResolved = await resolveCurrentSegment(plan.clock_instance_started_at + 1, this.db);
       const showCtx: ShowContext = {
         showId: showResolved?.show_id ?? null,
         showName: showResolved?.show_name ?? null,
@@ -924,6 +931,7 @@ export class PlannerProcess {
     budgetSeconds: number,
     nowMs: number,
     config: SupervisorConfig,
+    showId: number | null,
   ): Promise<AssemblyResult> {
     const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
     const music = await this.requestPool<MusicCandidatePool>(
@@ -932,6 +940,7 @@ export class PlannerProcess {
       instance,
       budgetSeconds,
       nowMs,
+      showId,
     );
     const branding = await this.requestPool<BrandingCandidatePool>(
       'branding',
@@ -939,6 +948,7 @@ export class PlannerProcess {
       instance,
       budgetSeconds,
       nowMs,
+      showId,
     );
     const items: PendingAssemblyItem[] = [];
     const usedMusicIds = new Set<number>();
@@ -1225,6 +1235,7 @@ export class PlannerProcess {
       instance,
       targetDurationSeconds,
       nowMs,
+      showCtx.showId,
     );
     const branding = await this.requestPool<BrandingCandidatePool>(
       'branding',
@@ -1589,7 +1600,7 @@ export class PlannerProcess {
     const coastingOrder = parseDriftEventTypes(segment.coasting_order);
     const needsMusic = coastingOrder.includes('songs') && segment.can_fill;
     const music = needsMusic
-      ? await this.requestPool<MusicCandidatePool>('music', segment, instance, targetDurationSeconds, nowMs)
+      ? await this.requestPool<MusicCandidatePool>('music', segment, instance, targetDurationSeconds, nowMs, showCtx.showId)
       : null;
 
     const items: PendingAssemblyItem[] = [];

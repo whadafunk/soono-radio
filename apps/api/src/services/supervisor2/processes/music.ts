@@ -31,6 +31,7 @@ import {
   rotations as rotationsTable,
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
+import { resolveContentOwnership } from '../contentOwnership.js';
 import type {
   MusicCandidate,
   MusicCandidatePool,
@@ -123,6 +124,7 @@ export class MusicProcess {
       msg.duration_needed_seconds,
       msg.now_ms,
       msg.clock_instance_started_at,
+      msg.show_id ?? null,
     );
     this._bus.emit({
       type: 'CANDIDATES',
@@ -135,11 +137,14 @@ export class MusicProcess {
   // Builds the candidate pool. Pure read — no writes against any table.
   // clockInstanceStartedAt identifies the plan this request is FOR, so the
   // committed-media exclusion (D103) can spare that plan's own pending items.
+  // showId feeds the ownership resolution (D106): a show with music playlists
+  // configured owns this segment's music sources outright.
   async buildPool(
     segmentId: number,
     durationNeededSeconds: number,
     nowMs: number,
     clockInstanceStartedAt?: number,
+    showId: number | null = null,
   ): Promise<MusicCandidatePool> {
     const [segment] = await this.db
       .select()
@@ -149,18 +154,27 @@ export class MusicProcess {
       return { candidates: [], total_duration_seconds: 0 };
     }
 
-    const sources = parseSources(segment.sources);
-    const playlistSources = sources.filter(
-      (s): s is { type: 'playlist'; playlist_id: number; rotation_id?: number | null; weight?: number | null } =>
-        s.type === 'playlist' && typeof s.playlist_id === 'number',
-    );
+    // D106: one ownership resolution instead of reading segment.sources
+    // directly — the show's playlists (with THEIR rotations, carrying their
+    // hot-play/heavy settings) own music when configured; whole-type, never
+    // blended.
+    const ownership = await resolveContentOwnership(this.db, segment, showId);
+    if (ownership.music.owner === 'show') {
+      this.logger?.debug(
+        { process: 'music', event: 'MUSIC_OWNERSHIP', owner: 'show', show_id: showId, segment_id: segmentId, source_count: ownership.music.sources.length },
+        'music: show owns this segment\'s music sources',
+      );
+    }
 
-    // Resolve each source to a (rotation, playlist_id) pair.
+    // Resolve each source to a (rotation, playlist_id) pair. Dedup by
+    // PLAYLIST, not rotation — show playlists routinely share one rotation
+    // (that's the point of rotations), and the old rotation-id dedup would
+    // have dropped every playlist after the first.
     const rotationConfigs: RotationSourceConfig[] = [];
-    const seenRotationIds = new Set<number>();
-    for (const src of playlistSources) {
+    const seenPlaylistIds = new Set<number>();
+    for (const src of ownership.music.sources) {
+      if (seenPlaylistIds.has(src.playlist_id)) continue;
       if (src.rotation_id == null) continue;
-      if (seenRotationIds.has(src.rotation_id)) continue;
       const [row] = await this.db
         .select()
         .from(rotationsTable)
@@ -169,10 +183,10 @@ export class MusicProcess {
       rotationConfigs.push({
         rotation_id: src.rotation_id,
         playlist_id: src.playlist_id,
-        weight: typeof src.weight === 'number' && src.weight > 0 ? src.weight : 1,
+        weight: src.weight,
         rotation: row,
       });
-      seenRotationIds.add(src.rotation_id);
+      seenPlaylistIds.add(src.playlist_id);
     }
 
     // Fallback: when no sources are configured or all sources lack a rotation_id,
@@ -187,8 +201,8 @@ export class MusicProcess {
         .limit(1);
       if (defaultRotation) {
         // Use any playlist_id from configured sources; if none, query all music playlists.
-        const fallbackPlaylistIds = playlistSources.length > 0
-          ? playlistSources.map((s) => s.playlist_id)
+        const fallbackPlaylistIds = ownership.music.sources.length > 0
+          ? ownership.music.sources.map((s) => s.playlist_id)
           : (await this.db
               .select({ id: playlistsTable.id })
               .from(playlistsTable)

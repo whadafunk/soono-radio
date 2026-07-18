@@ -521,6 +521,11 @@ export const shows = sqliteTable(
     // and no-FK convention as clock_segments.start_clip_media_id.
     show_start_media_id: integer('show_start_media_id'),
     show_end_media_id: integer('show_end_media_id'),
+    // D106: show-level station-ID override, mirroring the clock's content
+    // config. Null = the clock owns station IDs while this show airs (the
+    // whole-type fallback doctrine). No FK — same ADD COLUMN onDelete-drift
+    // rationale as the envelope clip columns.
+    station_id_playlist_id: integer('station_id_playlist_id'),
     // DEPRECATED 2026-07-18 (declared only for drizzle snapshot truthfulness,
     // read by nothing) — superseded by show_start_media_id / show_end_media_id.
     show_start_playlist_id: integer('show_start_playlist_id').references(
