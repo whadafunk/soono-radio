@@ -4,10 +4,12 @@
 //   - jingles: LRP-ordered pool from the assigned-show jingle playlist if any,
 //     else the clock-level jingle_playlist_id
 //   - station_ids: LRP-ordered pool from clock.station_id_playlist_id
-//   - segment_start / segment_end: single LRP picks from
-//     clock_segments.start_clip_playlist_id / end_clip_playlist_id
-//   - show_start / show_end: single LRP picks from show.show_start_playlist_id /
-//     show_end_playlist_id — only when show_id is set in REQUEST_CANDIDATES (D40)
+//   - segment_start / segment_end: the specific envelope clips configured on
+//     clock_segments.start_clip_media_id / end_clip_media_id — a bookend is
+//     one piece of audio, selected directly from the library (operator
+//     decision 2026-07-18; envelopes were never playlist-managed content)
+//   - show_start / show_end: same, from show.show_start_media_id /
+//     show_end_media_id — only when show_id is set in REQUEST_CANDIDATES (D40)
 //
 // Decision 15: "No branding rotations in V2; round-robin and random only."
 // LRP is implemented here against play_history because it yields the same
@@ -151,30 +153,22 @@ export class BrandingProcess {
       this.logger?.warn({ process: 'branding', event: 'EMPTY_POOL', pool: 'station_ids', playlist_id: stationIdPlaylistId, segment_id: segmentId }, 'branding: station ID playlist is empty');
     }
 
-    const segmentStart = segment.start_clip_playlist_id
-      ? await this.lrpSingle(
-          segment.start_clip_playlist_id,
-          'segment_start',
-          NS_SEGMENT_START,
-        )
+    const segmentStart = segment.start_clip_media_id
+      ? await this.singleClip(segment.start_clip_media_id, 'segment_start', NS_SEGMENT_START)
       : undefined;
-    const segmentEnd = segment.end_clip_playlist_id
-      ? await this.lrpSingle(
-          segment.end_clip_playlist_id,
-          'segment_end',
-          NS_SEGMENT_END,
-        )
+    const segmentEnd = segment.end_clip_media_id
+      ? await this.singleClip(segment.end_clip_media_id, 'segment_end', NS_SEGMENT_END)
       : undefined;
 
     // Show envelopes only when show_id is set (D40). Planner decides whether
     // to place them based on is_show_start / is_show_end.
     const showStart =
-      show?.show_start_playlist_id != null
-        ? await this.lrpSingle(show.show_start_playlist_id, 'show_start', NS_SHOW_START)
+      show?.show_start_media_id != null
+        ? await this.singleClip(show.show_start_media_id, 'show_start', NS_SHOW_START)
         : undefined;
     const showEnd =
-      show?.show_end_playlist_id != null
-        ? await this.lrpSingle(show.show_end_playlist_id, 'show_end', NS_SHOW_END)
+      show?.show_end_media_id != null
+        ? await this.singleClip(show.show_end_media_id, 'show_end', NS_SHOW_END)
         : undefined;
 
     return {
@@ -252,27 +246,45 @@ export class BrandingProcess {
       .filter((c): c is BrandingCandidate => c !== null);
   }
 
-  // Single envelope pick — uses LRP within the envelope playlist to choose
-  // the "next in sequence" feel without needing an explicit cursor.
-  private async lrpSingle(
-    playlistId: number,
+  // Single envelope clip — configured directly by media id. A dangling id
+  // (clip deleted from the library) resolves to no envelope, gracefully;
+  // there is deliberately no FK on the config columns (CLAUDE.md gotcha).
+  // playlist_id: 0 marks a single-media source per BrandingCandidate's
+  // long-standing contract.
+  private async singleClip(
+    mediaId: number,
     subtype: BrandingContentSubtype,
     namespace: number,
   ): Promise<BrandingCandidate | undefined> {
-    const pool = await this.lrpPlaylist(playlistId, subtype, namespace);
-    return pool[0];
+    const [m] = await this.db
+      .select({
+        id: mediaTable.id,
+        duration_seconds: mediaTable.duration_seconds,
+        cue_in_seconds: mediaTable.cue_in_seconds,
+        cue_out_seconds: mediaTable.cue_out_seconds,
+      })
+      .from(mediaTable)
+      .where(eq(mediaTable.id, mediaId));
+    if (!m) return undefined;
+    return {
+      id: namespace * NS_STRIDE + m.id,
+      media_id: m.id,
+      duration_seconds: effectiveDuration(m),
+      content_subtype: subtype,
+      playlist_id: 0,
+    };
   }
 
   private async fetchShow(showId: number): Promise<{
     jingle_playlist_id: number | null;
-    show_start_playlist_id: number | null;
-    show_end_playlist_id: number | null;
+    show_start_media_id: number | null;
+    show_end_media_id: number | null;
   } | null> {
     const [show] = await this.db
       .select({
         jingle_playlist_id: showsTable.jingle_playlist_id,
-        show_start_playlist_id: showsTable.show_start_playlist_id,
-        show_end_playlist_id: showsTable.show_end_playlist_id,
+        show_start_media_id: showsTable.show_start_media_id,
+        show_end_media_id: showsTable.show_end_media_id,
       })
       .from(showsTable)
       .where(eq(showsTable.id, showId));

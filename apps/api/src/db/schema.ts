@@ -409,6 +409,19 @@ export const clockSegments = sqliteTable(
 
 
     // ── Transition clips ─────────────────────────────────────────────────────
+    // Direct envelope clips from the library (category 'envelope') — a
+    // bookend is one specific piece of audio, not a playlist rotation
+    // (operator decision 2026-07-18; envelopes were always excluded from the
+    // playlist system, so playlist dropdowns here were incoherent).
+    // Deliberately NO FK reference: adding a column with REFERENCES silently
+    // drops ON DELETE on SQLite (see the drizzle gotcha in CLAUDE.md); the
+    // branding process handles a dangling id gracefully (clip simply absent).
+    start_clip_media_id: integer('start_clip_media_id'),
+    end_clip_media_id: integer('end_clip_media_id'),
+    // DEPRECATED 2026-07-18 (still declared so drizzle-kit's snapshot stays
+    // truthful — removing them would force an interactive rename resolution /
+    // table recreation): the playlist-based envelope config. Read by nothing;
+    // superseded by start_clip_media_id / end_clip_media_id above.
     start_clip_playlist_id: integer('start_clip_playlist_id').references(
       () => playlists.id,
       { onDelete: 'set null' },
@@ -504,8 +517,12 @@ export const shows = sqliteTable(
       () => playlists.id,
       { onDelete: 'set null' },
     ),
-    // Envelope playlists — LRP-picked intro/outro clips served by the branding process.
-    // intro_media_id / outro_media_id columns still exist in the DB but are inert (schema drift).
+    // Direct envelope clips (library category 'envelope') — same rationale
+    // and no-FK convention as clock_segments.start_clip_media_id.
+    show_start_media_id: integer('show_start_media_id'),
+    show_end_media_id: integer('show_end_media_id'),
+    // DEPRECATED 2026-07-18 (declared only for drizzle snapshot truthfulness,
+    // read by nothing) — superseded by show_start_media_id / show_end_media_id.
     show_start_playlist_id: integer('show_start_playlist_id').references(
       () => playlists.id,
       { onDelete: 'set null' },

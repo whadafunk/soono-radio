@@ -106,8 +106,10 @@ export const ClockSegmentSchema = z.object({
 
   sources: z.array(SegmentSourceEntrySchema).default([]),
 
-  start_clip_playlist_id: z.number().int().nullable(),
-  end_clip_playlist_id: z.number().int().nullable(),
+  // Direct envelope clips from the library (category 'envelope') — a
+  // bookend is one specific piece of audio, not a playlist rotation.
+  start_clip_media_id: z.number().int().nullable(),
+  end_clip_media_id: z.number().int().nullable(),
   bed_playlist_id: z.number().int().nullable(),
   interstitial_jingles_enabled: z.boolean().default(false),
   jingle_every_n_tracks: z.number().int().positive().nullable(),
@@ -147,8 +149,8 @@ const ClockSegmentCreateShape = z.object({
 
   sources: z.array(SegmentSourceEntrySchema).default([]),
 
-  start_clip_playlist_id: z.number().int().positive().nullable().optional(),
-  end_clip_playlist_id: z.number().int().positive().nullable().optional(),
+  start_clip_media_id: z.number().int().positive().nullable().optional(),
+  end_clip_media_id: z.number().int().positive().nullable().optional(),
   bed_playlist_id: z.number().int().positive().nullable().optional(),
   interstitial_jingles_enabled: z.boolean().default(false),
   jingle_every_n_tracks: z.number().int().positive().nullable().optional(),
@@ -695,8 +697,9 @@ export const ShowSchema = z.object({
   default_clock_id: z.number().int().nullable(),
   jingle_playlist_id: z.number().int().nullable(),
   bed_playlist_id: z.number().int().nullable(),
-  show_start_playlist_id: z.number().int().nullable(),
-  show_end_playlist_id: z.number().int().nullable(),
+  // Direct envelope clips (library category 'envelope'), not playlists.
+  show_start_media_id: z.number().int().nullable(),
+  show_end_media_id: z.number().int().nullable(),
   duration_minutes: z.number().int().min(30).max(720),
   // null = station default (repeat_last_clock)
   extension_policy: z.enum(EXTENSION_POLICIES).nullable(),
@@ -726,8 +729,8 @@ export const ShowPatchSchema = z.object({
   default_clock_id: z.number().int().nullable().optional(),
   jingle_playlist_id: z.number().int().nullable().optional(),
   bed_playlist_id: z.number().int().nullable().optional(),
-  show_start_playlist_id: z.number().int().positive().nullable().optional(),
-  show_end_playlist_id: z.number().int().positive().nullable().optional(),
+  show_start_media_id: z.number().int().positive().nullable().optional(),
+  show_end_media_id: z.number().int().positive().nullable().optional(),
   duration_minutes: z.number().int().min(30).max(720).optional(),
   extension_policy: z.enum(EXTENSION_POLICIES).nullable().optional(),
   color: z.enum(SHOW_COLORS).optional(),

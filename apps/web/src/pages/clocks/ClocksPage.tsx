@@ -54,6 +54,7 @@ import {
   replaceClockSegments,
   deleteClockSegment,
   fetchPlaylists,
+  fetchLibrary,
   fetchRotations,
   fetchSupervisorConfig,
   fetchShowPlaylists,
@@ -242,8 +243,8 @@ function segmentFromType(clockId: number, type: ClockSegmentType, order: number)
     type,
     duration_seconds: DURATION_DEFAULT[type],
     sources: d.sources,
-    start_clip_playlist_id: null,
-    end_clip_playlist_id: null,
+    start_clip_media_id: null,
+    end_clip_media_id: null,
     bed_playlist_id: null,
     interstitial_jingles_enabled: false,
     jingle_every_n_tracks: null,
@@ -1548,11 +1549,11 @@ function SegmentDrawer({
         {/* ── Transitions tab ── */}
         {tab === 'transitions' && (
           <div className="grid grid-cols-2 gap-4">
-            <Field label="Start clip playlist" tooltip="Plays before segment content">
-              <PlaylistDropdown value={draft.start_clip_playlist_id} onChange={(v) => update({ start_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
+            <Field label="Opening envelope clip" tooltip="The specific envelope clip that opens this segment — selected directly from the library (category: envelope)">
+              <EnvelopeClipDropdown value={draft.start_clip_media_id} onChange={(v) => update({ start_clip_media_id: v })} />
             </Field>
-            <Field label="End clip playlist" tooltip="Plays after segment content">
-              <PlaylistDropdown value={draft.end_clip_playlist_id} onChange={(v) => update({ end_clip_playlist_id: v })} playlists={playlists} categories={['jingle', 'promo']} />
+            <Field label="Closing envelope clip" tooltip="The specific envelope clip that closes this segment — its duration is reserved out of the fill budget so content never eats its space">
+              <EnvelopeClipDropdown value={draft.end_clip_media_id} onChange={(v) => update({ end_clip_media_id: v })} />
             </Field>
             {(draft.type === 'music' || isRundownMode) && (
               <div className="col-span-2 border-t border-zinc-800 pt-4 mt-1 space-y-4">
@@ -2543,6 +2544,35 @@ function PlaylistIdInput({ value, onChange }: { value: number | null; onChange: 
       }}
       className="w-full px-3 py-1.5 bg-zinc-900 border border-zinc-700 rounded text-sm text-white focus:outline-none focus:border-brand-500 placeholder:text-zinc-500"
     />
+  );
+}
+
+// Direct envelope clip picker — lists library media with category 'envelope'
+// only (operator decision 2026-07-18: a bookend is one specific clip, not a
+// playlist rotation).
+function EnvelopeClipDropdown({ value, onChange }: {
+  value: number | null;
+  onChange: (v: number | null) => void;
+}) {
+  const { data } = useQuery({
+    queryKey: ['library', 'envelope-clips'],
+    queryFn: () => fetchLibrary({ category: 'envelope', limit: 500, sort: 'title', order: 'asc' }),
+    staleTime: 60_000,
+  });
+  const clips = data?.items ?? [];
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+    >
+      <option value="">None</option>
+      {clips.map((c) => (
+        <option key={c.id} value={c.id}>
+          {(c.title ?? c.original_filename) + (c.duration_seconds ? ` (${Math.round(c.duration_seconds)}s)` : '')}
+        </option>
+      ))}
+    </select>
   );
 }
 

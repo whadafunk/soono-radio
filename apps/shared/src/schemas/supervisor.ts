@@ -202,8 +202,8 @@ export const SupervisorV2SegmentConfigSchema = z.object({
   rotation_ids: z.array(z.number().int()),
   jingle_playlist_id: z.number().int().nullable(),
   station_id_playlist_id: z.number().int().nullable(),
-  start_clip_playlist_id: z.number().int().nullable(),
-  end_clip_playlist_id: z.number().int().nullable(),
+  start_clip_media_id: z.number().int().nullable(),
+  end_clip_media_id: z.number().int().nullable(),
   show_jingle_playlist_id: z.number().int().nullable(),
 });
 export type SupervisorV2SegmentConfig = z.infer<typeof SupervisorV2SegmentConfigSchema>;

@@ -11,12 +11,14 @@ import {
   ShowPatch, ShowPatchSchema, ShowColor, SHOW_COLORS,
   EXTENSION_POLICIES, ExtensionPolicy,
   ShowPlaylist, Rotation, SupervisorConfig,
+  type Media,
 } from '@soono/shared';
 import {
   fetchShow, updateShow, deleteShow, fetchClocks, fetchTemplateEntries,
   fetchShowPlaylists, addShowPlaylist, updateShowPlaylist, removeShowPlaylist,
   fetchPlaylists, fetchRotations, fetchShowCampaigns, fetchSupervisorConfig,
   ApiError,
+  fetchLibrary,
 } from '../../api';
 import type { PlaylistSummary, ShowCampaign } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
@@ -179,8 +181,8 @@ export function ShowDetailPage() {
         default_clock_id:   show.default_clock_id,
         jingle_playlist_id:     show.jingle_playlist_id,
         bed_playlist_id:        show.bed_playlist_id,
-        show_start_playlist_id: show.show_start_playlist_id,
-        show_end_playlist_id:   show.show_end_playlist_id,
+        show_start_media_id: show.show_start_media_id,
+        show_end_media_id:   show.show_end_media_id,
         duration_minutes:       show.duration_minutes,
         extension_policy:   show.extension_policy,
         color:              show.color,
@@ -258,7 +260,12 @@ export function ShowDetailPage() {
   const hex = COLOR_HEX[selectedColor ?? show.color];
 
   const jinglePlaylists    = allPlaylists.filter((p) => p.type === 'jingle' && p.subcategory === 'show');
-  const envelopePlaylists  = allPlaylists.filter((p) => p.type === 'jingle');
+  const { data: envelopeLib } = useQuery({
+    queryKey: ['library', 'envelope-clips'],
+    queryFn: () => fetchLibrary({ category: 'envelope', limit: 500, sort: 'title', order: 'asc' }),
+    staleTime: 60_000,
+  });
+  const envelopeClips = envelopeLib?.items ?? [];
   const bedPlaylists       = allPlaylists.filter((p) => p.type === 'bed');
   const musicPlaylists     = allPlaylists.filter((p) => p.type === 'music');
 
@@ -472,34 +479,34 @@ export function ShowDetailPage() {
                   <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">Envelopes</h2>
                   <div>
                     <label className="flex items-center gap-1 text-xs text-zinc-400 mb-1.5">
-                      Show intro playlist <HelpTooltip text="Jingle playlist for the show's opening clip, played before the first segment. The branding process LRP-picks from this playlist." />
+                      Show opening clip <HelpTooltip text="The specific envelope clip that opens the show, played before the first segment — selected directly from the library (category: envelope)." />
                     </label>
                     <Controller
                       control={control}
-                      name="show_start_playlist_id"
+                      name="show_start_media_id"
                       render={({ field }) => (
-                        <PlaylistSelect
-                          playlists={envelopePlaylists}
+                        <EnvelopeClipSelect
+                          clips={envelopeClips}
                           value={field.value ?? null}
-                          onChange={(v) => { field.onChange(v); setValue('show_start_playlist_id', v, { shouldDirty: true }); }}
-                          placeholder="No intro playlist assigned"
+                          onChange={(v) => { field.onChange(v); setValue('show_start_media_id', v, { shouldDirty: true }); }}
+                          placeholder="No opening clip assigned"
                         />
                       )}
                     />
                   </div>
                   <div>
                     <label className="flex items-center gap-1 text-xs text-zinc-400 mb-1.5">
-                      Show outro playlist <HelpTooltip text="Jingle playlist for the show's closing clip, played after the last segment. The branding process LRP-picks from this playlist." />
+                      Show closing clip <HelpTooltip text="The specific envelope clip that closes the show, played after the last segment — selected directly from the library (category: envelope)." />
                     </label>
                     <Controller
                       control={control}
-                      name="show_end_playlist_id"
+                      name="show_end_media_id"
                       render={({ field }) => (
-                        <PlaylistSelect
-                          playlists={envelopePlaylists}
+                        <EnvelopeClipSelect
+                          clips={envelopeClips}
                           value={field.value ?? null}
-                          onChange={(v) => { field.onChange(v); setValue('show_end_playlist_id', v, { shouldDirty: true }); }}
-                          placeholder="No outro playlist assigned"
+                          onChange={(v) => { field.onChange(v); setValue('show_end_media_id', v, { shouldDirty: true }); }}
+                          placeholder="No closing clip assigned"
                         />
                       )}
                     />
@@ -768,6 +775,33 @@ function MusicPlaylistsSection({
 }
 
 // ─── Playlist Select (single, for jingles/beds) ───────────────────────────────
+
+function EnvelopeClipSelect({
+  clips, value, onChange, placeholder,
+}: {
+  clips: Media[];
+  value: number | null;
+  onChange: (id: number | null) => void;
+  placeholder: string;
+}) {
+  if (clips.length === 0) {
+    return <p className="text-xs text-zinc-400 italic">{placeholder} — no envelope clips in library.</p>;
+  }
+  return (
+    <select
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value === '' ? null : Number(e.target.value))}
+      className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-zinc-100"
+    >
+      <option value="">{placeholder}</option>
+      {clips.map((c) => (
+        <option key={c.id} value={c.id}>
+          {(c.title ?? c.original_filename) + (c.duration_seconds ? ` (${Math.round(c.duration_seconds)}s)` : '')}
+        </option>
+      ))}
+    </select>
+  );
+}
 
 function PlaylistSelect({
   playlists, value, onChange, placeholder,

@@ -376,8 +376,8 @@ export async function supervisorStatusRoutes(fastify: FastifyInstance) {
           rotation_ids: rotationIds,
           jingle_playlist_id: clockRow?.jingle_playlist_id ?? null,
           station_id_playlist_id: clockRow?.station_id_playlist_id ?? null,
-          start_clip_playlist_id: seg.start_clip_playlist_id ?? null,
-          end_clip_playlist_id: seg.end_clip_playlist_id ?? null,
+          start_clip_media_id: seg.start_clip_media_id ?? null,
+          end_clip_media_id: seg.end_clip_media_id ?? null,
           show_jingle_playlist_id: showJinglePlaylistId,
         };
       }

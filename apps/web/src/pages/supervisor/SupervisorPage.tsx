@@ -1294,11 +1294,11 @@ function ConfigInspectorPanel({
               {config.station_id_playlist_id != null && (
                 <p><span className="text-zinc-500">Station IDs:</span> <span className="font-mono text-zinc-300">playlist #{config.station_id_playlist_id}</span></p>
               )}
-              {config.start_clip_playlist_id != null && (
-                <p><span className="text-zinc-500">Start clip:</span> <span className="font-mono text-zinc-300">playlist #{config.start_clip_playlist_id}</span></p>
+              {config.start_clip_media_id != null && (
+                <p><span className="text-zinc-500">Start clip:</span> <span className="font-mono text-zinc-300">clip #{config.start_clip_media_id}</span></p>
               )}
-              {config.end_clip_playlist_id != null && (
-                <p><span className="text-zinc-500">End clip:</span> <span className="font-mono text-zinc-300">playlist #{config.end_clip_playlist_id}</span></p>
+              {config.end_clip_media_id != null && (
+                <p><span className="text-zinc-500">End clip:</span> <span className="font-mono text-zinc-300">clip #{config.end_clip_media_id}</span></p>
               )}
             </div>
           </div>
