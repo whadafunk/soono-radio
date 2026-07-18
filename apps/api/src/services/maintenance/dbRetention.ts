@@ -18,7 +18,7 @@
 // the space to the filesystem.
 import { existsSync, readFileSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import { inArray, lt, sql } from 'drizzle-orm';
+import { and, eq, inArray, lt, notInArray, sql } from 'drizzle-orm';
 import type { DbSweepResult, MaintenanceSettings } from '@soono/shared';
 import { db as defaultDb } from '../../db/index.js';
 import {
@@ -26,6 +26,7 @@ import {
   planItems,
   plans,
   stopSetEstimates,
+  supervisorState,
 } from '../../db/schema.js';
 import type { SLogger } from '../supervisor2/supervisorLogger.js';
 
@@ -96,6 +97,46 @@ export async function sweepDatabase(
   const nowMs = Date.now();
   const cutoffMs = computeCutoffMs(nowMs, settings.plans_retention_days);
 
+  // ── Stale-plan retirement ──────────────────────────────────────────────
+  // A non-terminal status (draft/finalized/Transitioning/active) is a claim
+  // of being current or upcoming. Any such plan whose clock instance is more
+  // than a day in the past is a relic — abandoned by a restart, superseded
+  // by a schedule change, or leaked by a since-fixed lifecycle bug — and
+  // relics with a "current" status pollute every status-based view and
+  // query (the D103 committed-media exclusion bounds against exactly this).
+  // Retire them the way the supervisor itself retires plans (status →
+  // 'completed', row and items preserved as evidence), never touching the
+  // live active/next pointers, and WARN when any were found: staleness
+  // stays a visible signal even as its pollution is removed.
+  const RETIRE_GRACE_MS = 24 * 60 * 60 * 1000;
+  const [pointers] = await database
+    .select({
+      active_plan_id: supervisorState.active_plan_id,
+      next_plan_id: supervisorState.next_plan_id,
+    })
+    .from(supervisorState)
+    .where(eq(supervisorState.id, 1));
+  const protectedIds = [pointers?.active_plan_id, pointers?.next_plan_id].filter(
+    (id): id is number => id != null,
+  );
+  const retiredRes = await database
+    .update(plans)
+    .set({ status: 'completed' })
+    .where(
+      and(
+        inArray(plans.status, ['draft', 'finalized', 'Transitioning', 'active']),
+        lt(plans.clock_instance_started_at, nowMs - RETIRE_GRACE_MS),
+        protectedIds.length > 0 ? notInArray(plans.id, protectedIds) : undefined,
+      ),
+    );
+  const plansRetired = retiredRes.rowsAffected ?? 0;
+  if (plansRetired > 0) {
+    logger?.warn(
+      { event: 'STALE_PLANS_RETIRED', count: plansRetired },
+      'maintenance: retired non-terminal plans whose clock instance is >24h past — investigate if this recurs (the lifecycle should not leak)',
+    );
+  }
+
   const doomedPlanIds = database
     .select({ id: plans.id })
     .from(plans)
@@ -118,6 +159,7 @@ export async function sweepDatabase(
   const result: DbSweepResult = {
     at_ms: nowMs,
     cutoff_ms: cutoffMs,
+    plans_retired: plansRetired,
     plans_deleted: plansRes.rowsAffected ?? 0,
     plan_items_deleted: itemsRes.rowsAffected ?? 0,
     stop_set_estimates_deleted: estimatesRes.rowsAffected ?? 0,

@@ -2649,6 +2649,24 @@ On reinstating the correction as a bar region: the 2026-07-15 round rejected it 
 
 ---
 
+### Decision 103 — Content-selection quality: typed pool placement, weighted source interleave, committed-media exclusion
+
+**Status: decided with the operator & implemented 2026-07-18. Closes robustness item 5a/5b from the 2026-07-16 audit (5c — replan envelope re-insert — discussed, fix direction agreed as "continuation mode", not yet implemented).**
+
+**Background.** After D72/D101 the assembly places candidates in received order, so the pool's order IS the playout order — but the pool was built by naive concatenation: [source 1's full rotation block][its hot-play pick][its heavy picks][source 2's block…]. Since the first rotation block alone covers the whole target, hot-play and heavy-rotation candidates were computed correctly and then never placed; a second source starved entirely; the sources' `weight` field was read by nobody.
+
+**1. Typed placement (operator's design, refined together).** The pool was already typed (`rotation`/`hot_play`/`heavy_rotation` tags) — the assembly now honors the types instead of eating front-to-back: **heavy rotation places first** (pacing-gated on the picker side, so whatever arrives is owed airtime; the front of the fill is the one position that can't fail to fit), **hot-play places by cadence** (after every N ordinary rotation tracks, mirroring the interstitial-jingle pattern), ordinary rotation candidates fill in pool order. Rules, not numeric quotas: the counts emerge from pacing and cadence, which the picker already derives from play_history — no new protocol, no quota-vs-fit conflict policy.
+
+**2. Hot-play mechanics.** The picker serves an LRP-ordered sub-pool (up to 3) whenever hot-play is configured — not only when already due — together with `hot_play_every_n_tracks` and the current play-history streak, so due-ness spans segment boundaries. The assembly maintains the streak during the fill (only ordinary rotation tracks advance it, matching the picker's own definition) and places first-fit from the sub-pool at each cadence point; when nothing fits (boundary proximity) the cadence defers and the streak-from-history re-surfaces the debt next segment. Stateless by construction — no memory of unserved picks (D63's principle; the LRP redraw converges on the same track anyway).
+
+**3. Weighted source interleave.** `weight` on a segment's sources is real for the first time: per-source candidate counts scale by weight, and the rotation candidates are interleaved by a deterministic accumulator method (70/30 → roughly 7-of-10/3-of-10, alternating, never clustered). Latent until a segment has two sources, which the UI has always allowed.
+
+**4b. Stale-plan retirement (operator's counter-proposal to the horizon bound).** Rather than only working around dirty data, the nightly maintenance sweep now restores the invariant at the source: any non-terminal plan whose clock instance is >24h past is retired to 'completed' (the supervisor's own convention — row and items preserved as evidence; the live active/next pointers never touched), with a WARN (`STALE_PLANS_RETIRED`) so recurring leakage stays visible as the bug signal it is. This respects the retention sweep's "never DELETE non-terminal" principle — retiring is not deleting. First run on the dev DB retired 2,289 relics; every run since: zero. The D103 ±6h horizon stays as defense-in-depth for the window between sweeps.
+
+**4. Committed-media exclusion (5b).** Selection was blind to committed-but-unaired content: separation/LRP read play_history only, so the next plan could pick the same song queued to air minutes earlier. The pool now excludes media held by unaired plan items — 'playing' items anywhere plus 'pending' items of OTHER non-terminal plans (the requesting plan's own pending items stay eligible: a full reassembly legitimately re-picks them). Excluded outright, NOT fake-stamped as played (operator's call — no lying to the LRP math). Two robustness bounds found by testing against the dev DB before shipping: (a) the exclusion only considers plans whose clock instance is within ±6h of now — without the bound, stuck non-terminal plans poison it forever (dev's 2,294 stuck plans emptied a small playlist's pool to zero); (b) committed tracks form a LAST-RESORT tier rather than a hard filter, mirroring the separation relaxation — on a playlist too small to fill the pool otherwise, repeating a queued track beats going silent (`COMMITTED_EXCLUSION_RELAXED` logged).
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

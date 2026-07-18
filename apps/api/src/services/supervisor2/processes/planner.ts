@@ -1006,6 +1006,50 @@ export class PlannerProcess {
     let stationIdCursor = 0;
     let musicCount = 0;
 
+    // D103 — the pool is typed, and placement honors the types instead of
+    // eating front-to-back (which buried everything behind the rotation
+    // block): heavy rotation places first, hot-play places by cadence,
+    // ordinary rotation candidates fill in pool order (already interleaved
+    // by source weight on the picker side).
+    const heavyCandidates = music.candidates.filter((c) => c.source === 'heavy_rotation');
+    const hotPlayCandidates = music.candidates.filter((c) => c.source === 'hot_play');
+    const rotationCandidates = music.candidates.filter((c) => c.source === 'rotation');
+    const hotPlayEveryN = music.hot_play_every_n_tracks ?? 0;
+    let hotPlayStreak = music.hot_play_current_streak ?? 0;
+
+    // Places one hot-play candidate when the streak says one is due —
+    // first-fit within the sub-pool, mirroring the interstitial jingle
+    // pattern below. When none fit (boundary proximity), the cadence simply
+    // defers: the streak derives from play_history, so the debt survives
+    // into the next segment's pool on its own.
+    const tryPlaceHotPlay = () => {
+      if (hotPlayEveryN <= 0 || hotPlayStreak < hotPlayEveryN) return;
+      const pick = hotPlayCandidates.find(
+        (h) => !usedMusicIds.has(h.id) && h.duration_seconds <= remaining,
+      );
+      if (!pick) return;
+      items.push(withCutSkip(musicCandidateToItem(pick), config));
+      usedMusicIds.add(pick.id);
+      remaining -= pick.duration_seconds;
+      musicCount += 1;
+      hotPlayStreak = 0;
+    };
+
+    // (b0) Heavy rotation first — pacing-gated on the picker side, so
+    // whatever arrives is owed airtime; the front of the fill is the one
+    // place a candidate can never fail to fit.
+    for (const c of heavyCandidates) {
+      if (usedMusicIds.has(c.id) || c.duration_seconds > remaining) continue;
+      items.push(withCutSkip(musicCandidateToItem(c), config));
+      usedMusicIds.add(c.id);
+      remaining -= c.duration_seconds;
+      musicCount += 1;
+    }
+
+    // A hot-play already owed from previous segments places before the
+    // ordinary fill begins.
+    tryPlaceHotPlay();
+
     // (b/c) Music fill — place fitting candidates in received order; skip any
     // candidate longer than what's left (D101). D72 treated the FIRST
     // non-fitting candidate as proof the segment was nearly full and made the
@@ -1019,7 +1063,7 @@ export class PlannerProcess {
     // know or care whether the next segment is hard — the hard-start
     // fill/trim gate (Decision 66) already polices actual encroachment on a
     // real hard boundary, continuously, in real time.
-    for (const candidate of music.candidates) {
+    for (const candidate of rotationCandidates) {
       if (usedMusicIds.has(candidate.id)) continue;
       if (candidate.duration_seconds > remaining) continue;
 
@@ -1072,6 +1116,11 @@ export class PlannerProcess {
       usedMusicIds.add(candidate.id);
       remaining -= candidate.duration_seconds;
       musicCount += 1;
+      // Hot-play cadence: each ordinary rotation track advances the streak
+      // (hot-play and heavy tracks don't — the streak counts rotation plays
+      // since the last hot-play, matching the picker's play_history math).
+      hotPlayStreak += 1;
+      tryPlaceHotPlay();
     }
 
     // (d) Single boundary decision (D72/D97, retimed by D101). After the fill

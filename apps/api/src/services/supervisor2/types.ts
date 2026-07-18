@@ -37,6 +37,13 @@ export interface MusicCandidate {
 export interface MusicCandidatePool {
   candidates: MusicCandidate[];
   total_duration_seconds: number;
+  // Hot-play cadence (D103). Present when a source has hot-play configured:
+  // the assembly places a hot_play-tagged candidate after every N ordinary
+  // rotation tracks; current_streak carries the play-history streak in, so
+  // due-ness spans segment boundaries (a hot-play that missed its segment is
+  // still owed in the next one).
+  hot_play_every_n_tracks?: number | null;
+  hot_play_current_streak?: number;
 }
 
 // ─── Campaigns / promos (stop-set) ────────────────────────────────────────────

@@ -16,6 +16,11 @@ export type MaintenanceSettings = z.infer<typeof MaintenanceSettingsSchema>;
 export const DbSweepResultSchema = z.object({
   at_ms: z.number(),
   cutoff_ms: z.number(),
+  // Non-terminal plans whose clock instance was >24h past, flipped to
+  // 'completed' (rows preserved) — restores the invariant that a
+  // non-terminal status means "current or upcoming". Default for sweep
+  // results recorded before this field existed.
+  plans_retired: z.number().default(0),
   plans_deleted: z.number(),
   plan_items_deleted: z.number(),
   stop_set_estimates_deleted: z.number(),

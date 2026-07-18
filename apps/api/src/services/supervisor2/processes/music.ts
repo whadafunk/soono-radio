@@ -16,13 +16,15 @@
 // no-op here — there is no in-memory state to advance. DROP_COMMITTED is
 // likewise a no-op because nothing was persisted.
 
-import { and, desc, eq, gte, inArray, sql } from 'drizzle-orm';
+import { and, desc, eq, gte, inArray, lte, sql } from 'drizzle-orm';
 import { db as defaultDb } from '../../../db/index.js';
 import type { SLogger } from '../supervisorLogger.js';
 import {
   clockSegments,
   media as mediaTable,
   musicCampaigns as musicCampaignsTable,
+  planItems as planItemsTable,
+  plans as plansTable,
   playHistory as playHistoryTable,
   playlistMedia as playlistMediaTable,
   playlists as playlistsTable,
@@ -45,12 +47,20 @@ const MIN_POOL_PER_SOURCE = 5;
 // know the segment's needed duration. Real candidate durations are loaded
 // from media.duration_seconds before the pool is finalized.
 const ASSUMED_AVG_TRACK_SECONDS = 200;
+// Hot-play candidates served per pool (D103) — more than one so the assembly
+// has shorter fallbacks when the cadence position lands near the boundary,
+// without a mid-assembly re-request.
+const HOT_PLAY_POOL_SIZE = 3;
 
 interface RotationSourceConfig {
   rotation_id: number;
   // The playlist whose tracks this rotation draws from. For a music segment
   // this comes from the segment's sources[] entries of type 'playlist'.
   playlist_id: number;
+  // Relative draw weight from the segment's sources[] entry (D103) — two
+  // sources at 70/30 contribute candidates in roughly that proportion,
+  // interleaved rather than concatenated.
+  weight: number;
   // Cached row used during candidate assembly.
   rotation: typeof rotationsTable.$inferSelect;
 }
@@ -112,6 +122,7 @@ export class MusicProcess {
       msg.segment_id,
       msg.duration_needed_seconds,
       msg.now_ms,
+      msg.clock_instance_started_at,
     );
     this._bus.emit({
       type: 'CANDIDATES',
@@ -122,10 +133,13 @@ export class MusicProcess {
   }
 
   // Builds the candidate pool. Pure read — no writes against any table.
+  // clockInstanceStartedAt identifies the plan this request is FOR, so the
+  // committed-media exclusion (D103) can spare that plan's own pending items.
   async buildPool(
     segmentId: number,
     durationNeededSeconds: number,
     nowMs: number,
+    clockInstanceStartedAt?: number,
   ): Promise<MusicCandidatePool> {
     const [segment] = await this.db
       .select()
@@ -137,7 +151,7 @@ export class MusicProcess {
 
     const sources = parseSources(segment.sources);
     const playlistSources = sources.filter(
-      (s): s is { type: 'playlist'; playlist_id: number; rotation_id?: number | null } =>
+      (s): s is { type: 'playlist'; playlist_id: number; rotation_id?: number | null; weight?: number | null } =>
         s.type === 'playlist' && typeof s.playlist_id === 'number',
     );
 
@@ -155,6 +169,7 @@ export class MusicProcess {
       rotationConfigs.push({
         rotation_id: src.rotation_id,
         playlist_id: src.playlist_id,
+        weight: typeof src.weight === 'number' && src.weight > 0 ? src.weight : 1,
         rotation: row,
       });
       seenRotationIds.add(src.rotation_id);
@@ -183,6 +198,7 @@ export class MusicProcess {
           rotationConfigs.push({
             rotation_id: defaultRotation.id,
             playlist_id: playlistId,
+            weight: 1,
             rotation: defaultRotation,
           });
         }
@@ -200,35 +216,59 @@ export class MusicProcess {
       return { candidates: [], total_duration_seconds: 0 };
     }
 
-    const targetPerSource = Math.max(
-      MIN_POOL_PER_SOURCE,
-      Math.ceil(
-        (durationNeededSeconds * POOL_MULTIPLIER) /
-          Math.max(1, ASSUMED_AVG_TRACK_SECONDS) /
-          Math.max(1, rotationConfigs.length),
-      ),
-    );
+    // D103: media already committed to unaired plans is excluded outright —
+    // selection was blind to the current plan's not-yet-aired content, so the
+    // next plan could pick the same song queued to air minutes earlier.
+    const committedMediaIds = await this.committedUnairedMediaIds(segmentId, clockInstanceStartedAt, nowMs);
 
-    const aggregated: MusicCandidate[] = [];
+    // Total candidate count target, split across sources by weight (D103) —
+    // a 70/30 pair contributes candidates in that proportion.
+    const totalTarget = Math.max(
+      MIN_POOL_PER_SOURCE,
+      Math.ceil((durationNeededSeconds * POOL_MULTIPLIER) / Math.max(1, ASSUMED_AVG_TRACK_SECONDS)),
+    );
+    const sumWeight = rotationConfigs.reduce((acc, c) => acc + c.weight, 0);
+
     const seenMediaIds = new Set<number>();
+    const perSourceRotation: Array<{ items: MusicCandidate[]; weight: number }> = [];
+    const heavyCandidates: MusicCandidate[] = [];
+    let hotPlay: { candidates: MusicCandidate[]; everyN: number; streak: number } | null = null;
+
     for (const cfg of rotationConfigs) {
+      const perSourceCount = Math.max(
+        MIN_POOL_PER_SOURCE,
+        Math.round((totalTarget * cfg.weight) / Math.max(1, sumWeight)),
+      );
       const rotationCandidates = await this.draftRotationCandidates(
         cfg,
-        targetPerSource,
+        perSourceCount,
         nowMs,
         durationNeededSeconds,
+        committedMediaIds,
       );
+      const fresh: MusicCandidate[] = [];
       for (const c of rotationCandidates) {
         if (seenMediaIds.has(c.media_id)) continue;
         seenMediaIds.add(c.media_id);
-        aggregated.push(c);
+        fresh.push(c);
       }
+      perSourceRotation.push({ items: fresh, weight: cfg.weight });
 
-      // Hot-play: inject one candidate when streak threshold is met.
-      const hotPlayCandidate = await this.draftHotPlayCandidate(cfg, nowMs);
-      if (hotPlayCandidate && !seenMediaIds.has(hotPlayCandidate.media_id)) {
-        seenMediaIds.add(hotPlayCandidate.media_id);
-        aggregated.push(hotPlayCandidate);
+      // Hot-play sub-pool: served whenever configured (not only when already
+      // due) — the pool carries the streak and cadence so the assembly can
+      // place at the right position; a hot-play that misses its segment is
+      // still owed next segment (streak derives from play_history alone).
+      // Simplification: cadence comes from the first hot-play-enabled source.
+      if (hotPlay == null) {
+        const hp = await this.draftHotPlayCandidates(cfg, nowMs, durationNeededSeconds, committedMediaIds);
+        if (hp) {
+          hp.candidates = hp.candidates.filter((c) => {
+            if (seenMediaIds.has(c.media_id)) return false;
+            seenMediaIds.add(c.media_id);
+            return true;
+          });
+          hotPlay = hp;
+        }
       }
 
       // Heavy rotation: surface music-campaign tracks if the rotation
@@ -237,11 +277,25 @@ export class MusicProcess {
         const heavy = await this.draftHeavyRotationCandidates(cfg, nowMs);
         for (const c of heavy) {
           if (seenMediaIds.has(c.media_id)) continue;
+          if (committedMediaIds.has(c.media_id)) continue;
+          if (c.duration_seconds > durationNeededSeconds) continue;
           seenMediaIds.add(c.media_id);
-          aggregated.push(c);
+          heavyCandidates.push(c);
         }
       }
     }
+
+    // Pool order = playout order for the ordinary fill (D72/D101), so the
+    // rotation candidates are interleaved by source weight instead of
+    // concatenated per source (which starved every source after the first).
+    // Heavy and hot-play candidates ride in the same array but are placed by
+    // their `source` tag in the assembly, not by position.
+    const rotationInterleaved = weightedInterleave(perSourceRotation);
+    const aggregated: MusicCandidate[] = [
+      ...heavyCandidates,
+      ...rotationInterleaved,
+      ...(hotPlay?.candidates ?? []),
+    ];
 
     const totalDurationSeconds = aggregated.reduce(
       (sum, c) => sum + c.duration_seconds,
@@ -251,7 +305,59 @@ export class MusicProcess {
       const rotationIds = rotationConfigs.map((c) => c.rotation_id);
       this.logger?.warn({ process: 'music', event: 'EMPTY_POOL', segment_id: segmentId, rotation_ids: rotationIds }, 'music: all rotations returned empty pools for segment');
     }
-    return { candidates: aggregated, total_duration_seconds: totalDurationSeconds };
+    return {
+      candidates: aggregated,
+      total_duration_seconds: totalDurationSeconds,
+      hot_play_every_n_tracks: hotPlay?.everyN ?? null,
+      hot_play_current_streak: hotPlay?.streak ?? 0,
+    };
+  }
+
+  // Media committed to unaired plan content (D103): every 'playing' item
+  // anywhere (pushed — it WILL air), plus 'pending' items of OTHER
+  // non-terminal plans. The requesting plan's own pending items stay
+  // eligible — a full reassembly drops and legitimately re-picks them.
+  //
+  // Bounded to plans whose clock instance is near "now": a stuck non-terminal
+  // plan (the class the D102-era cleanup retired 3,100 of) never airs, so
+  // without the bound its items would poison the exclusion forever —
+  // confirmed on the dev DB, where 2,294 stuck plans emptied a small
+  // playlist's pool to zero.
+  private async committedUnairedMediaIds(
+    segmentId: number,
+    clockInstanceStartedAt: number | undefined,
+    nowMs: number,
+  ): Promise<Set<number>> {
+    const HORIZON_MS = 6 * 60 * 60 * 1000;
+    const rows = await this.db
+      .select({
+        media_id: planItemsTable.media_id,
+        item_status: planItemsTable.status,
+        plan_segment_id: plansTable.segment_id,
+        plan_instance: plansTable.clock_instance_started_at,
+      })
+      .from(planItemsTable)
+      .innerJoin(plansTable, eq(planItemsTable.plan_id, plansTable.id))
+      .where(
+        and(
+          inArray(plansTable.status, ['draft', 'finalized', 'Transitioning', 'active']),
+          inArray(planItemsTable.status, ['pending', 'playing']),
+          eq(planItemsTable.content_type, 'music'),
+          gte(plansTable.clock_instance_started_at, nowMs - HORIZON_MS),
+          lte(plansTable.clock_instance_started_at, nowMs + HORIZON_MS),
+        ),
+      );
+    const committed = new Set<number>();
+    for (const r of rows) {
+      const isRequestingPlan =
+        clockInstanceStartedAt != null &&
+        r.plan_segment_id === segmentId &&
+        r.plan_instance === clockInstanceStartedAt;
+      if (r.item_status === 'playing' || !isRequestingPlan) {
+        committed.add(r.media_id);
+      }
+    }
+    return committed;
   }
 
   // LRP draw from the rotation's playlist: tracks never played go first,
@@ -262,6 +368,7 @@ export class MusicProcess {
     limit: number,
     nowMs: number,
     durationNeededSeconds: number,
+    committedMediaIds: Set<number>,
   ): Promise<MusicCandidate[]> {
     const playlistMedia = await this.db
       .select({
@@ -328,11 +435,22 @@ export class MusicProcess {
       return ta - tb;
     });
 
-    // Partition into tracks that pass the separation window and those that
-    // don't, preserving LRP order within each group.
+    // Partition into three tiers, preserving LRP order within each:
+    //   1. passes separation, not committed to an unaired plan
+    //   2. inside the separation window, not committed
+    //   3. committed to an unaired plan (D103) — last resort only: on a
+    //      small playlist, hard exclusion can empty the pool entirely
+    //      (confirmed on dev: 2-track playlist, both committed → silence);
+    //      repeating a queued track beats going quiet, same philosophy as
+    //      the separation relaxation.
     const passes: number[] = [];
     const fails: number[] = [];
+    const committed: number[] = [];
     for (const id of allSorted) {
+      if (committedMediaIds.has(id)) {
+        committed.push(id);
+        continue;
+      }
       const latest = latestByMediaId.get(id);
       const ok = latest == null || separationSeconds <= 0 || nowSeconds - latest >= separationSeconds;
       if (ok) passes.push(id);
@@ -353,6 +471,16 @@ export class MusicProcess {
         fallback_used: Math.min(fails.length, limit - passes.length),
       }, 'music: separation filter relaxed — not enough candidates within window');
     }
+    if (committed.length > 0 && passes.length + fails.length < limit) {
+      this.logger?.info({
+        process: 'music',
+        event: 'COMMITTED_EXCLUSION_RELAXED',
+        rotation_id: cfg.rotation_id,
+        playlist_id: cfg.playlist_id,
+        uncommitted: passes.length + fails.length,
+        committed_used: Math.min(committed.length, limit - passes.length - fails.length),
+      }, 'music: committed-media exclusion relaxed — playlist too small to fill the pool without repeats');
+    }
 
     // random_separation genuinely randomizes selection within each group,
     // weighted toward the longest-waiting tracks — every other type keeps
@@ -369,7 +497,7 @@ export class MusicProcess {
       }, 'music: rotation type not implemented, falling back to least-recently-played order');
     }
 
-    const ranked = [...orderedPasses, ...orderedFails].slice(0, limit);
+    const ranked = [...orderedPasses, ...orderedFails, ...committed].slice(0, limit);
     const reasonLabel = cfg.rotation.type === 'random_separation' ? 'Random' : 'LRP';
 
     return ranked
@@ -392,14 +520,19 @@ export class MusicProcess {
       .filter((c): c is MusicCandidate => c !== null);
   }
 
-  // Hot-play streak check: how many tracks from this rotation's playlist were
-  // played consecutively after the most recent hot-play pick? If the streak
-  // meets hot_play_every_n_tracks, slip in one LRP candidate from the
-  // hot_play_playlist_id.
-  private async draftHotPlayCandidate(
+  // Hot-play sub-pool (D103): how many tracks from this rotation's playlist
+  // played consecutively since the most recent hot-play pick? Serves up to
+  // HOT_PLAY_POOL_SIZE LRP candidates from the hot_play_playlist_id along
+  // with the streak and cadence, whenever hot-play is configured — the
+  // assembly places one at each cadence position (every N ordinary tracks),
+  // falling back to shorter candidates near the boundary. Due-ness self-heals
+  // across segments because the streak derives from play_history alone.
+  private async draftHotPlayCandidates(
     cfg: RotationSourceConfig,
     nowMs: number,
-  ): Promise<MusicCandidate | null> {
+    durationNeededSeconds: number,
+    committedMediaIds: Set<number>,
+  ): Promise<{ candidates: MusicCandidate[]; everyN: number; streak: number } | null> {
     const hotPlayPlaylistId = cfg.rotation.hot_play_playlist_id;
     const everyN = cfg.rotation.hot_play_every_n_tracks;
     if (hotPlayPlaylistId == null || everyN == null || everyN <= 0) {
@@ -443,7 +576,6 @@ export class MusicProcess {
         streak += 1;
       }
     }
-    if (streak < everyN) return null;
 
     // LRP within the hot-play playlist. No `aborted` filter — same reasoning
     // as the rotation LRP query above (Decision 63).
@@ -462,36 +594,44 @@ export class MusicProcess {
       const ts = typeof row.latest === 'number' ? row.latest : Number(row.latest);
       latestByMediaId.set(row.media_id, ts);
     }
-    const lrpId = ids.sort((a, b) => {
+    const rankedIds = ids.sort((a, b) => {
       const ta = latestByMediaId.get(a) ?? -Infinity;
       const tb = latestByMediaId.get(b) ?? -Infinity;
       return ta - tb;
-    })[0];
-    if (lrpId == null) return null;
-    const [m] = await this.db
-      .select({
-        id: mediaTable.id,
-        duration_seconds: mediaTable.duration_seconds,
-        cue_in_seconds: mediaTable.cue_in_seconds,
-        cue_out_seconds: mediaTable.cue_out_seconds,
-      })
-      .from(mediaTable)
-      .where(eq(mediaTable.id, lrpId));
-    if (!m) return null;
+    });
 
     const nowSeconds = Math.floor(nowMs / 1000);
-    const lastTs = latestByMediaId.get(lrpId);
-    return {
-      id: lrpId,
-      media_id: lrpId,
-      duration_seconds: effectiveDuration(m),
-      source: 'hot_play',
-      rotation_id: cfg.rotation_id,
-      reason_hint:
-        lastTs == null
-          ? `hot_play every ${everyN} tracks; LRP (never played)`
-          : `hot_play every ${everyN} tracks; LRP (last played ${formatAge(nowSeconds - lastTs)} ago)`,
-    };
+    const candidates: MusicCandidate[] = [];
+    for (const id of rankedIds) {
+      if (candidates.length >= HOT_PLAY_POOL_SIZE) break;
+      if (committedMediaIds.has(id)) continue;
+      const [m] = await this.db
+        .select({
+          id: mediaTable.id,
+          duration_seconds: mediaTable.duration_seconds,
+          cue_in_seconds: mediaTable.cue_in_seconds,
+          cue_out_seconds: mediaTable.cue_out_seconds,
+        })
+        .from(mediaTable)
+        .where(eq(mediaTable.id, id));
+      if (!m) continue;
+      const dur = effectiveDuration(m);
+      if (dur > durationNeededSeconds) continue;
+      const lastTs = latestByMediaId.get(id);
+      candidates.push({
+        id,
+        media_id: id,
+        duration_seconds: dur,
+        source: 'hot_play',
+        rotation_id: cfg.rotation_id,
+        reason_hint:
+          lastTs == null
+            ? `hot_play every ${everyN} tracks; LRP (never played)`
+            : `hot_play every ${everyN} tracks; LRP (last played ${formatAge(nowSeconds - lastTs)} ago)`,
+      });
+    }
+    if (candidates.length === 0) return null;
+    return { candidates, everyN, streak };
   }
 
   // For each active music campaign whose pacing today is behind target,
@@ -641,6 +781,32 @@ function parseSources(raw: unknown): ParsedSource[] {
 // Confirmed live 2026-07-04: this rotation type never actually randomized
 // anything — every draw used the plain LRP sort below regardless of the
 // configured type, which is indistinguishable from round-robin in practice.
+// Deterministic weighted interleave across sources (D103): each step hands
+// the next slot to the source with the highest accumulated credit
+// (accumulator += weight each round; winner pays the total). A 70/30 pair
+// yields roughly 7-of-10 / 3-of-10, alternating rather than clustering —
+// this is what makes the segment sources' `weight` field real.
+function weightedInterleave<T>(groups: Array<{ items: T[]; weight: number }>): T[] {
+  const cursors = groups.map(() => 0);
+  const acc = groups.map(() => 0);
+  const totalWeight = groups.reduce((s, g) => s + g.weight, 0) || 1;
+  const out: T[] = [];
+  const remainingTotal = () => groups.reduce((s, g, i) => s + (g.items.length - cursors[i]), 0);
+  while (remainingTotal() > 0) {
+    let best = -1;
+    for (let i = 0; i < groups.length; i++) {
+      if (cursors[i] >= groups[i].items.length) continue;
+      acc[i] += groups[i].weight;
+      if (best === -1 || acc[i] > acc[best]) best = i;
+    }
+    if (best === -1) break;
+    out.push(groups[best].items[cursors[best]]);
+    cursors[best] += 1;
+    acc[best] -= totalWeight;
+  }
+  return out;
+}
+
 function weightedRandomOrder(idsInLrpOrder: number[]): number[] {
   const pool = idsInLrpOrder.slice();
   const result: number[] = [];

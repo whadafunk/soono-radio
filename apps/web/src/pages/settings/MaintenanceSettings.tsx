@@ -132,13 +132,13 @@ function DatabaseSection({ onToast }: { onToast: (t: Toast) => void }) {
     mutationFn: runDbSweep,
     onSuccess: (r) => {
       queryClient.invalidateQueries({ queryKey: ['db-stats'] });
-      const total = r.plans_deleted + r.plan_items_deleted + r.stop_set_estimates_deleted + r.live_events_deleted;
+      const total = r.plans_retired + r.plans_deleted + r.plan_items_deleted + r.stop_set_estimates_deleted + r.live_events_deleted;
       onToast({
         type: 'success',
         message:
           total === 0
             ? 'Sweep ran — nothing is past retention.'
-            : `Sweep deleted ${r.plans_deleted} plans, ${r.plan_items_deleted} items, ${r.stop_set_estimates_deleted} estimates, ${r.live_events_deleted} live events${r.vacuumed ? ' — space reclaimed (VACUUM)' : ''}.`,
+            : `Sweep retired ${r.plans_retired} stale plans; deleted ${r.plans_deleted} plans, ${r.plan_items_deleted} items, ${r.stop_set_estimates_deleted} estimates, ${r.live_events_deleted} live events${r.vacuumed ? ' — space reclaimed (VACUUM)' : ''}.`,
       });
     },
     onError: (err) => onToast({ type: 'error', message: `Error: ${(err as Error).message}` }),
@@ -222,7 +222,7 @@ function DatabaseSection({ onToast }: { onToast: (t: Toast) => void }) {
 
       {stats.last_sweep && (
         <p className="text-xs text-zinc-400">
-          Last sweep {new Date(stats.last_sweep.at_ms).toLocaleString()} — deleted{' '}
+          Last sweep {new Date(stats.last_sweep.at_ms).toLocaleString()} — retired {stats.last_sweep.plans_retired} stale, deleted{' '}
           {stats.last_sweep.plans_deleted} plans, {stats.last_sweep.plan_items_deleted} items,{' '}
           {stats.last_sweep.stop_set_estimates_deleted} estimates, {stats.last_sweep.live_events_deleted} live
           events{stats.last_sweep.vacuumed ? ' · vacuumed' : ''}.
