@@ -48,6 +48,8 @@ import {
   DbSweepResult,
   DbSweepResultSchema,
   MaintenanceSettings,
+  MediaIntegrityState,
+  MediaIntegrityStateSchema,
 } from '@soono/shared';
 
 const API_BASE = '/api';
@@ -354,6 +356,7 @@ export interface LibraryListParams {
   bpm_max?: number;
   mood?: string;
   key?: string;
+  flagged?: boolean;
 }
 
 export interface LibraryFacetsParams {
@@ -388,6 +391,7 @@ export async function fetchLibrary(params: LibraryListParams = {}): Promise<Libr
   if (params.bpm_max !== undefined) search.set('bpm_max', String(params.bpm_max));
   if (params.mood) search.set('mood', params.mood);
   if (params.key) search.set('key', params.key);
+  if (params.flagged) search.set('flagged', 'true');
 
   const res = await fetch(`${API_BASE}/library?${search.toString()}`);
   if (!res.ok) throw new Error(`Failed to fetch library: ${res.statusText}`);
@@ -1462,4 +1466,19 @@ export async function runDbSweep(): Promise<DbSweepResult> {
     throw new Error((body as { error?: string }).error ?? `Sweep failed: ${res.statusText}`);
   }
   return DbSweepResultSchema.parse(await res.json());
+}
+
+export async function fetchMediaIntegrityState(): Promise<MediaIntegrityState> {
+  const res = await fetch(`${API_BASE}/maintenance/media-integrity`);
+  if (!res.ok) throw new Error(`Failed to fetch integrity state: ${res.statusText}`);
+  return MediaIntegrityStateSchema.parse(await res.json());
+}
+
+export async function runMediaIntegritySweep(): Promise<MediaIntegrityState> {
+  const res = await fetch(`${API_BASE}/maintenance/media-integrity/run`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error((body as { error?: string }).error ?? `Sweep failed: ${res.statusText}`);
+  }
+  return MediaIntegrityStateSchema.parse(await res.json());
 }

@@ -64,6 +64,12 @@ export const MediaSchema = z.object({
   analysis_status: z.string().nullable(),
   analysis_error: z.string().nullable(),
 
+  // Decode-based integrity verdict — null = never checked. See
+  // MEDIA_INTEGRITY_STATUSES in maintenance.ts.
+  integrity_status: z.string().nullable(),
+  integrity_detail: z.string().nullable(),
+  integrity_checked_at: z.coerce.date().nullable(),
+
   play_count: z.number().int().nonnegative(),
   last_played_at: z.coerce.date().nullable(),
   favorite: z.boolean(),

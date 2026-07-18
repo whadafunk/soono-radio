@@ -71,6 +71,17 @@ export const media = sqliteTable(
     analysis_status: text('analysis_status'),
     analysis_error: text('analysis_error'),
 
+    // Decode-based integrity verdict (ingest gate + Maintenance sweep).
+    // Null = never checked (rows ingested before the check existed).
+    // 'truncated' means the container header claimed more audio than actually
+    // decodes — duration_seconds is auto-corrected to the decoded value when
+    // this is set, so the planner budgets with the truth.
+    integrity_status: text('integrity_status', {
+      enum: ['ok', 'truncated', 'duration_over', 'decode_errors', 'missing', 'hash_mismatch'],
+    }),
+    integrity_detail: text('integrity_detail'),
+    integrity_checked_at: integer('integrity_checked_at', { mode: 'timestamp' }),
+
     play_count: integer('play_count').notNull().default(0),
     last_played_at: integer('last_played_at', { mode: 'timestamp' }),
     favorite: integer('favorite', { mode: 'boolean' }).notNull().default(false),

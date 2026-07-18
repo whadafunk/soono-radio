@@ -133,6 +133,7 @@ export function LibraryBrowse() {
   const [activeTab, setActiveTab] = useState<LibraryTab>('all');
   const [categorySet, setCategorySet] = useState<Set<MediaCategory>>(new Set());
   const [favoriteOnly, setFavoriteOnly] = useState(false);
+  const [flaggedOnly, setFlaggedOnly] = useState(false);
   const [sort, setSort] = useState<ColumnId>('created_at');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [offset, setOffset] = useState(0);
@@ -156,7 +157,7 @@ export function LibraryBrowse() {
 
   useEffect(() => {
     setOffset(0);
-  }, [debouncedQ, categorySet, activeTab, favoriteOnly, sort, order, facetFilters]);
+  }, [debouncedQ, categorySet, activeTab, favoriteOnly, flaggedOnly, sort, order, facetFilters]);
 
   const categoryParam = useMemo(() => {
     const tabCats = TAB_CATEGORIES[activeTab];
@@ -189,12 +190,13 @@ export function LibraryBrowse() {
   }), [facetFilters]);
 
   const { data, isLoading, error } = useQuery<LibraryListResponse>({
-    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, sort, order, limit, offset, facetParams }],
+    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, flaggedOnly, sort, order, limit, offset, facetParams }],
     queryFn: () =>
       fetchLibrary({
         q: debouncedQ || undefined,
         category: categoryParam,
         favorite: favoriteOnly ? true : undefined,
+        flagged: flaggedOnly ? true : undefined,
         sort,
         order,
         limit,
@@ -349,6 +351,19 @@ export function LibraryBrowse() {
         >
           <Star className={`w-4 h-4 ${favoriteOnly ? 'fill-amber-400' : ''}`} />
           Favorites
+        </button>
+
+        <button
+          onClick={() => setFlaggedOnly((v) => !v)}
+          title="Only files flagged by the integrity check (truncated, corrupt, missing…)"
+          className={`flex items-center gap-1 px-3 py-2 border rounded-lg transition-colors ${
+            flaggedOnly
+              ? 'bg-amber-600/20 border-amber-600 text-amber-300'
+              : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+          }`}
+        >
+          <AlertTriangle className="w-4 h-4" />
+          Flagged
         </button>
       </div>
 
@@ -1274,6 +1289,14 @@ function Cell({
     case 'title':
       return (
         <td className={`${baseClass} text-zinc-100 truncate max-w-xs`}>
+          {media.integrity_status && media.integrity_status !== 'ok' && (
+            <span
+              title={`${media.integrity_status.replace(/_/g, ' ')}${media.integrity_detail ? ` — ${media.integrity_detail}` : ''}`}
+              className="inline-block mr-1.5"
+            >
+              <AlertTriangle className="w-3.5 h-3.5 text-amber-400 inline -mt-0.5" />
+            </span>
+          )}
           {media.title || (
             <span className="text-zinc-500 italic">{media.original_filename}</span>
           )}
@@ -1684,6 +1707,12 @@ function DetailDrawer({
               </p>
               {data.loudness_warning && (
                 <p className="text-amber-400 mt-1">⚠ {data.loudness_warning}</p>
+              )}
+              {data.integrity_status && data.integrity_status !== 'ok' && (
+                <p className="text-amber-400 mt-1">
+                  ⚠ Integrity: {data.integrity_status.replace(/_/g, ' ')}
+                  {data.integrity_detail ? ` — ${data.integrity_detail}` : ''}
+                </p>
               )}
               <p><span className="text-zinc-400">SHA-256:</span> <span className="font-mono break-all">{data.sha256}</span></p>
             </div>

@@ -19,6 +19,11 @@ import {
   sweepDatabase,
   writeMaintenanceSettings,
 } from '../services/maintenance/dbRetention.js';
+import {
+  getMediaIntegrityState,
+  isSweepRunning,
+  startMediaIntegritySweep,
+} from '../services/maintenance/mediaIntegrity.js';
 
 export async function maintenanceRoutes(fastify: FastifyInstance) {
   fastify.get('/maintenance/db-stats', async (_request, reply) => {
@@ -69,5 +74,22 @@ export async function maintenanceRoutes(fastify: FastifyInstance) {
       fastify.log.error(err, 'maintenance manual sweep failed');
       return reply.status(500).send({ error: 'Sweep failed' });
     }
+  });
+
+  fastify.get('/maintenance/media-integrity', async (_request, reply) => {
+    try {
+      return reply.send(await getMediaIntegrityState());
+    } catch (err) {
+      fastify.log.error(err, 'maintenance media-integrity status failed');
+      return reply.status(500).send({ error: 'Failed to read integrity state' });
+    }
+  });
+
+  fastify.post('/maintenance/media-integrity/run', async (_request, reply) => {
+    if (isSweepRunning()) {
+      return reply.status(409).send({ error: 'An integrity sweep is already running' });
+    }
+    startMediaIntegritySweep(fastify.log);
+    return reply.send(await getMediaIntegrityState());
   });
 }

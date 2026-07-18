@@ -4,6 +4,7 @@ import { db } from '../../db/index.js';
 import { ingestJobs, media } from '../../db/schema.js';
 import type { IngestJob, MediaInsert } from '../../db/schema.js';
 import { ffprobe } from './ffprobe.js';
+import { decodeVerify, durationMismatchTolerance } from './decodeVerify.js';
 import { measureLoudness } from './loudnorm.js';
 import { decideTranscode, transcodeToMp3, TRANSCODE_DEFAULTS } from './transcode.js';
 import { sha256File } from './hash.js';
@@ -154,7 +155,38 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       };
     }
 
-    // 7. Move final into the content-addressed media pool.
+    // 7. Decode-verify the FINAL file — the bytes that will actually air.
+    //    ffprobe's duration (step 2) is a header read; a truncated upload
+    //    keeps a header claiming the full length. Decoding end-to-end gives
+    //    the real airable duration, which is what the planner must budget
+    //    with. On mismatch we store the decoded truth and flag the row so
+    //    the operator can replace the file (it still cuts off mid-content).
+    const verify = await decodeVerify(finalPath);
+    const claimedDuration = probe.duration_seconds;
+    const decodedDuration = verify.decoded_duration_seconds;
+    const tolerance = durationMismatchTolerance(claimedDuration);
+    const durationLies =
+      decodedDuration > 0 && Math.abs(decodedDuration - claimedDuration) > tolerance;
+
+    let integrityStatus: 'ok' | 'truncated' | 'duration_over' | 'decode_errors' = 'ok';
+    const detailParts: string[] = [];
+    if (verify.failed || verify.decode_error_count > 0) {
+      integrityStatus = 'decode_errors';
+      detailParts.push(
+        `${verify.decode_error_count} decode error(s)${verify.failed ? ', decoder exited abnormally' : ''}` +
+          (verify.error_sample.length > 0 ? `: ${verify.error_sample.join(' | ')}` : ''),
+      );
+    }
+    if (durationLies) {
+      if (integrityStatus === 'ok') {
+        integrityStatus = decodedDuration < claimedDuration ? 'truncated' : 'duration_over';
+      }
+      detailParts.push(
+        `header claimed ${claimedDuration.toFixed(1)}s, decoded ${decodedDuration.toFixed(1)}s — stored the decoded value`,
+      );
+    }
+
+    // 8. Move final into the content-addressed media pool.
     const destPath = mediaPathForSha(sha);
     await moveFile(finalPath, destPath);
 
@@ -163,14 +195,14 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       await safeUnlink(stagingPath);
     }
 
-    // 8. Insert the media row.
+    // 9. Insert the media row.
     const fileStat = await stat(destPath);
     const insert: MediaInsert = {
       sha256: sha,
       source_sha256: sourceSha,
       category: job.category,
       original_filename: job.uploaded_filename,
-      duration_seconds: probe.duration_seconds,
+      duration_seconds: durationLies ? decodedDuration : claimedDuration,
       bitrate_kbps: finalBitrate,
       samplerate_hz: finalSampleRate,
       channels: finalChannels,
@@ -181,6 +213,9 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
       loudness_peak: loudness.measurement.true_peak_db,
       loudness_gain_db: loudness.gain_db,
       loudness_warning: loudness.warning,
+      integrity_status: integrityStatus,
+      integrity_detail: detailParts.length > 0 ? detailParts.join('; ') : null,
+      integrity_checked_at: new Date(),
       // title/artist/album/etc left null — the metadata-from-tags step lives
       // in Phase 6 (AcoustID). Operator can edit display fields in Phase 4.
       notes: job.uploaded_filename,

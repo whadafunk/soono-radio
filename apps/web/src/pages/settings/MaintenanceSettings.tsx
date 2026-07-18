@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { AlertCircle, Check, Database, Loader, ScrollText } from 'lucide-react';
+import { AlertCircle, AlertTriangle, Check, Database, FileAudio, Loader, ScrollText } from 'lucide-react';
 import {
   fetchDbStats,
   fetchLogSettings,
+  fetchMediaIntegrityState,
   runDbSweep,
+  runMediaIntegritySweep,
   updateLogSettings,
   updateMaintenanceSettings,
 } from '../../api';
@@ -232,6 +234,102 @@ function DatabaseSection({ onToast }: { onToast: (t: Toast) => void }) {
   );
 }
 
+const INTEGRITY_LABELS: Record<string, string> = {
+  truncated: 'truncated',
+  duration_over: 'longer than metadata claimed',
+  decode_errors: 'decode errors',
+  missing: 'file missing',
+  hash_mismatch: 'content changed on disk',
+};
+
+function MediaIntegritySection({ onToast }: { onToast: (t: Toast) => void }) {
+  const queryClient = useQueryClient();
+
+  const { data: state } = useQuery({
+    queryKey: ['media-integrity'],
+    queryFn: fetchMediaIntegrityState,
+    refetchInterval: (query) => (query.state.data?.running ? 1000 : false),
+  });
+
+  const runMutation = useMutation({
+    mutationFn: runMediaIntegritySweep,
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ['media-integrity'] }),
+    onError: (err) => onToast({ type: 'error', message: `Error: ${(err as Error).message}` }),
+  });
+
+  const running = state?.running ?? false;
+  const progress = state?.current;
+  const last = state?.last;
+
+  return (
+    <div className="space-y-4">
+      <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider flex items-center gap-1.5">
+        <FileAudio className="w-3.5 h-3.5" /> Media integrity
+      </p>
+
+      <p className="text-sm text-zinc-400">
+        Decodes every library file end-to-end and compares it with its metadata — catches truncated
+        uploads (header claims more audio than the file holds), corrupt frames, missing files, and
+        files whose bytes changed on disk. Truncated files get their duration corrected automatically
+        so scheduling stops budgeting with the wrong length; the flag stays until the file is replaced.
+        New uploads are checked automatically at ingest.
+      </p>
+
+      {state && state.flagged_in_library > 0 && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-lg bg-amber-900/20 border border-amber-800 text-amber-300 text-sm">
+          <AlertTriangle className="w-4 h-4 shrink-0" />
+          {state.flagged_in_library} file{state.flagged_in_library === 1 ? '' : 's'} currently flagged —
+          filter the Library by “Flagged” to review.
+        </div>
+      )}
+
+      <div className="flex items-center gap-3">
+        <button
+          className="px-4 py-2 rounded-lg bg-brand-600 hover:bg-brand-500 text-white text-sm font-medium disabled:opacity-50"
+          disabled={running || runMutation.isPending}
+          onClick={() => runMutation.mutate()}
+        >
+          {running ? 'Checking…' : 'Check library now'}
+        </button>
+        {running && progress && (
+          <span className="text-sm text-zinc-300 flex items-center gap-2">
+            <Loader className="w-4 h-4 animate-spin" />
+            {progress.checked} / {progress.total} checked
+            {progress.flagged > 0 && <span className="text-amber-300">· {progress.flagged} flagged</span>}
+          </span>
+        )}
+      </div>
+
+      {!running && last && (
+        <div className="space-y-2">
+          <p className="text-xs text-zinc-400">
+            Last check {new Date(last.at_ms).toLocaleString()} — {last.checked} of {last.total} files
+            checked, {last.flagged === 0 ? 'all clean' : `${last.flagged} flagged`}
+            {last.duration_corrected > 0 && `, ${last.duration_corrected} duration${last.duration_corrected === 1 ? '' : 's'} corrected`}
+            {last.error ? ` · stopped early: ${last.error}` : ''}.
+          </p>
+          {last.findings.length > 0 && (
+            <div className="rounded-lg border border-zinc-800 bg-zinc-900/50 p-3 space-y-1.5 max-h-64 overflow-y-auto">
+              {last.findings.map((f) => (
+                <div key={f.media_id} className="text-xs flex items-start gap-2">
+                  <span className="shrink-0 px-1.5 py-0.5 rounded bg-amber-900/40 text-amber-300 font-medium">
+                    {INTEGRITY_LABELS[f.status] ?? f.status}
+                  </span>
+                  <span className="text-zinc-300">{f.display_name}</span>
+                  <span className="text-zinc-400">{f.detail}</span>
+                </div>
+              ))}
+              {last.flagged > last.findings.length && (
+                <p className="text-xs text-zinc-400">…and {last.flagged - last.findings.length} more.</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function MaintenanceSettings() {
   const [toast, setToast] = useState<Toast>(null);
   const showToast = (t: Toast) => {
@@ -254,6 +352,8 @@ export function MaintenanceSettings() {
       <LogsSection onToast={showToast} />
       <div className="border-t border-zinc-800" />
       <DatabaseSection onToast={showToast} />
+      <div className="border-t border-zinc-800" />
+      <MediaIntegritySection onToast={showToast} />
     </div>
   );
 }

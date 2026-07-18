@@ -169,9 +169,17 @@ export async function libraryRoutes(fastify: FastifyInstance) {
 
   const VALID_MOODS = new Set(['happy', 'sad', 'aggressive', 'relaxed', 'party', 'acoustic', 'electronic']);
 
-  function buildBaseFilters(params: { q?: string; category?: string; favorite?: string }): SQL<unknown>[] {
+  function buildBaseFilters(params: {
+    q?: string;
+    category?: string;
+    favorite?: string;
+    flagged?: string;
+  }): SQL<unknown>[] {
     const filters: SQL<unknown>[] = [];
-    const { q, category, favorite } = params;
+    const { q, category, favorite, flagged } = params;
+    if (flagged === 'true') {
+      filters.push(sql`${media.integrity_status} IS NOT NULL AND ${media.integrity_status} != 'ok'`);
+    }
     if (category) {
       const categories = category
         .split(',')
@@ -290,13 +298,15 @@ export async function libraryRoutes(fastify: FastifyInstance) {
       bpm_max?: string;
       mood?: string;
       key?: string;
+      flagged?: string;
     };
   }>('/library', async (request, reply) => {
     const { q, category, favorite, sort, order, limit, offset,
-            genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key } = request.query;
+            genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key,
+            flagged } = request.query;
 
     const filters = [
-      ...buildBaseFilters({ q, category, favorite }),
+      ...buildBaseFilters({ q, category, favorite, flagged }),
       ...buildFacetFilters({ genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key }),
     ];
     const whereClause = filters.length > 0 ? and(...filters) : undefined;
@@ -330,7 +340,7 @@ export async function libraryRoutes(fastify: FastifyInstance) {
   });
 
   fastify.get<{
-    Querystring: { q?: string; category?: string; favorite?: string };
+    Querystring: { q?: string; category?: string; favorite?: string; flagged?: string };
   }>('/library/facets', async (request, reply) => {
     const baseFilters = buildBaseFilters(request.query);
     const wc = baseFilters.length > 0 ? and(...baseFilters) : undefined;
