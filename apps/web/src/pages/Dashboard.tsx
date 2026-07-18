@@ -16,7 +16,7 @@ import {
 import type { SupervisorV2Status } from '@soono/shared';
 import { useEffect, useRef, useState } from 'react';
 import { getIcecastBaseUrl } from '../lib/icecastUrl';
-import { fmtMmSs, fmtDriftSign, fmtRelativeTime, CONTENT_TYPE_META, ContentTypeCell, heartbeatStatus } from '../lib/supervisorV2Ui';
+import { fmtMmSs, fmtDriftSign, fmtRelativeTime, CONTENT_TYPE_META, ContentTypeCell, heartbeatStatus, scheduleSourceMeta } from '../lib/supervisorV2Ui';
 
 export function Dashboard() {
   const [restartToast, setRestartToast] = useState<string | null>(null);
@@ -565,6 +565,17 @@ function NowRunningCard({ status }: { status: SupervisorV2Status }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 text-xs font-medium text-zinc-400 uppercase tracking-wider mb-2 flex-wrap">
             Now running
+            {segment && (() => {
+              const source = scheduleSourceMeta(segment.source_type);
+              return (
+                <span
+                  className={`px-1.5 py-0.5 rounded font-mono text-[10px] border ${source.badgeCls}`}
+                  title="Schedule resolution tier — Calendar is normal; the fallback tiers mean the calendar/template didn't cover this moment"
+                >
+                  {source.label}
+                </span>
+              );
+            })()}
             {liveTakeover && (
               <span className="text-red-300 bg-red-900/30 border border-red-800/50 px-1.5 py-0.5 rounded font-mono text-[10px]">
                 LIVE TAKEOVER

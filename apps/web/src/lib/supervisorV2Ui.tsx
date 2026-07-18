@@ -53,20 +53,20 @@ export function ContentTypeCell({ type }: { type: string }) {
 }
 
 // Maps clockResolver.ts's 4 resolution tiers to the operator-facing 3-tier
-// framing: Calendar (normal) -> Template (fallback 1, merges template_clock's
-// per-hour override and template's day/time window) -> Default Clock
-// (fallback 2, station_settings.default_clock_id).
-export function scheduleSourceMeta(sourceType: string): { label: string; cls: string } {
+// framing: Calendar (normal) -> Fallback 1 · Template (merges template_clock's
+// per-hour override and template's day/time window) -> Fallback 2 · Default
+// Clock (station_settings.default_clock_id).
+export function scheduleSourceMeta(sourceType: string): { label: string; cls: string; badgeCls: string } {
   switch (sourceType) {
     case 'calendar':
-      return { label: 'Calendar', cls: 'text-green-400' };
+      return { label: 'Calendar', cls: 'text-green-400', badgeCls: 'text-green-300 bg-green-900/30 border-green-800/50' };
     case 'template_clock':
     case 'template':
-      return { label: 'Template', cls: 'text-amber-400' };
+      return { label: 'Fallback 1 · Template', cls: 'text-amber-400', badgeCls: 'text-amber-300 bg-amber-900/30 border-amber-800/50' };
     case 'default':
-      return { label: 'Default Clock', cls: 'text-red-400' };
+      return { label: 'Fallback 2 · Default Clock', cls: 'text-red-400', badgeCls: 'text-red-300 bg-red-900/30 border-red-800/50' };
     default:
-      return { label: sourceType, cls: 'text-zinc-400' };
+      return { label: sourceType, cls: 'text-zinc-400', badgeCls: 'text-zinc-300 bg-zinc-800 border-zinc-700' };
   }
 }
 

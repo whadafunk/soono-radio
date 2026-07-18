@@ -1153,7 +1153,10 @@ function CurrentSegmentLabel({ segment, nextPlan, nextHardSegment }: {
         {remainingMins}m {remainingSecs.toString().padStart(2, '0')}s remaining
       </span>
       <span className="text-zinc-600">·</span>
-      <span className={`font-medium ${source.cls}`} title="Schedule resolution tier — Calendar is normal; Template/Default Clock mean a fallback tier is in effect">
+      <span
+        className={`px-1.5 py-0.5 rounded font-mono text-[10px] border ${source.badgeCls}`}
+        title="Schedule resolution tier — Calendar is normal; the fallback tiers mean the calendar/template didn't cover this moment"
+      >
         {source.label}
       </span>
       {nextPlan && (
