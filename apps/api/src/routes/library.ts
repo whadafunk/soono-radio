@@ -18,7 +18,7 @@ import { deleteMedia, reMeasureMedia, reTranscodeMedia } from '../services/libra
 import { identifyMedia, isAutoApply } from '../services/acoustid.js';
 import { analyseMedia } from '../services/audioAnalysis.js';
 import { db } from '../db/index.js';
-import { ingestJobs, media, MEDIA_CATEGORIES } from '../db/schema.js';
+import { ingestJobs, media, playlists, playlistMedia, MEDIA_CATEGORIES } from '../db/schema.js';
 import type { MediaCategory } from '../db/schema.js';
 import { ensureDirs, moveFile, STAGING_DIR, mediaPathForSha, stagingPathFor } from '../services/ingest/paths.js';
 import { ingestQueue } from '../services/ingest/queue.js';
@@ -174,9 +174,11 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     category?: string;
     favorite?: string;
     flagged?: string;
+    uploaded_after?: string;
+    not_in_playlist?: string;
   }): SQL<unknown>[] {
     const filters: SQL<unknown>[] = [];
-    const { q, category, favorite, flagged } = params;
+    const { q, category, favorite, flagged, uploaded_after, not_in_playlist } = params;
     if (flagged === 'true') {
       filters.push(sql`${media.integrity_status} IS NOT NULL AND ${media.integrity_status} != 'ok'`);
     }
@@ -200,6 +202,17 @@ export async function libraryRoutes(fastify: FastifyInstance) {
           like(sql`lower(${media.original_filename})`, needle),
         )!,
       );
+    }
+    if (uploaded_after) {
+      const cutoff = new Date(uploaded_after);
+      if (!isNaN(cutoff.getTime())) filters.push(sql`${media.created_at} >= ${cutoff}`);
+    }
+    if (not_in_playlist === 'true') {
+      filters.push(sql`NOT EXISTS (
+        SELECT 1 FROM playlist_media pm
+        JOIN playlists p ON p.id = pm.playlist_id
+        WHERE pm.media_id = ${media.id} AND p.type = ${media.category}
+      )`);
     }
     return filters;
   }
@@ -299,14 +312,16 @@ export async function libraryRoutes(fastify: FastifyInstance) {
       mood?: string;
       key?: string;
       flagged?: string;
+      uploaded_after?: string;
+      not_in_playlist?: string;
     };
   }>('/library', async (request, reply) => {
     const { q, category, favorite, sort, order, limit, offset,
             genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key,
-            flagged } = request.query;
+            flagged, uploaded_after, not_in_playlist } = request.query;
 
     const filters = [
-      ...buildBaseFilters({ q, category, favorite, flagged }),
+      ...buildBaseFilters({ q, category, favorite, flagged, uploaded_after, not_in_playlist }),
       ...buildFacetFilters({ genre, artist, decade, dur_bucket, energy_bucket, identified, bpm_min, bpm_max, mood, key }),
     ];
     const whereClause = filters.length > 0 ? and(...filters) : undefined;

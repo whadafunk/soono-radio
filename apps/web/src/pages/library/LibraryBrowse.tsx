@@ -27,6 +27,19 @@ const TAB_CATEGORIES = {
 };
 type LibraryTab = keyof typeof TAB_CATEGORIES;
 
+type UploadedWindow = 'any' | '24h' | '7d' | '30d';
+const UPLOADED_WINDOW_LABELS: Record<UploadedWindow, string> = {
+  any: 'Uploaded',
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+};
+const UPLOADED_WINDOW_DAYS: Record<Exclude<UploadedWindow, 'any'>, number> = {
+  '24h': 1,
+  '7d': 7,
+  '30d': 30,
+};
+
 const TAB_LABELS: Record<LibraryTab, string> = {
   all: 'All',
   music: 'Music',
@@ -61,7 +74,10 @@ import {
   fetchPlaylists,
   createPlaylist,
   addTracksToPlaylist,
+  removeTrackFromPlaylist,
+  fetchPlaylistTracks,
   PlaylistSummary,
+  PlaylistTrack,
   AcoustIDCandidate,
 } from '../../api';
 
@@ -134,6 +150,8 @@ export function LibraryBrowse() {
   const [categorySet, setCategorySet] = useState<Set<MediaCategory>>(new Set());
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
+  const [uploadedWindow, setUploadedWindow] = useState<UploadedWindow>('any');
+  const [notInPlaylistOnly, setNotInPlaylistOnly] = useState(false);
   const [sort, setSort] = useState<ColumnId>('created_at');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [offset, setOffset] = useState(0);
@@ -141,6 +159,7 @@ export function LibraryBrowse() {
   const [playingId, setPlayingId] = useState<number | null>(null);
   const [visibleCols, setVisibleCols] = useState<Set<ColumnId>>(() => loadVisibleCols('all'));
   const [selection, setSelection] = useState<Set<number>>(new Set());
+  const [activePlaylistId, setActivePlaylistId] = useState<number | null>(null);
   const [toast, setToast] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [facetsOpen, setFacetsOpen] = useState(false);
   const [facetFilters, setFacetFilters] = useState<FacetFilters>(EMPTY_FACET_FILTERS);
@@ -157,7 +176,7 @@ export function LibraryBrowse() {
 
   useEffect(() => {
     setOffset(0);
-  }, [debouncedQ, categorySet, activeTab, favoriteOnly, flaggedOnly, sort, order, facetFilters]);
+  }, [debouncedQ, categorySet, activeTab, favoriteOnly, flaggedOnly, uploadedWindow, notInPlaylistOnly, sort, order, facetFilters]);
 
   const categoryParam = useMemo(() => {
     const tabCats = TAB_CATEGORIES[activeTab];
@@ -174,7 +193,14 @@ export function LibraryBrowse() {
     setVisibleCols(loadVisibleCols(tab));
     setFacetFilters(EMPTY_FACET_FILTERS);
     setSelection(new Set());
+    setActivePlaylistId(null);
   };
+
+  const uploadedAfterParam = useMemo(() => {
+    if (uploadedWindow === 'any') return undefined;
+    const days = UPLOADED_WINDOW_DAYS[uploadedWindow];
+    return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+  }, [uploadedWindow]);
 
   const facetParams = useMemo(() => ({
     genre:         facetFilters.genres.length        ? facetFilters.genres.join(',')        : undefined,
@@ -190,13 +216,15 @@ export function LibraryBrowse() {
   }), [facetFilters]);
 
   const { data, isLoading, error } = useQuery<LibraryListResponse>({
-    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, flaggedOnly, sort, order, limit, offset, facetParams }],
+    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, flaggedOnly, uploadedAfterParam, notInPlaylistOnly, sort, order, limit, offset, facetParams }],
     queryFn: () =>
       fetchLibrary({
         q: debouncedQ || undefined,
         category: categoryParam,
         favorite: favoriteOnly ? true : undefined,
         flagged: flaggedOnly ? true : undefined,
+        uploadedAfter: uploadedAfterParam,
+        notInPlaylist: notInPlaylistOnly ? true : undefined,
         sort,
         order,
         limit,
@@ -204,6 +232,28 @@ export function LibraryBrowse() {
         ...facetParams,
       }),
   });
+
+  const { data: allPlaylistsForEdit = [] } = useQuery<PlaylistSummary[]>({
+    queryKey: ['playlists'],
+    queryFn: fetchPlaylists,
+  });
+  const editablePlaylists = useMemo(
+    () => allPlaylistsForEdit.filter((p) => p.kind === 'static' && p.type === 'music'),
+    [allPlaylistsForEdit],
+  );
+  const activePlaylist = editablePlaylists.find((p) => p.id === activePlaylistId) ?? null;
+
+  const { data: activePlaylistTracks } = useQuery<PlaylistTrack[]>({
+    queryKey: ['playlist-tracks', activePlaylistId],
+    queryFn: () => fetchPlaylistTracks(activePlaylistId as number),
+    enabled: activePlaylistId != null,
+  });
+  // `DELETE /playlists/:id/tracks/:trackId` keys off the playlist_media join-row
+  // id, not the media id — this map translates selection (media ids) to that.
+  const playlistRowIdByMediaId = useMemo(
+    () => new Map((activePlaylistTracks ?? []).map((t) => [t.media_id, t.id])),
+    [activePlaylistTracks],
+  );
 
   const { data: facets } = useQuery({
     queryKey: ['library-facets', { q: debouncedQ, categoryParam, favoriteOnly }],
@@ -264,6 +314,78 @@ export function LibraryBrowse() {
         for (const m of items) next.add(m.id);
         return next;
       });
+    }
+  };
+
+  // While a playlist is selected in PlaylistSelectDropdown, `selection` mirrors
+  // that playlist's live membership rather than being a free-standing bulk pick.
+  useEffect(() => {
+    if (activePlaylistId == null || activePlaylistTracks === undefined) return;
+    setSelection(new Set(activePlaylistTracks.map((t) => t.media_id)));
+  }, [activePlaylistId, activePlaylistTracks]);
+
+  const handlePlaylistEditSelect = (id: number | null) => {
+    setActivePlaylistId(id);
+    if (id === null) setSelection(new Set());
+  };
+
+  const applyPlaylistAdd = async (playlistId: number, mediaIds: number[]) => {
+    try {
+      await addTracksToPlaylist(playlistId, mediaIds);
+    } catch (err) {
+      showToast('error', (err as Error).message);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['playlist-tracks', playlistId] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+    }
+  };
+
+  const applyPlaylistRemove = async (playlistId: number, mediaIds: number[]) => {
+    const rowIds = mediaIds
+      .map((mediaId) => playlistRowIdByMediaId.get(mediaId))
+      .filter((rowId): rowId is number => rowId != null);
+    try {
+      await Promise.all(rowIds.map((rowId) => removeTrackFromPlaylist(playlistId, rowId)));
+    } catch (err) {
+      showToast('error', (err as Error).message);
+    } finally {
+      queryClient.invalidateQueries({ queryKey: ['playlist-tracks', playlistId] });
+      queryClient.invalidateQueries({ queryKey: ['playlists'] });
+    }
+  };
+
+  // When a playlist is active, checkbox clicks edit its membership immediately
+  // instead of just toggling a bulk-action selection.
+  const handleRowToggle = (id: number) => {
+    if (activePlaylistId == null) {
+      toggleSelect(id);
+      return;
+    }
+    const isMember = selection.has(id);
+    setSelection((cur) => {
+      const next = new Set(cur);
+      if (isMember) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    if (isMember) applyPlaylistRemove(activePlaylistId, [id]);
+    else applyPlaylistAdd(activePlaylistId, [id]);
+  };
+
+  const handleToggleSelectAll = () => {
+    if (activePlaylistId == null) {
+      toggleSelectAll();
+      return;
+    }
+    const allSelected = items.length > 0 && items.every((m) => selection.has(m.id));
+    if (allSelected) {
+      const ids = items.map((m) => m.id);
+      setSelection((cur) => { const next = new Set(cur); ids.forEach((id) => next.delete(id)); return next; });
+      applyPlaylistRemove(activePlaylistId, ids);
+    } else {
+      const ids = items.filter((m) => !selection.has(m.id)).map((m) => m.id);
+      setSelection((cur) => { const next = new Set(cur); ids.forEach((id) => next.add(id)); return next; });
+      if (ids.length > 0) applyPlaylistAdd(activePlaylistId, ids);
     }
   };
 
@@ -341,6 +463,29 @@ export function LibraryBrowse() {
           />
         )}
 
+        {activeTab === 'music' && (
+          <PlaylistSelectDropdown
+            playlists={editablePlaylists}
+            value={activePlaylistId}
+            onChange={handlePlaylistEditSelect}
+          />
+        )}
+
+        <UploadedFilterDropdown value={uploadedWindow} onChange={setUploadedWindow} />
+
+        <button
+          onClick={() => setNotInPlaylistOnly((v) => !v)}
+          title="Only media not part of any playlist of its own category"
+          className={`flex items-center gap-1 px-3 py-2 border rounded-lg transition-colors ${
+            notInPlaylistOnly
+              ? 'bg-brand-600/20 border-brand-600 text-brand-300'
+              : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+          }`}
+        >
+          <ListPlus className="w-4 h-4" />
+          Not in playlist
+        </button>
+
         <button
           onClick={() => setFavoriteOnly((v) => !v)}
           className={`flex items-center gap-1 px-3 py-2 border rounded-lg transition-colors ${
@@ -366,6 +511,15 @@ export function LibraryBrowse() {
           Flagged
         </button>
       </div>
+
+      {activePlaylistId != null && (
+        <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg bg-brand-600/10 border border-brand-700/50 text-brand-200 text-sm">
+          <ListPlus className="w-4 h-4 flex-shrink-0" />
+          <span>
+            Editing <strong className="font-semibold">{activePlaylist?.name ?? 'playlist'}</strong> — check or uncheck tracks to add or remove them.
+          </span>
+        </div>
+      )}
 
       <div className="flex gap-4 items-start">
         {facetsOpen && (
@@ -414,8 +568,8 @@ export function LibraryBrowse() {
               visibleCols={visibleCols}
               setVisibleCols={setVisibleCols}
               selection={selection}
-              toggleSelect={toggleSelect}
-              toggleSelectAll={toggleSelectAll}
+              toggleSelect={handleRowToggle}
+              toggleSelectAll={handleToggleSelectAll}
             />
           )}
 
@@ -1054,6 +1208,136 @@ function CategoryMultiSelect({
               </button>
             );
           })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PlaylistSelectDropdown({
+  playlists,
+  value,
+  onChange,
+}: {
+  playlists: PlaylistSummary[];
+  value: number | null;
+  onChange: (id: number | null) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  const activePlaylist = playlists.find((p) => p.id === value);
+  const label = activePlaylist ? activePlaylist.name : 'Edit playlist';
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-2 px-3 py-2 border rounded-lg transition-colors max-w-[12rem] ${
+          value != null
+            ? 'bg-brand-600/20 border-brand-600 text-brand-200'
+            : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+        }`}
+      >
+        <ListPlus className="w-4 h-4 flex-shrink-0" />
+        <span className="truncate">{label}</span>
+        <ChevronDown className={`w-3 h-3 flex-shrink-0 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-56 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1 max-h-72 overflow-y-auto">
+          <button
+            onClick={() => { onChange(null); setOpen(false); }}
+            className="w-full text-left px-3 py-1.5 text-xs text-zinc-400 hover:text-white hover:bg-zinc-800 rounded"
+          >
+            None
+          </button>
+          <div className="border-t border-zinc-800 my-1" />
+          {playlists.length === 0 && (
+            <p className="px-3 py-2 text-xs text-zinc-500">No static music playlists yet.</p>
+          )}
+          {playlists.map((p) => (
+            <button
+              key={p.id}
+              onClick={() => { onChange(p.id); setOpen(false); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
+            >
+              <span
+                className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                  value === p.id ? 'bg-brand-600 border-brand-600' : 'border-zinc-600'
+                }`}
+              >
+                {value === p.id && <Check className="w-3 h-3 text-white" />}
+              </span>
+              <span className="truncate">{p.name}</span>
+            </button>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+const UPLOADED_WINDOW_OPTIONS: UploadedWindow[] = ['any', '24h', '7d', '30d'];
+
+function UploadedFilterDropdown({
+  value,
+  onChange,
+}: {
+  value: UploadedWindow;
+  onChange: (next: UploadedWindow) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const ref = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    const onDocClick = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', onDocClick);
+    return () => document.removeEventListener('mousedown', onDocClick);
+  }, [open]);
+
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`flex items-center gap-2 px-3 py-2 border rounded-lg transition-colors ${
+          value !== 'any'
+            ? 'bg-brand-600/20 border-brand-600 text-brand-200'
+            : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
+        }`}
+      >
+        <span>{UPLOADED_WINDOW_LABELS[value]}</span>
+        <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
+      </button>
+      {open && (
+        <div className="absolute z-30 mt-1 w-44 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
+          {UPLOADED_WINDOW_OPTIONS.map((opt) => (
+            <button
+              key={opt}
+              onClick={() => { onChange(opt); setOpen(false); }}
+              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
+            >
+              <span
+                className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
+                  value === opt ? 'bg-brand-600 border-brand-600' : 'border-zinc-600'
+                }`}
+              >
+                {value === opt && <Check className="w-3 h-3 text-white" />}
+              </span>
+              <span>{opt === 'any' ? 'Any time' : UPLOADED_WINDOW_LABELS[opt]}</span>
+            </button>
+          ))}
         </div>
       )}
     </div>

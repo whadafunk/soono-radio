@@ -365,6 +365,8 @@ export interface LibraryListParams {
   mood?: string;
   key?: string;
   flagged?: boolean;
+  uploadedAfter?: string;
+  notInPlaylist?: boolean;
 }
 
 export interface LibraryFacetsParams {
@@ -400,6 +402,8 @@ export async function fetchLibrary(params: LibraryListParams = {}): Promise<Libr
   if (params.mood) search.set('mood', params.mood);
   if (params.key) search.set('key', params.key);
   if (params.flagged) search.set('flagged', 'true');
+  if (params.uploadedAfter) search.set('uploaded_after', params.uploadedAfter);
+  if (params.notInPlaylist) search.set('not_in_playlist', 'true');
 
   const res = await fetch(`${API_BASE}/library?${search.toString()}`);
   if (!res.ok) throw new Error(`Failed to fetch library: ${res.statusText}`);
@@ -638,6 +642,36 @@ export async function addTracksToPlaylist(playlistId: number, mediaIds: number[]
     const message = data?.error ?? data?.errors?.[0]?.message ?? `HTTP ${res.status}`;
     throw new Error(message);
   }
+}
+
+export async function removeTrackFromPlaylist(playlistId: number, trackId: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/playlists/${playlistId}/tracks/${trackId}`, {
+    method: 'DELETE',
+  });
+  if (!res.ok) {
+    const data = await res.json().catch(() => ({}));
+    const message = data?.error ?? data?.errors?.[0]?.message ?? `HTTP ${res.status}`;
+    throw new Error(message);
+  }
+}
+
+export interface PlaylistTrack {
+  id: number;
+  playlist_id: number;
+  media_id: number;
+  sort_order: number;
+  weight: number;
+  title: string | null;
+  artist: string | null;
+  duration_seconds: number;
+  category: string;
+  original_filename: string;
+}
+
+export async function fetchPlaylistTracks(playlistId: number): Promise<PlaylistTrack[]> {
+  const res = await fetch(`${API_BASE}/playlists/${playlistId}/tracks`);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  return res.json();
 }
 
 export async function bulkAnalyseAll(ids: number[]): Promise<{ job_id: string }> {

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   DndContext,
@@ -1014,6 +1014,7 @@ function StaticEditor({
   };
 
   const totalSeconds = tracks.reduce((sum, t) => sum + t.duration_seconds, 0);
+  const memberIds = useMemo(() => new Set(tracks.map((t) => t.media_id)), [tracks]);
 
   return (
     <div className="flex-1 min-w-0 flex flex-col gap-4">
@@ -1027,6 +1028,7 @@ function StaticEditor({
             category={playlistMediaCategory(playlist.type, playlist.subcategory)}
             onAddMultiple={(ids) => addTracksMutation.mutate(ids)}
             adding={addTracksMutation.isPending}
+            memberIds={memberIds}
           />
         </div>
 
@@ -1140,10 +1142,12 @@ function LibrarySearch({
   category,
   onAddMultiple,
   adding,
+  memberIds,
 }: {
   category: string;
   onAddMultiple: (mediaIds: number[]) => void;
   adding: boolean;
+  memberIds: Set<number>;
 }) {
   const [q, setQ] = useState('');
   const [debouncedQ, setDebouncedQ] = useState('');
@@ -1216,14 +1220,15 @@ function LibrarySearch({
               <p className="px-4 py-3 text-sm text-zinc-500">No results</p>
             ) : (
               results.map((item) => {
-                const isSelected = selected.has(item.id);
+                const alreadyMember = memberIds.has(item.id);
+                const isSelected = alreadyMember || selected.has(item.id);
                 return (
                   <button
                     key={item.id}
-                    onClick={() => toggleSelect(item.id)}
-                    className={`w-full flex items-center gap-3 px-4 py-2.5 hover:bg-zinc-800 transition-colors text-left ${
-                      isSelected ? 'bg-brand-600/10' : ''
-                    }`}
+                    onClick={() => { if (!alreadyMember) toggleSelect(item.id); }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 transition-colors text-left ${
+                      alreadyMember ? 'cursor-default' : 'hover:bg-zinc-800'
+                    } ${isSelected ? 'bg-brand-600/10' : ''}`}
                   >
                     <span
                       className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
@@ -1238,9 +1243,13 @@ function LibrarySearch({
                       </p>
                       {item.artist && <p className="text-xs text-zinc-400 truncate">{item.artist}</p>}
                     </div>
-                    <span className="flex-shrink-0 text-xs text-zinc-500 font-mono">
-                      {fmtDuration(item.duration_seconds)}
-                    </span>
+                    {alreadyMember ? (
+                      <span className="flex-shrink-0 text-xs text-zinc-500">Already in playlist</span>
+                    ) : (
+                      <span className="flex-shrink-0 text-xs text-zinc-500 font-mono">
+                        {fmtDuration(item.duration_seconds)}
+                      </span>
+                    )}
                   </button>
                 );
               })
