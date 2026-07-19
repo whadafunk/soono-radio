@@ -9,11 +9,13 @@ import {
   kickIcecastSource,
   fetchSupervisorV2Status,
   fetchLiquidsoapStatus,
+  fetchLiquidsoapConfig,
   fetchSimulate,
   postSupervisorAlignToWallClock,
   postSupervisorAlignToClock,
 } from '../api';
-import type { SupervisorV2Status } from '@soono/shared';
+import type { SupervisorV2Status, LiquidsoapConfig } from '@soono/shared';
+import { LUFS_PRESETS, matchMasterBusPreset } from '@soono/shared';
 import { useEffect, useRef, useState } from 'react';
 import { getIcecastBaseUrl } from '../lib/icecastUrl';
 import { fmtMmSs, fmtDriftSign, fmtRelativeTime, CONTENT_TYPE_META, ContentTypeCell, heartbeatStatus, scheduleSourceMeta } from '../lib/supervisorV2Ui';
@@ -31,6 +33,12 @@ export function Dashboard() {
   const { data: config, isLoading: configLoading } = useQuery({
     queryKey: ['icecast-config'],
     queryFn: fetchIcecastConfig,
+  });
+
+  const { data: lsConfig } = useQuery({
+    queryKey: ['liquidsoap-config'],
+    queryFn: fetchLiquidsoapConfig,
+    staleTime: 60_000,
   });
 
   const { data: v2Status } = useQuery({
@@ -197,6 +205,9 @@ export function Dashboard() {
 
       {/* Now Running — schedule resolver + supervisor controls */}
       {v2Status && <NowRunningCard status={v2Status} />}
+
+      {/* Audio Processing — mix engine loudness/limiter status */}
+      {lsConfig && <AudioProcessingCard config={lsConfig} />}
 
       {/* Live Stream Stats */}
       <section>
@@ -663,6 +674,44 @@ function NowRunningCard({ status }: { status: SupervisorV2Status }) {
       {pendingError && (
         <p className="text-xs text-rose-400 mt-3">{pendingError}</p>
       )}
+    </section>
+  );
+}
+
+function AudioProcessingCard({ config }: { config: LiquidsoapConfig }) {
+  const { loudness_normalization, master_bus } = config;
+  const lufsPreset = LUFS_PRESETS.find((p) => p.value === loudness_normalization.target_lufs);
+  const limiterPreset = matchMasterBusPreset(master_bus);
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+      <h2 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3">Audio Processing</h2>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+        <div>
+          <p className="text-sm text-zinc-300">Loudness Normalization</p>
+          {loudness_normalization.enabled ? (
+            <p className="text-sm mt-1">
+              <span className="text-green-400 font-mono">{loudness_normalization.target_lufs} LUFS</span>
+              {lufsPreset && <span className="text-zinc-500 text-xs ml-2">{lufsPreset.label.replace(/ — .*/, '')}</span>}
+            </p>
+          ) : (
+            <p className="text-sm text-zinc-500 mt-1">Off</p>
+          )}
+        </div>
+        <div>
+          <p className="text-sm text-zinc-300">Master Bus Limiter</p>
+          {master_bus.soft_limiter ? (
+            <p className="text-sm mt-1">
+              <span className="text-amber-400 font-mono">{limiterPreset?.label ?? 'Custom'}</span>
+              <span className="text-zinc-500 text-xs ml-2 font-mono">
+                {master_bus.threshold_db.toFixed(1)} dBFS · {master_bus.ratio.toFixed(0)}:1 · {master_bus.attack_ms.toFixed(0)}/{master_bus.release_ms.toFixed(0)} ms
+              </span>
+            </p>
+          ) : (
+            <p className="text-sm text-zinc-500 mt-1">Off</p>
+          )}
+        </div>
+      </div>
     </section>
   );
 }

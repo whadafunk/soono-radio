@@ -154,7 +154,7 @@ export function LiquidSoapSettings() {
         <HarborSection control={control} register={register} errors={errors} />
         <CrossfadeSection register={register} errors={errors} />
         <LoudnessNormalizationSection register={register} control={control} setValue={setValue} />
-        <MasterBusSection register={register} control={control} />
+        <MasterBusSection register={register} control={control} setValue={setValue} />
         <DuckingSection register={register} control={control} />
         <SilenceDetectionSection register={register} control={control} />
         <LoggingSection register={register} />

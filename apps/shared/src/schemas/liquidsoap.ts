@@ -23,6 +23,41 @@ export const LUFS_PRESETS: { label: string; value: number }[] = [
   { label: 'Spotify / YouTube — −14 LUFS', value: -14 },
 ];
 
+// Three increasing degrees of the master-bus soft limiter, all deliberately
+// staying in "soft"/musical compressor territory (ratio caps at 8:1 — a true
+// brick-wall limiter is typically 10:1+) rather than becoming a hard limiter.
+export interface MasterBusPreset {
+  key: 'light' | 'mid' | 'hard';
+  label: string;
+  threshold_db: number;
+  ratio: number;
+  attack_ms: number;
+  release_ms: number;
+}
+
+export const MASTER_BUS_PRESETS: MasterBusPreset[] = [
+  { key: 'light', label: 'Light', threshold_db: -3.0, ratio: 2.0, attack_ms: 20.0, release_ms: 200.0 },
+  { key: 'mid', label: 'Mid', threshold_db: -2.0, ratio: 4.0, attack_ms: 10.0, release_ms: 100.0 },
+  { key: 'hard', label: 'Hard', threshold_db: -1.0, ratio: 8.0, attack_ms: 5.0, release_ms: 50.0 },
+];
+
+// Identifies which (if any) preset the current master_bus values exactly
+// match — null means the operator has manually tuned the sliders away from
+// any preset ("Custom").
+export function matchMasterBusPreset(
+  m: { threshold_db: number; ratio: number; attack_ms: number; release_ms: number },
+): MasterBusPreset | null {
+  return (
+    MASTER_BUS_PRESETS.find(
+      (p) =>
+        p.threshold_db === m.threshold_db &&
+        p.ratio === m.ratio &&
+        p.attack_ms === m.attack_ms &&
+        p.release_ms === m.release_ms,
+    ) ?? null
+  );
+}
+
 export const LiquidsoapConfigSchema = z.object({
   output: z.object({
     icecast_port: z.number().int().min(1).max(65535).default(8001),

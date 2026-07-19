@@ -1,19 +1,21 @@
-import { UseFormRegister, useWatch, Control } from 'react-hook-form';
-import { LiquidsoapConfig } from '@soono/shared';
+import { UseFormRegister, UseFormSetValue, useWatch, Control } from 'react-hook-form';
+import { LiquidsoapConfig, MASTER_BUS_PRESETS, matchMasterBusPreset } from '@soono/shared';
 import { HelpTooltip } from '../../../components/HelpTooltip';
 import { CollapsibleSection } from '../../../components/CollapsibleSection';
 
 interface Props {
   register: UseFormRegister<LiquidsoapConfig>;
   control: Control<LiquidsoapConfig>;
+  setValue: UseFormSetValue<LiquidsoapConfig>;
 }
 
-export function MasterBusSection({ register, control }: Props) {
+export function MasterBusSection({ register, control, setValue }: Props) {
   const enabled = useWatch({ control, name: 'master_bus.soft_limiter' }) ?? false;
   const threshold = useWatch({ control, name: 'master_bus.threshold_db' }) ?? -1.0;
   const ratio = useWatch({ control, name: 'master_bus.ratio' }) ?? 20.0;
   const attack = useWatch({ control, name: 'master_bus.attack_ms' }) ?? 5.0;
   const release = useWatch({ control, name: 'master_bus.release_ms' }) ?? 50.0;
+  const matchedPreset = matchMasterBusPreset({ threshold_db: threshold, ratio, attack_ms: attack, release_ms: release });
 
   return (
     <CollapsibleSection title="Master Bus">
@@ -35,6 +37,32 @@ export function MasterBusSection({ register, control }: Props) {
 
         {enabled && (
           <div className="space-y-4 pt-2 border-t border-zinc-800">
+            <div>
+              <label className="text-sm font-medium text-zinc-300 flex items-center mb-2">
+                Strength
+                <HelpTooltip text="Three increasing degrees of limiting, all deliberately kept in soft/musical compressor territory (ratio never exceeds 8:1 — a true brick-wall limiter is usually 10:1+). Pick a preset as a starting point, or fine-tune the sliders below afterward." />
+              </label>
+              <select
+                value={matchedPreset?.key ?? 'custom'}
+                onChange={(e) => {
+                  const preset = MASTER_BUS_PRESETS.find((p) => p.key === e.target.value);
+                  if (!preset) return;
+                  setValue('master_bus.threshold_db', preset.threshold_db, { shouldDirty: true });
+                  setValue('master_bus.ratio', preset.ratio, { shouldDirty: true });
+                  setValue('master_bus.attack_ms', preset.attack_ms, { shouldDirty: true });
+                  setValue('master_bus.release_ms', preset.release_ms, { shouldDirty: true });
+                }}
+                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-sm text-zinc-200 focus:outline-none focus:ring-2 focus:ring-brand-500"
+              >
+                {MASTER_BUS_PRESETS.map((p) => (
+                  <option key={p.key} value={p.key}>
+                    {p.label} ({p.threshold_db.toFixed(1)} dBFS, {p.ratio.toFixed(0)}:1)
+                  </option>
+                ))}
+                <option value="custom">Custom</option>
+              </select>
+            </div>
+
             <div>
               <div className="flex items-center justify-between mb-2">
                 <label className="text-sm font-medium text-zinc-300 flex items-center">
