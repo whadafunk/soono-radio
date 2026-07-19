@@ -1092,6 +1092,27 @@ export const SpotBudgetOverviewSchema = z.object({
 });
 export type SpotBudgetOverview = z.infer<typeof SpotBudgetOverviewSchema>;
 
+// Which schedule tier produced a day's inventory. 'none' means neither a
+// calendar entry nor a template entry covers the day — at runtime the station
+// would fall back to the default clock, whose breaks the budget model
+// deliberately does NOT count as sellable inventory.
+export const DayCoverageSourceSchema = z.enum(['calendar', 'template', 'none']);
+export type DayCoverageSource = z.infer<typeof DayCoverageSourceSchema>;
+
+export const SpotBudgetDayDetailSchema = z.object({
+  date: z.string(), // "YYYY-MM-DD"
+  dow: z.number().int().min(1).max(7), // 1=Mon … 7=Sun
+  minutes: z.number(),
+  breaks: z.number(),
+  source: DayCoverageSourceSchema,
+});
+export type SpotBudgetDayDetail = z.infer<typeof SpotBudgetDayDetailSchema>;
+
+export const SpotBudgetDetailsSchema = z.object({
+  days: z.array(SpotBudgetDayDetailSchema),
+});
+export type SpotBudgetDetails = z.infer<typeof SpotBudgetDetailsSchema>;
+
 export const CampaignAvailableSchema = z.object({
   available: BudgetSchema,
   firstSlotAvailable: z.number().optional(),

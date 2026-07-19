@@ -1308,6 +1308,7 @@ export function updateStationSettings(data: Partial<StationSettings>): Promise<S
 
 import type {
   SpotBudgetOverview,
+  SpotBudgetDetails,
   CampaignAvailable,
   CampaignPacingDetail,
 } from '@soono/shared';
@@ -1319,6 +1320,15 @@ export function fetchSpotBudget(
 ): Promise<SpotBudgetOverview> {
   const qs = new URLSearchParams({ mode, start, end });
   return apiFetch(`/spot-budget?${qs}`);
+}
+
+export function fetchSpotBudgetDetails(
+  start: string,
+  end: string,
+  mode: 'estimated' | 'remaining' = 'estimated',
+): Promise<SpotBudgetDetails> {
+  const qs = new URLSearchParams({ mode, start, end });
+  return apiFetch(`/spot-budget/details?${qs}`);
 }
 
 export function fetchCampaignBudget(

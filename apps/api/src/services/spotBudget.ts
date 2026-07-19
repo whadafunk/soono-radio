@@ -32,6 +32,8 @@ import type {
   BudgetMode,
   CampaignAvailable,
   CampaignPacingDetail,
+  DayCoverageSource,
+  SpotBudgetDayDetail,
   SpotBudgetDemand,
   SpotBudgetInventory,
 } from '@soono/shared';
@@ -138,6 +140,7 @@ function addToSubScope(cuts: BudgetCuts, scopeKey: string, value: Budget): void 
 interface CacheEntry {
   inventory: SpotBudgetInventory;
   occurrences: StopSetOccurrence[];
+  coverageByDate: Record<string, DayCoverageSource>;
   computedAtMs: number;
 }
 
@@ -190,7 +193,11 @@ export function invalidateAll(): void {
 async function computeInventory(
   period: DateRange,
   mode: BudgetMode,
-): Promise<{ inventory: SpotBudgetInventory; occurrences: StopSetOccurrence[] }> {
+): Promise<{
+  inventory: SpotBudgetInventory;
+  occurrences: StopSetOccurrence[];
+  coverageByDate: Record<string, DayCoverageSource>;
+}> {
   const now = new Date();
   const effectiveStart = mode === 'remaining' && now > period.start ? now : period.start;
   const effectiveStartStr = dateToString(effectiveStart);
@@ -379,6 +386,8 @@ async function computeInventory(
     }
   };
 
+  const coverageByDate: Record<string, DayCoverageSource> = {};
+
   while (current <= periodEnd) {
     const dateStr = dateToString(current);
     const dow = isoDay(current);
@@ -386,6 +395,7 @@ async function computeInventory(
     // Use calendar entries for this date (they override the template).
     const calEntries = calByDate.get(dateStr);
     if (calEntries && calEntries.length > 0) {
+      coverageByDate[dateStr] = 'calendar';
       for (const ce of calEntries) {
         if (!ce.clock_id) continue;
         pushTiledOccurrences(dateStr, dow, ce.clock_id, ce.show_id, ce.time_start, ce.time_end);
@@ -394,6 +404,9 @@ async function computeInventory(
       // Fall back to template for this day.
       const templateEntries = templateByDow.get(dow) ?? [];
       const clockOverrides = clockOverrideByDow.get(dow) ?? new Map<number, number>();
+      // 'none' = neither calendar nor template covers this day — at runtime the
+      // station falls back to the default clock, which this model doesn't count.
+      coverageByDate[dateStr] = templateEntries.length > 0 ? 'template' : 'none';
 
       for (const te of templateEntries) {
         // Expand template entry into per-hour slots if generic clock entries exist.
@@ -436,7 +449,7 @@ async function computeInventory(
     promoMargin: margin,
   };
 
-  return { inventory, occurrences };
+  return { inventory, occurrences, coverageByDate };
 }
 
 function expandTemplateEntry(
@@ -519,6 +532,7 @@ async function getOrComputeInventory(
   const entry: CacheEntry = {
     inventory: result.inventory,
     occurrences: result.occurrences,
+    coverageByDate: result.coverageByDate,
     computedAtMs: Date.now(),
   };
   inventoryCache.set(key, entry);
@@ -730,6 +744,44 @@ export async function getOccurrences(
 ): Promise<StopSetOccurrence[]> {
   const { occurrences } = await getOrComputeInventory(period, mode);
   return occurrences;
+}
+
+// Per-day inventory breakdown for the budget details modal: minutes/breaks per
+// date plus which schedule tier covered it. Walks the same effective date range
+// as computeInventory (rather than iterating occurrence dates) so zero-break
+// days still appear — those are exactly the days the operator needs to see.
+export async function getBudgetDayDetails(
+  period: DateRange,
+  mode: BudgetMode,
+): Promise<SpotBudgetDayDetail[]> {
+  const { occurrences, coverageByDate } = await getOrComputeInventory(period, mode);
+
+  const byDate = new Map<string, { minutes: number; breaks: number }>();
+  for (const occ of occurrences) {
+    const agg = byDate.get(occ.date) ?? { minutes: 0, breaks: 0 };
+    agg.minutes += occ.durationSeconds / 60;
+    agg.breaks += 1;
+    byDate.set(occ.date, agg);
+  }
+
+  const now = new Date();
+  const effectiveStart = mode === 'remaining' && now > period.start ? now : period.start;
+  const days: SpotBudgetDayDetail[] = [];
+  const current = new Date(effectiveStart);
+  const periodEnd = new Date(period.end);
+  while (current <= periodEnd) {
+    const dateStr = dateToString(current);
+    const agg = byDate.get(dateStr);
+    days.push({
+      date: dateStr,
+      dow: isoDay(current),
+      minutes: agg?.minutes ?? 0,
+      breaks: agg?.breaks ?? 0,
+      source: coverageByDate[dateStr] ?? 'none',
+    });
+    current.setDate(current.getDate() + 1);
+  }
+  return days;
 }
 
 export async function getDemand(

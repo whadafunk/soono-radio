@@ -42,6 +42,7 @@ import {
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
 import { MusicCampaignsPage } from './MusicCampaignsPage';
+import { SpotBudgetDetailsModal } from './SpotBudgetDetailsModal';
 import { BTN_PRIMARY_SM, BTN_SECONDARY_SM, BTN_DESTRUCTIVE_SM, INPUT, LABEL } from '../../ui';
 import { SaveStatus } from '../../components/SaveStatus';
 import {
@@ -101,6 +102,7 @@ function fmtMinutes(mins: number): string {
 function GlobalBudgetPanel() {
   const today = isoToday();
   const end30 = isoOffsetDays(today, 30);
+  const [showDetails, setShowDetails] = useState(false);
 
   const { data, isLoading, isError } = useQuery({
     queryKey: ['spot-budget', today, end30],
@@ -141,8 +143,17 @@ function GlobalBudgetPanel() {
         <span className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
           30-Day Spot Budget
         </span>
-        <span className="text-xs text-zinc-400">
-          {fmtMinutes(used)} / {fmtMinutes(total)} min used ({pct}%)
+        <span className="flex items-center gap-4">
+          <span className="text-xs text-zinc-400">
+            {fmtMinutes(used)} / {fmtMinutes(total)} min used ({pct}%)
+          </span>
+          <button
+            type="button"
+            onClick={() => setShowDetails(true)}
+            className="text-xs text-brand-400 hover:text-brand-300 font-medium"
+          >
+            Details
+          </button>
         </span>
       </div>
       <div className="h-1.5 bg-zinc-800 rounded-full overflow-hidden">
@@ -164,6 +175,19 @@ function GlobalBudgetPanel() {
           )}
         </span>
       </div>
+      {total === 0 && (
+        <div className="text-xs text-amber-400">
+          Schedule doesn't resolve for this window — add calendar or template entries.
+        </div>
+      )}
+      {showDetails && (
+        <SpotBudgetDetailsModal
+          start={today}
+          end={end30}
+          overview={data}
+          onClose={() => setShowDetails(false)}
+        />
+      )}
     </div>
   );
 }
