@@ -10,10 +10,11 @@
 // supervisor uses unix milliseconds, so all helpers here accept unix ms and
 // translate.
 
-import { and, eq, gt, isNull, lt } from 'drizzle-orm';
+import { and, eq, gt, isNull, lt, sql } from 'drizzle-orm';
 import { db as defaultDb } from '../../db/index.js';
 import {
   playHistory as playHistoryTable,
+  media,
   type PlayHistoryInsert,
   type PlaySource,
 } from '../../db/schema.js';
@@ -92,15 +93,33 @@ export async function deleteFailedPushAttempt(
 // Overwrites started_at with the real on-air time once LS confirms playback,
 // and marks the row confirmed — the only signal consumers have that this
 // started_at is ground truth rather than insertPushed's push-time placeholder.
+//
+// Also bumps the track's own play_count/last_played_at here — this is the
+// single choke point every confirmed on-air play passes through (see
+// handleTrackStarted in supervisor.ts), so it's the natural place to do it
+// rather than duplicating the "confirmed start" condition elsewhere. media_id
+// is nullable on play_history (set null if the track was since deleted), so
+// this is skipped rather than erroring when there's nothing left to update.
 export async function stampStarted(
   db: typeof defaultDb,
   id: number,
   startedAtMs: number,
 ): Promise<void> {
-  await db
+  const rows = await db
     .update(playHistoryTable)
     .set({ started_at: new Date(startedAtMs), confirmed: true })
-    .where(eq(playHistoryTable.id, id));
+    .where(eq(playHistoryTable.id, id))
+    .returning({ media_id: playHistoryTable.media_id });
+  const mediaId = rows[0]?.media_id;
+  if (mediaId != null) {
+    await db
+      .update(media)
+      .set({
+        play_count: sql`${media.play_count} + 1`,
+        last_played_at: new Date(startedAtMs),
+      })
+      .where(eq(media.id, mediaId));
+  }
 }
 
 // Sets ended_at on a single row. Used by the Supervisor to close the
