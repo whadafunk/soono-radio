@@ -189,6 +189,16 @@ When in doubt: if you'd squint to read it, it's too dark.
 - Shared schemas via `packages/shared` are the source of truth for data shapes
 - Frontend and backend must validate with the same Zod schemas
 
+**Forms (React Hook Form + Zod) — silent-failure gotchas**
+
+Three failure modes that produce a form which "does nothing" on submit, with the zod error rendered nowhere visible. All three shipped as real bugs in the campaign forms (fixed 2026-07-19, e6c8378):
+
+- **Never use `valueAsNumber` on a select with an empty option.** The empty value becomes `NaN`, zod rejects with "Expected number, received nan", submit is silently blocked.
+- **`setValueAs` also runs against the field's *default* value, not just user input.** `v => v === '' ? null : Number(v)` with a `null` default yields `Number(null) = 0`, which fails `.positive()` on an untouched, fully valid form. Always use the null-safe form: `setValueAs: v => (v === '' || v == null) ? null : Number(v)`.
+- **Don't guard sync effects on a fallback-coalesced watch value.** `const watched = useWatch(...) ?? serverValue` makes `watched == null` unfireable once the server value exists — keep the raw watch value separate when an effect needs to test "form value still unset".
+
+Every form must surface validation failures visibly: pass a second argument to `handleSubmit` that collects error paths into a summary rendered next to the submit button (see `collectErrorPaths` in `CustomersList.tsx` / `LiquidSoapSettings.tsx`). A submit button that can fail with no on-screen feedback is a bug.
+
 **Modularity**
 - API routes in `apps/api/src/routes/`; services in `apps/api/src/services/`
 - React pages in `apps/web/src/pages/`; reusable components in `src/components/`

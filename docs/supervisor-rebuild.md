@@ -1,5 +1,12 @@
 # Supervisor Rebuild — Session Notes (2026-05-17)
 
+> **SUPERSEDED (2026-07): historical document.** This describes the pre-V2 supervisor
+> (`predictSegmentPick`, the snapshot/pure-decision-function model). None of that code
+> exists anymore — the current system is `apps/api/src/services/supervisor2/`, designed
+> in [supervisor-v2-design.md](./supervisor-v2-design.md). Kept as provenance for why
+> decisions were made (e.g. the Phase D shadow-tables deferral). Do not use it to learn
+> current behavior.
+
 This document captures the architectural rebuild of the supervisor / picker / scheduler subsystem performed in a single session, the reasoning behind each major decision, and the work that was explicitly deferred. It is intentionally written as a retrospective rather than a how-to — for current behavior see [scheduling.md](./scheduling.md), [campaign-delivery.md](./campaign-delivery.md), and the inline JSDoc on the relevant TypeScript files.
 
 Companion commits: `cff0bb8 feat: Supervisor rebuild — clock-aware picker, simulator, controls` and `c7c2f58 chore: Remove orphaned 0021_tan_yellow_claw migration`.

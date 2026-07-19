@@ -2,7 +2,7 @@
 
 This is a living document capturing decisions as they are made. The scope is a **complete redesign** — multiprocess architecture, new LiquidSoap interface, potentially new scheduling model. How much of V1 survives is an open question; sections will be deleted and rewritten as the design progresses. Do not treat anything here as a commitment to preserving existing code.
 
-For what exists today, see [supervisor-rebuild.md](./supervisor-rebuild.md) and [scheduling.md](./scheduling.md).
+This document (plus the code in `apps/api/src/services/supervisor2/`) **is** what exists today. The V1 system it replaced is described in [supervisor-rebuild.md](./supervisor-rebuild.md) and [campaign-delivery.md](./campaign-delivery.md) — both kept as historical provenance only.
 
 ---
 
@@ -2590,6 +2590,21 @@ sale-time inventory math stable under spot-file swaps and structurally prevents 
 spot-length-outlier bug class. Spot picker UI: filter the clip list to bracket-fitting files
 by default, with a show-all view that displays lengths and blocks the wrong ones.
 
+**Amendment 2026-07-19 — bracket optional at creation, derived from the first clip**
+(deployed e6c8378, migration 0067). The operator often doesn't know the clip length at
+sale time, and the required-up-front select was one of the causes of a silently blocked
+Create form. `duration_bracket` is now nullable: a campaign can be created without one,
+and the bracket is set later either manually or automatically when the first spot clip is
+attached — rounded UP to the nearest bracket (a 32s clip sets 45; a clip longer than 90s
+is rejected with a clear 400, "attach a shorter clip"). Until a bracket exists the
+campaign is inert by construction (no bracket ⇒ no clips ⇒ Gate 5 skips it; the engine
+never reads `duration_bracket`), so: it is excluded entirely from spot-budget demand (no
+fake reservations), the validator downgrades the bracket-dependent checks (bracket fit,
+seconds capacity) to warnings instead of refusing, the Budget Impact panel hides behind a
+hint, and the clip picker shows all spots unfiltered (only >90s pre-disabled). Once set —
+by either path — the bracket cannot be unset from the form, and everything else in this
+section applies unchanged.
+
 **Pacing — derived, not operator-set.** Daily quota = remaining plays ÷ remaining eligible
 days, recomputed daily from the ledger (missed days redistribute forward — built-in
 make-goods, bounded catch-up). `max_plays_per_day` is demoted from pacing mechanism to
@@ -3062,6 +3077,140 @@ Verified: migration applied, branding resolves a configured clip end-to-end on a
 **Implementation:** one routine — `resolveContentOwnership(db, segment, showId)` (contentOwnership.ts) — consumed by the music and branding processes; the scattered inline rules are decommissioned. The planner passes `show_id` on ALL music pool requests (draft, finalize full + lightweight substitution, continuation chunks, gap fill) — the lightweight case is load-bearing: a fresh pool built under the wrong owner would mark valid show-owned items as vanished and substitute them away. Also fixed en route: the source dedup keyed on rotation_id, which would have dropped every show playlist after the first (sharing one rotation is the normal case) — now keyed on playlist_id. Migration 0063 (one plain ADD COLUMN, no-FK convention). Show page: Station IDs section added; all override sections' helper texts state the whole-type fallback contract; two pre-existing page bugs fixed (render loop from an unstable `[]` default; a D105-introduced hooks-order violation).
 
 **Verified on a scratch DB:** unconfigured show → segment owns / clock owns; configured show → show owns music (both playlists surviving a shared rotation, 70/30 weights intact) + station override recognized; the actual pool draws exclusively from show playlists when the show owns, segment sources otherwise.
+
+---
+
+### Decision 107 — Stop-set segments never receive their configured envelopes
+
+**Status: defect confirmed live 2026-07-19; fix designed below, not yet implemented.**
+
+**The gap.** The Clocks UI lets the operator configure `start_clip_media_id` /
+`end_clip_media_id` on any segment (Transitions tab, D105), and the branding process fully
+supports resolving them (`branding.ts` → `singleClip`). But envelope placement only happens
+inside the **music** assembly path (steps (a)/(e) of `assembleMusicPlan`).
+`assembleStopSetPlan` (planner.ts) requests exactly one pool — `campaign` — and never asks
+branding for anything: configured stop-set envelopes are silently ignored. Confirmed on the
+live station the first hour real campaigns aired (plans 9033/9035/9036, segments 228/230
+with both clips set to media 741 — zero branding items in any of them). Rundown likely has
+the same gap (unverified); check it during implementation.
+
+**Why it matters beyond aesthetics:** break bumpers are the classic transition INTO and out
+of a stop-set — the operator configured them the moment real spots started airing. Per the
+"UI is the spec" rule, a control that accepts configuration must be honored by the engine.
+
+**Fix shape.** In `assembleStopSetPlan`: resolve the segment's two envelope clips via the
+branding process (same request the music path makes, scoped to envelopes only), subtract
+their durations from `targetDurationSeconds` before the campaign fill, place the start clip
+at position 0 (shifting the slot-1 winner to position 1 — "first in slot" means first
+*spot*, not first *audio*; the bumper is framing, not inventory), and the end clip last.
+Reuse the existing `SEGMENT_START/END_ENVELOPE_REASON` constants so replan/continuation
+logic recognizes them (D104's contract). Decide explicitly during implementation whether
+first-in-slot sale semantics ("position 1") mean first spot after the bumper — recommended,
+and matches how the feeder stamps `stop_set_position` (campaign ordinal, not item index).
+
+---
+
+### Decision 108 — Reconcile-on-clock-save rewinds an early-running station to the wall-clock segment
+
+**Status: defect confirmed live 2026-07-19; fix direction sketched, NOT designed — requires
+a traced pass through reconcile()/activePlanSegmentEndMs/reconcileOccurrence before any code
+change (same standing rule as the redraft-churn finding).**
+
+**Incident (2026-07-19 13:27–13:34 UTC, first hour of real campaign airing).** The station
+was running ~194s early — organic and correct: the first real break (plan 9033) aired 52s
+of its 180s window because it was *drafted* at 13:10:58 when only one of the five fresh
+campaigns existed (finalize does substitutions, not refills — a separate, transient
+observation), and earlier breaks had skipped empty. Active plan: 9034 (music segment 229).
+The operator then edited clock segments (configuring the D107 envelopes, ironically), and
+every save fired `requestReconcile('clock_segment_save')` (routes/clocks.ts). Each
+reconcile re-resolved "current" **by wall clock** → segment 228 (its window ran to
+13:32) → and across three saves drafted (9036), finalized, and **activated** a second plan
+for the already-aired stop-set 228, force-retiring the healthy music plan 9034 mid-track
+(its SEGMENT_SUMMARY logs 0 items played / 0s). Subsequent saves ping-ponged 228↔229 and
+the structural walk then landed on 230: segment 228 aired twice, and two stop-sets (9036,
+9035) aired back-to-back. Bounded — the hour converged once saves stopped — but it
+re-aired sold inventory and cut music mid-track on air.
+
+**Root cause, precisely.** `reconcile()` DOES contain a guard for exactly this ("the active
+plan may already legitimately be AHEAD... once something is truly active we let it ride",
+added after the 2026-07-03 incident) — but the guard is defeated by its own identity check.
+`activePlanSegmentEndMs(resolved, nowMs)` returns null unless the active plan's
+`resolution_identity` equals `computeResolutionIdentity(resolved)` — and the identity
+embeds `segment.id` (`source:id:SEGMENT:instance`), while `resolved` is the *wall-clock*
+segment. So whenever the active plan is organically ahead (its segment ≠ the wall-clock
+segment), the identity can never match, trustedEndMs is null, and reconcile falls into the
+establish-ground-truth branch: `reconcileOccurrence(wallClockSegment, {allowActivate:
+true})`. That branch then finds no plan for 228 in status draft/finalized/Transitioning/
+active — 9033 is `completed`, which the candidate query deliberately excludes — so it
+drafts a fresh one. Nothing anywhere asks "did this occurrence already air?"
+(play_history/completed plans hold the answer). The guard's stated intent and its
+implementation disagree; the 07-03 fix evidently covered the same-segment duplicate case
+(reconcileOccurrence's activeHere check) but not the ahead-of-wall-clock case.
+
+**Fix direction (to be traced, not wing-able):** two candidate guards, likely both —
+1. `activePlanSegmentEndMs` should trust an active plan that is structurally AT or AHEAD of
+   the wall-clock-resolved segment within the same clock instance (position comparison
+   inside the instance), instead of demanding identity equality with the wall-clock
+   segment. Identity equality remains the right test for "was the schedule row backing
+   THIS plan edited" — but that's a different question from "is the playhead legitimately
+   ahead".
+2. `reconcileOccurrence` should treat a terminal (completed/skipped) plan with matching
+   resolution identity for the same occurrence as "already served — nothing to do", rather
+   than falling through to a fresh draft. An occurrence that already aired must never be
+   redrafted by reconcile; only a genuine identity change (the backing schedule row was
+   edited) may justify replacement, and even then never for an occurrence whose plays are
+   in play_history.
+
+Watch during the traced pass: cold-boot/restart reconcile MUST still be able to establish
+ground truth when nothing is active (that's the branch's actual job); the interaction with
+D62's resolveNextOccurrence and D84's Transitioning status; and the SEGMENT_SUMMARY
+mislabeling seen in the incident (the summary for force-retired 9034 logged segment_id 228
+— whatever retired it had already overwritten currentSegmentId).
+
+**Also observed in the same window:** plan 9035 placed the same campaign spot twice in one
+break — resolved same day by the operator as Decision 109 (repeats stay legal; clips must
+rotate).
+
+---
+
+### Decision 109 — In-break campaign repeats stay legal; repeat placements must rotate clips
+
+**Status: decided by the operator 2026-07-19 (resolves the open question logged under
+D108); clip-rotation fix designed below, not yet implemented.**
+
+**The operator's ruling.** A campaign playing more than once in the same break is fine —
+D22 stands — provided the intra-break separation field is respected. What is NOT fine:
+when a campaign has multiple media clips, a repeat placement re-airing the same clip.
+Repeats must alternate clips (round-robin / rotation over the campaign's spot pool).
+
+**Separation semantics, restated as verified in code** (the field's meaning drifted from
+the operator's original mental model, so pinning it here): `advertiser_separation_spots`
+is **customer-scoped** — a campaign is blocked from placement while its *customer* appears
+anywhere in the last N campaign items of the break (D96's `.some` fix). Separately, a
+hardcoded rule forbids the same campaign in two *adjacent* positions regardless of the
+field. Both checked in the stop-set fill loop; both confirmed working in the 2026-07-19
+live window (Redmi at positions 1 and 3, separation 1, one other advertiser between —
+legal).
+
+**The defect.** `pickSpotWeighted` rotates a campaign's clips by `delivered ÷ weight`, but
+`delivered` is a play_history figure snapshotted into the pool — placements made earlier
+in the *same assembly* don't increment it, and the sort's tie-breaks are deterministic
+(`delivered`, then `media_id`). A repeat within one break therefore always re-picks the
+identical clip, even when the campaign has several.
+
+**Fix shape.** Track per-clip placement counts within the assembly (a `Map<media_id,
+count>` alongside `placedCampaignIds`) and add them to each candidate's `delivered` at
+pick time — `(delivered + placedThisAssembly) ÷ weight`. The existing weighted-rotation
+mechanism then alternates clips naturally within a break exactly as it already does across
+breaks, weights still honored, no new rotation machinery. Apply the same adjustment in the
+finalize-substitution path (its `pickSpotWeighted` call re-picks against the same pool).
+
+**Validator stance (part of this decision):** the D96 sale-time capacity model keeps
+counting **1 play/campaign/break, deliberately** — in-break repeats are opportunistic
+delivery upside (catch-up when a break has room), not sellable inventory. Selling against
+repeat capacity would violate the "sell nominal, never boosted" principle from Part 1.
+Engine and validator now *deliberately* differ: conservative floor at sale time,
+opportunistic ceiling on air.
 
 ---
 

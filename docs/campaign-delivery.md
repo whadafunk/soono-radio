@@ -1,5 +1,13 @@
 # Campaign & Promo Delivery — Implementation Design
 
+> **SUPERSEDED (2026-07): historical document.** This is the V1-era delivery design
+> (Phases 1–4, `services/supervisor/capacity.ts`, `plays_per_day` pacing) — that code
+> and several of the campaign fields it describes no longer exist. The current campaign
+> engine is Decision 96 in [supervisor-v2-design.md](./supervisor-v2-design.md)
+> (contract, 7-gate eligibility, quota pacing, weighted rotation, delivery ledger),
+> implemented in `apps/api/src/services/supervisor2/processes/campaign.ts`. Kept as
+> provenance only.
+
 This document covers the **runtime delivery algorithm** for campaigns and promos: how the supervisor decides what goes into a stop-set, how it tracks delivery against targets, and how it enforces all campaign constraints. It is the detailed design for Phases 1–4 of the scheduler implementation.
 
 **Pre-reading:** `docs/scheduling.md` (clock/segment model, supervisor architecture) and `docs/campaigns.md` (campaign entity fields). This document assumes familiarity with both.
