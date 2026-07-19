@@ -694,7 +694,11 @@ export function SchedulePage() {
       if (current.op === 'move') {
         const rawStart = clamped - current.offsetMin;
         const dur = current.origEndMin - current.origStartMin;
-        startMin = Math.max(0, Math.min(24 * 60 - dur, snapMin(rawStart)));
+        // Clamp so the entry's END stays ≤ 23:59 (1439) — the stored value can
+        // never be 1440/"00:00" (windows can't wrap). With 24*60 - dur, a
+        // full-day block (dur 1439) could land at start 00:01 / end 1440,
+        // which stored as 00:01→00:00 and was rejected on Apply.
+        startMin = Math.max(0, Math.min(24 * 60 - 1 - dur, snapMin(rawStart)));
         endMin   = startMin + dur;
       } else if (current.op === 'resize-start') {
         startMin = Math.max(0, Math.min(current.endMin - 15, snapMin(clamped)));
@@ -744,7 +748,11 @@ export function SchedulePage() {
       if (noChange || overlaps) return;
 
       const newStart = minutesToTime(drag.startMin);
-      const newEnd   = minutesToTime(drag.endMin % 1440);
+      // Clamp instead of wrapping (% 1440): an endMin of 1440 must store as
+      // 23:59, never come back around as "00:00" — that's an invalid window
+      // the backend rejects. Also normalizes legacy 24h-duration entries
+      // (stored end "00:00") to a valid 23:59 end on their next move.
+      const newEnd   = minutesToTime(Math.min(drag.endMin, 24 * 60 - 1));
 
       if (drag.isCopy) {
         if (drag.entryKind === 'template') {
