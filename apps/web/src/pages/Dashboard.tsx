@@ -15,7 +15,7 @@ import {
   postSupervisorAlignToClock,
 } from '../api';
 import type { SupervisorV2Status, LiquidsoapConfig } from '@soono/shared';
-import { LUFS_PRESETS, matchMasterBusPreset } from '@soono/shared';
+import { LUFS_PRESETS, FADE_SHAPES, matchMasterBusPreset } from '@soono/shared';
 import { useEffect, useRef, useState } from 'react';
 import { getIcecastBaseUrl } from '../lib/icecastUrl';
 import { fmtMmSs, fmtDriftSign, fmtRelativeTime, CONTENT_TYPE_META, ContentTypeCell, heartbeatStatus, scheduleSourceMeta } from '../lib/supervisorV2Ui';
@@ -150,9 +150,6 @@ export function Dashboard() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold text-white">Dashboard</h1>
-          <p className="text-zinc-400 mt-2">
-            {isOnline ? '✓ Streaming Engine is running' : '✗ Streaming Engine is not responding'}
-          </p>
         </div>
       </div>
 
@@ -162,9 +159,11 @@ export function Dashboard() {
         </div>
       )}
 
-      {/* Component Health */}
+      {!isOnline && (
+        <p className="text-red-400 text-sm">✗ Streaming Engine is not responding</p>
+      )}
+
       <section>
-        <h2 className="text-lg font-semibold text-white mb-4">Component Health</h2>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <HealthPill
             label="Streaming Engine"
@@ -197,17 +196,17 @@ export function Dashboard() {
         </div>
       </section>
 
-      {/* Now Playing */}
-      <NowPlayingCard status={v2Status} />
-
-      {/* Monitor Player */}
-      {config && <MonitorPlayer config={config} />}
+      {/* Now Playing — includes the live monitor player */}
+      <NowPlayingCard status={v2Status} icecastConfig={config} />
 
       {/* Now Running — schedule resolver + supervisor controls */}
       {v2Status && <NowRunningCard status={v2Status} />}
 
-      {/* Audio Processing — mix engine loudness/limiter status */}
+      {/* Audio Processing — mix engine loudness/crossfade/limiter status */}
       {lsConfig && <AudioProcessingCard config={lsConfig} />}
+
+      {/* Ducking — live input mode + duck settings */}
+      {lsConfig && <DuckingCard config={lsConfig} />}
 
       {/* Live Stream Stats */}
       <section>
@@ -397,18 +396,6 @@ export function Dashboard() {
       <NextUpSection />
 
       <RecentPlaysSection plays={v2Status?.recent_plays ?? []} />
-
-      {/* Info Box */}
-      {isOnline && !statsLoading && (
-        <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
-          <p className="text-zinc-300">
-            ✓ Streaming Engine is running and configured correctly.
-          </p>
-          <p className="text-zinc-400 text-sm mt-2">
-            To start broadcasting, connect your audio source to one of the mount points above using the source password from Settings.
-          </p>
-        </div>
-      )}
     </div>
   );
 }
@@ -455,18 +442,23 @@ function HealthPill({
   );
 }
 
-function NowPlayingCard({ status }: { status: SupervisorV2Status | undefined }) {
+function NowPlayingCard({ status, icecastConfig }: { status: SupervisorV2Status | undefined; icecastConfig: IcecastConfig | undefined }) {
+  const monitor = icecastConfig && <MonitorPlayer config={icecastConfig} />;
+
   if (!status || status.active_plan_id == null) {
     return (
-      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
-        <Mic className="w-10 h-10 text-zinc-700" />
-        <div className="flex-1">
-          <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
-          <p className="text-xl font-bold text-zinc-500 mt-1">● SILENCE</p>
-          <p className="text-xs text-zinc-600 mt-1">
-            No active plan — the Supervisor is idle or between segments.
-          </p>
+      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 space-y-4">
+        <div className="flex items-center gap-4">
+          <Mic className="w-10 h-10 text-zinc-700" />
+          <div className="flex-1">
+            <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
+            <p className="text-xl font-bold text-zinc-500 mt-1">● SILENCE</p>
+            <p className="text-xs text-zinc-600 mt-1">
+              No active plan — the Supervisor is idle or between segments.
+            </p>
+          </div>
         </div>
+        {monitor}
       </section>
     );
   }
@@ -475,12 +467,15 @@ function NowPlayingCard({ status }: { status: SupervisorV2Status | undefined }) 
 
   if (!playing) {
     return (
-      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 flex items-center gap-4">
-        <Mic className="w-10 h-10 text-zinc-700" />
-        <div className="flex-1">
-          <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
-          <p className="text-xl font-bold text-zinc-500 mt-1">● TRANSITIONING</p>
+      <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 space-y-4">
+        <div className="flex items-center gap-4">
+          <Mic className="w-10 h-10 text-zinc-700" />
+          <div className="flex-1">
+            <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
+            <p className="text-xl font-bold text-zinc-500 mt-1">● TRANSITIONING</p>
+          </div>
         </div>
+        {monitor}
       </section>
     );
   }
@@ -505,7 +500,7 @@ function NowPlayingCard({ status }: { status: SupervisorV2Status | undefined }) 
   const clipElapsed = clipRemaining != null ? Math.max(0, clipTotal - clipRemaining) : null;
 
   return (
-    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6">
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-6 space-y-4">
       <div className="flex items-start gap-4">
         <Icon className={`w-10 h-10 flex-shrink-0 ${sourceLive ? 'text-red-500' : (meta?.color ?? 'text-green-500')}`} />
         <div className="flex-1 min-w-0">
@@ -536,6 +531,7 @@ function NowPlayingCard({ status }: { status: SupervisorV2Status | undefined }) 
           )}
         </div>
       </div>
+      {monitor}
     </section>
   );
 }
@@ -679,20 +675,32 @@ function NowRunningCard({ status }: { status: SupervisorV2Status }) {
 }
 
 function AudioProcessingCard({ config }: { config: LiquidsoapConfig }) {
-  const { loudness_normalization, master_bus } = config;
+  const { loudness_normalization, crossfade, master_bus } = config;
   const lufsPreset = LUFS_PRESETS.find((p) => p.value === loudness_normalization.target_lufs);
+  const fadeShape = FADE_SHAPES.find((s) => s.key === crossfade.fade_shape);
   const limiterPreset = matchMasterBusPreset(master_bus);
 
   return (
     <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
       <h2 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3">Audio Processing</h2>
-      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div>
           <p className="text-sm text-zinc-300">Loudness Normalization</p>
           {loudness_normalization.enabled ? (
             <p className="text-sm mt-1">
               <span className="text-green-400 font-mono">{loudness_normalization.target_lufs} LUFS</span>
               {lufsPreset && <span className="text-zinc-500 text-xs ml-2">{lufsPreset.label.replace(/ — .*/, '')}</span>}
+            </p>
+          ) : (
+            <p className="text-sm text-zinc-500 mt-1">Off</p>
+          )}
+        </div>
+        <div>
+          <p className="text-sm text-zinc-300">Crossfade</p>
+          {crossfade.duration_seconds > 0 ? (
+            <p className="text-sm mt-1">
+              <span className="text-sky-400 font-mono">{crossfade.duration_seconds}s</span>
+              <span className="text-zinc-500 text-xs ml-2">{crossfade.smart ? 'Smart' : fadeShape?.label ?? crossfade.fade_shape}</span>
             </p>
           ) : (
             <p className="text-sm text-zinc-500 mt-1">Off</p>
@@ -712,6 +720,28 @@ function AudioProcessingCard({ config }: { config: LiquidsoapConfig }) {
           )}
         </div>
       </div>
+    </section>
+  );
+}
+
+function DuckingCard({ config }: { config: LiquidsoapConfig }) {
+  const { harbor, ducking } = config;
+  const mixMode = harbor.enabled && harbor.live_mode === 'mix';
+
+  return (
+    <section className="bg-zinc-900 border border-zinc-800 rounded-lg p-5">
+      <h2 className="text-xs font-medium text-zinc-400 uppercase tracking-wider mb-3">Ducking</h2>
+      {mixMode ? (
+        <p className="text-sm">
+          <span className="text-violet-400 font-mono">{ducking.depth_db.toFixed(1)} dB</span>
+          <span className="text-zinc-500 text-xs ml-2 font-mono">{ducking.duration_seconds.toFixed(2)}s speed</span>
+          <span className="text-zinc-500 text-xs ml-2">Mix with Segment Audio</span>
+        </p>
+      ) : (
+        <p className="text-sm text-zinc-500">
+          Off <span className="text-xs">— Live Input Mode: Take Over</span>
+        </p>
+      )}
     </section>
   );
 }
@@ -791,11 +821,20 @@ function formatHourMin(d: Date): string {
 }
 
 function RecentPlaysSection({ plays }: { plays: SupervisorV2RecentPlay[] }) {
+  const [open, setOpen] = useState(false);
   if (plays.length === 0) return null;
   const visible = plays.slice(0, 8);
   return (
     <section>
-      <h2 className="text-lg font-semibold text-white mb-3">Recent Plays</h2>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex items-center gap-2 text-lg font-semibold text-white mb-3 hover:text-zinc-300 transition-colors"
+      >
+        <span>Recent Plays</span>
+        <span className="text-xs font-normal text-zinc-400">{plays.length} items</span>
+        <span className="text-zinc-500 text-xs">{open ? '▲' : '▼'}</span>
+      </button>
+      {open && (
       <div className="bg-zinc-900 border border-zinc-800 rounded-lg overflow-hidden">
         <table className="w-full text-sm">
           <thead className="bg-zinc-950/50 border-b border-zinc-800">
@@ -830,6 +869,7 @@ function RecentPlaysSection({ plays }: { plays: SupervisorV2RecentPlay[] }) {
           </tbody>
         </table>
       </div>
+      )}
     </section>
   );
 }
@@ -877,7 +917,7 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
   };
 
   return (
-    <section className="bg-zinc-900 border border-zinc-800 rounded-lg px-4 py-3">
+    <div className="border-t border-zinc-800 pt-4">
       <div className="flex items-center gap-3">
         <button
           onClick={toggle}
@@ -935,6 +975,6 @@ function MonitorPlayer({ config }: { config: IcecastConfig }) {
         onError={() => { setBuffering(false); setPlaying(false); setError('Stream unavailable — is Icecast running?'); }}
         onEnded={() => { setPlaying(false); setBuffering(false); }}
       />
-    </section>
+    </div>
   );
 }
