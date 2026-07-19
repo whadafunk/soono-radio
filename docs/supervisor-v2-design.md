@@ -3132,6 +3132,18 @@ and matches how the feeder stamps `stop_set_position` (campaign ordinal, not ite
 was stop-set-only. What rundown DID share was the replan re-insert exposure, closed by
 the same flag.
 
+**Amendment 2026-07-19 (operator report, same day): bumpers frame content — a spotless
+break must stay EMPTY.** The initial implementation placed envelopes unconditionally, so
+a break whose fill produced no spots and no promos aired its opener and closer back to
+back (pre-D107, such breaks assembled zero items and D94's empty-plan skip jumped them
+silently). Fix: after the fill + boundary decision, if no campaign/promo item was placed,
+the assembler discards the envelopes and returns zero items — restoring the plan to the
+existing D94 skip path untouched. Considered and rejected: a separate
+content-length-without-envelopes measure tested by the supervisor's emptiness checks
+(same outcome, but puts a stop-set special case into supervisor logic instead of at the
+assembly source). Verified on dev: empty pool → 0 items; one eligible campaign → opener +
+spot + closer.
+
 ---
 
 ### Decision 108 — Reconcile-on-clock-save rewinds an early-running station to the wall-clock segment

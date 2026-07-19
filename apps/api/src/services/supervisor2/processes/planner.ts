@@ -1645,6 +1645,27 @@ export class PlannerProcess {
       }
     }
 
+    // Bumpers frame content — a break that placed no spots and no promos
+    // must come out genuinely EMPTY, not as an opener glued to a closer
+    // (operator report 2026-07-19: spotless breaks aired the two envelopes
+    // back to back once D107 landed). Returning zero items hands the plan to
+    // the existing D94 empty-plan skip machinery untouched, exactly as
+    // spotless breaks behaved before envelopes existed.
+    const hasContent = items.some(
+      (it) => it.content_type === 'campaign' || it.content_type === 'promo',
+    );
+    if (!hasContent) {
+      return {
+        items: [],
+        unused_music_ids: [],
+        unused_branding_ids: branding ? collectUnusedBrandingIds(branding, new Set()) : [],
+        unused_campaign_ids: pool.candidates.map((c) => c.id),
+        unused_promo_ids: pool.promos.map((p) => p.id),
+        unused_rundown_ids: [],
+        space_estimate: pool.space_estimate,
+      };
+    }
+
     // (f) Segment-end envelope — the break closer bumper, placed from the
     // reserve taken up-front (same mechanism as the music path's step (e)).
     if (segmentEnd) {
