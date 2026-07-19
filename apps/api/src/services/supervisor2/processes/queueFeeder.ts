@@ -28,6 +28,7 @@ import {
   type PlanItem,
 } from '../../../db/schema.js';
 import { lsMediaPathForSha } from '../../ingest/paths.js';
+import { readLiquidsoapConfig } from '../../liquidsoapConfig.js';
 import { bus, type BusMessage } from '../bus.js';
 import { HarborClient } from '../harborClient.js';
 import { deleteFailedPushAttempt, insertPushed } from '../playHistoryService.js';
@@ -270,9 +271,11 @@ export class QueueFeederProcess {
       stop_set_position: stopSetPosition,
     });
 
+    const { loudness_normalization } = await readLiquidsoapConfig();
     const annotated = buildAnnotatedUri(mediaRow, {
       play_history_id: playHistoryId,
       plan_item_id: item.id,
+      apply_gain: loudness_normalization.enabled,
     });
 
     try {
@@ -376,7 +379,7 @@ export class QueueFeederProcess {
 // to the play_history row that triggered it.
 function buildAnnotatedUri(
   mediaRow: Media,
-  extras: { play_history_id: number; plan_item_id: number },
+  extras: { play_history_id: number; plan_item_id: number; apply_gain: boolean },
 ): string {
   const filePath = lsMediaPathForSha(mediaRow.sha256);
   const annotations: string[] = [];
@@ -386,6 +389,12 @@ function buildAnnotatedUri(
   annotations.push(`title=${JSON.stringify(title)}`);
   if (mediaRow.artist) {
     annotations.push(`artist=${JSON.stringify(mediaRow.artist)}`);
+  }
+  // Read by amplify()'s default override in the .liq master chain — only
+  // attached when loudness normalization is enabled and this track has
+  // been analyzed (older/unanalyzed content has no gain to apply).
+  if (extras.apply_gain && mediaRow.loudness_gain_db != null) {
+    annotations.push(`liq_amplify="${mediaRow.loudness_gain_db.toFixed(2)}dB"`);
   }
   return `annotate:${annotations.join(',')}:${filePath}`;
 }

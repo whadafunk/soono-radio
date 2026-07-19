@@ -15,13 +15,13 @@ export interface LoudnessPlan {
   warning: string | null;        // set if predicted peak would exceed -1 dBFS
 }
 
-const TARGET_LUFS = -23;
+const DEFAULT_TARGET_LUFS = -23; // EBU R128 broadcast default, used when no station target is passed
 const TARGET_LRA = 20;
 const TARGET_TP = -1;
 const PEAK_CEILING = -1;
 
-export async function measureLoudness(filePath: string): Promise<LoudnessPlan> {
-  const stderr = await runFFMpegLoudnorm(filePath);
+export async function measureLoudness(filePath: string, targetLufs: number = DEFAULT_TARGET_LUFS): Promise<LoudnessPlan> {
+  const stderr = await runFFMpegLoudnorm(filePath, targetLufs);
 
   // ffmpeg's loudnorm prints a JSON block at the end of stderr when print_format=json.
   // It's wrapped in arbitrary log lines, so we extract the last balanced JSON object.
@@ -42,14 +42,14 @@ export async function measureLoudness(filePath: string): Promise<LoudnessPlan> {
   if (!Number.isFinite(measurement.integrated_lufs)) {
     return {
       measurement,
-      target_lufs: TARGET_LUFS,
+      target_lufs: targetLufs,
       gain_db: 0,
       predicted_peak_after_gain: measurement.true_peak_db,
       warning: 'Source is silent or near-silent; no gain applied',
     };
   }
 
-  const gain_db = TARGET_LUFS - measurement.integrated_lufs;
+  const gain_db = targetLufs - measurement.integrated_lufs;
   const predicted_peak = measurement.true_peak_db + gain_db;
   const warning =
     predicted_peak > PEAK_CEILING
@@ -58,15 +58,15 @@ export async function measureLoudness(filePath: string): Promise<LoudnessPlan> {
 
   return {
     measurement,
-    target_lufs: TARGET_LUFS,
+    target_lufs: targetLufs,
     gain_db,
     predicted_peak_after_gain: predicted_peak,
     warning,
   };
 }
 
-function runFFMpegLoudnorm(filePath: string): Promise<string> {
-  const filter = `loudnorm=I=${TARGET_LUFS}:LRA=${TARGET_LRA}:TP=${TARGET_TP}:print_format=json`;
+function runFFMpegLoudnorm(filePath: string, targetLufs: number): Promise<string> {
+  const filter = `loudnorm=I=${targetLufs}:LRA=${TARGET_LRA}:TP=${TARGET_TP}:print_format=json`;
   const args = [
     '-hide_banner',
     '-nostats',

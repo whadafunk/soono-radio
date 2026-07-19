@@ -261,7 +261,7 @@ export async function fetchLiquidsoapConfig(): Promise<LiquidsoapConfig> {
   return LiquidsoapConfigSchema.parse(data);
 }
 
-export async function updateLiquidsoapConfig(config: LiquidsoapConfig): Promise<void> {
+export async function updateLiquidsoapConfig(config: LiquidsoapConfig): Promise<{ recomputed_gain_count?: number }> {
   const res = await fetch(`${API_BASE}/liquidsoap/config`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -271,6 +271,7 @@ export async function updateLiquidsoapConfig(config: LiquidsoapConfig): Promise<
     const error = await res.json().catch(() => ({}));
     throw new Error(`Failed to update Liquidsoap config: ${JSON.stringify(error)}`);
   }
+  return res.json();
 }
 
 export async function fetchLiquidsoapRawScript(): Promise<string> {

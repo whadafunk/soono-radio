@@ -17,6 +17,7 @@ import { OutputSection } from './liquidsoap-sections/OutputSection';
 import { HarborSection } from './liquidsoap-sections/HarborSection';
 import { CrossfadeSection } from './liquidsoap-sections/CrossfadeSection';
 import { MasterBusSection } from './liquidsoap-sections/MasterBusSection';
+import { LoudnessNormalizationSection } from './liquidsoap-sections/LoudnessNormalizationSection';
 import { DuckingSection } from './liquidsoap-sections/DuckingSection';
 import { SilenceDetectionSection } from './liquidsoap-sections/SilenceDetectionSection';
 import { LoggingSection } from './liquidsoap-sections/LoggingSection';
@@ -58,6 +59,7 @@ export function LiquidSoapSettings() {
     register,
     handleSubmit,
     control,
+    setValue,
     formState: { errors },
     reset,
   } = useForm<LiquidsoapConfig>({
@@ -67,12 +69,15 @@ export function LiquidSoapSettings() {
 
   const mutation = useMutation({
     mutationFn: async (data: LiquidsoapConfig) => {
-      await updateLiquidsoapConfig(data);
+      const { recomputed_gain_count } = await updateLiquidsoapConfig(data);
       setIsRestarting(true);
       setToast({ type: 'success', message: 'Settings saved. Restarting Liquidsoap...' });
       await restartLiquidsoap();
       setIsRestarting(false);
-      setToast({ type: 'success', message: '✓ Liquidsoap restarted successfully' });
+      const recomputeNote = recomputed_gain_count != null
+        ? ` Recomputed loudness gain for ${recomputed_gain_count} track${recomputed_gain_count === 1 ? '' : 's'}.`
+        : '';
+      setToast({ type: 'success', message: `✓ Liquidsoap restarted successfully${recomputeNote}` });
       setTimeout(() => setToast(null), 5000);
     },
     onSuccess: () => {
@@ -148,7 +153,8 @@ export function LiquidSoapSettings() {
         <OutputSection register={register} errors={errors} control={control} icecastSockets={icecastSockets} />
         <HarborSection control={control} register={register} errors={errors} />
         <CrossfadeSection register={register} errors={errors} />
-        <MasterBusSection register={register} />
+        <LoudnessNormalizationSection register={register} control={control} setValue={setValue} />
+        <MasterBusSection register={register} control={control} />
         <DuckingSection register={register} control={control} />
         <SilenceDetectionSection register={register} control={control} />
         <LoggingSection register={register} />

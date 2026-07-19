@@ -20,6 +20,13 @@ const ICECAST_CONFIG_PATH =
   process.env.ICECAST_CONFIG ||
   join(process.cwd(), '..', '..', 'icecast', 'icecast.xml');
 
+// LiquidSoap 2.2.5 does not coerce an int literal to a {float}-typed argument
+// (e.g. `ratio=20` fails to compile where `ratio=20.0` is required) — confirmed
+// against the actual v2.2.5 binary. JS numbers that happen to be whole (20, -1)
+// stringify without a decimal point, so every float-typed argument interpolated
+// into the template must go through this helper rather than a bare {{path}}.
+Handlebars.registerHelper('float', (value: number) => (Number.isInteger(value) ? `${value}.0` : `${value}`));
+
 const DEFAULT_CONFIG: LiquidsoapConfig = LiquidsoapConfigSchema.parse({
   output: {},
   harbor: { password: 'changeme' },

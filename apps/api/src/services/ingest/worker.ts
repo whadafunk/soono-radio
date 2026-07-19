@@ -6,6 +6,7 @@ import type { IngestJob, MediaInsert } from '../../db/schema.js';
 import { ffprobe } from './ffprobe.js';
 import { decodeVerify, durationMismatchTolerance } from './decodeVerify.js';
 import { measureLoudness } from './loudnorm.js';
+import { readLiquidsoapConfig } from '../liquidsoapConfig.js';
 import { decideTranscode, transcodeToMp3, TRANSCODE_DEFAULTS } from './transcode.js';
 import { sha256File } from './hash.js';
 import { ensureDirs, mediaPathForSha, moveFile, stagingPathFor } from './paths.js';
@@ -86,7 +87,8 @@ export async function runIngestJob(jobId: string): Promise<IngestOutcome> {
     // 3. Loudness measurement on the original. Doing it before any transcode
     //    means we measure the *source*; gain stored is what we want to apply
     //    at playout regardless of whether we re-encoded for the bitrate cap.
-    const loudness = await measureLoudness(stagingPath);
+    const { loudness_normalization } = await readLiquidsoapConfig();
+    const loudness = await measureLoudness(stagingPath, loudness_normalization.target_lufs);
 
     await db
       .update(ingestJobs)

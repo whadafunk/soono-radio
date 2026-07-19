@@ -15,6 +15,14 @@ export const CODEC_BITRATES: Record<Codec, number[]> = {
 export const CROSSFADE_TYPES = ['linear', 'smart', 'logarithmic'] as const;
 export type CrossfadeType = (typeof CROSSFADE_TYPES)[number];
 
+// Common integrated-loudness targets. target_lufs accepts any number — these
+// are just the presets offered in the Settings UI dropdown.
+export const LUFS_PRESETS: { label: string; value: number }[] = [
+  { label: 'EBU R128 (Broadcast) — −23 LUFS', value: -23 },
+  { label: 'Apple Music / Streaming — −16 LUFS', value: -16 },
+  { label: 'Spotify / YouTube — −14 LUFS', value: -14 },
+];
+
 export const LiquidsoapConfigSchema = z.object({
   output: z.object({
     icecast_port: z.number().int().min(1).max(65535).default(8001),
@@ -38,6 +46,14 @@ export const LiquidsoapConfigSchema = z.object({
   }),
   master_bus: z.object({
     soft_limiter: z.boolean().default(false),
+    threshold_db: z.number().max(0).default(-1.0),
+    ratio: z.number().min(1).default(20.0),
+    attack_ms: z.number().positive().default(5.0),
+    release_ms: z.number().positive().default(50.0),
+  }).default({}),
+  loudness_normalization: z.object({
+    enabled: z.boolean().default(false),
+    target_lufs: z.number().default(-23),
   }).default({}),
   ducking: z.object({
     enabled: z.boolean().default(false),

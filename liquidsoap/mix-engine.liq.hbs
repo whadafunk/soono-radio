@@ -177,22 +177,38 @@ on_end(
 )
 
 {{/if}}
+{{#if loudness_normalization.enabled}}
+# Per-track loudness normalization: the Supervisor annotates each queued
+# request with liq_amplify="<gain>dB", computed at ingest time from that
+# file's measured LUFS against the station's target (target_lufs={{loudness_normalization.target_lufs}}).
+# amplify()'s default override reads that metadata per-track automatically.
+# A separate variable (not a `queue = ...` reassignment) because amplify()
+# returns a plain source that loses request.queue's special methods
+# (.push/.skip/.current/.remaining/.elapsed/.on_track) still used above —
+# only the final audio chain below needs the gain applied.
+queue_out = amplify(1.0, override="liq_amplify", queue)
+{{else}}
+queue_out = queue
+{{/if}}
 # Source priority — live takes over when present, queue otherwise
 {{#if harbor_and_ducking}}
 # Ducking requested but not yet implemented in this LS version (TODO).
 # Operator settings: depth={{ducking.depth_db}} dB, attack={{ducking.attack_ms}} ms, release={{ducking.release_ms}} ms
 {{/if}}
 {{#if harbor.enabled}}
-radio = fallback(track_sensitive=false, [live, queue, blank()])
+radio = fallback(track_sensitive=false, [live, queue_out, blank()])
 {{else}}
-radio = fallback(track_sensitive=false, [queue, blank()])
+radio = fallback(track_sensitive=false, [queue_out, blank()])
 {{/if}}
 {{#if crossfade_enabled}}
 # Crossfade requested ({{crossfade.duration_seconds}}s {{crossfade.type}}) but skipped — LS 2.2's crossfade rejects fallible sources. TODO.
 {{/if}}
 {{#if master_bus.soft_limiter}}
-# Master bus: soft limiter at -1 dBFS (high-ratio compressor, only engages on transients)
-radio = compress(threshold=-1.0, ratio=20.0, attack=5.0, release=50.0, radio)
+# Master bus limiter (high-ratio compressor, only engages above threshold_db) —
+# whole-bus safety net independent of per-track loudness normalization above:
+# catches summed/overlapping sources, live harbor input, and unanalyzed content
+# that the per-track gain has no way to see.
+radio = compress(threshold={{float master_bus.threshold_db}}, ratio={{float master_bus.ratio}}, attack={{float master_bus.attack_ms}}, release={{float master_bus.release_ms}}, radio)
 {{/if}}
 # Output to Icecast (source password resolved from icecast.xml at generation time)
 output.icecast(

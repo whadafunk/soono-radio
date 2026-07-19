@@ -9,6 +9,7 @@ import {
 } from '../services/liquidsoapConfig.js';
 import { fetchLiquidsoapStatus } from '../services/liquidsoapStatus.js';
 import { restartContainer } from '../services/dockerControl.js';
+import { recomputeLoudnessGainForTarget } from '../services/library.js';
 
 export async function liquidsoapRoutes(fastify: FastifyInstance) {
   fastify.get('/liquidsoap/config', async (_request, reply) => {
@@ -21,8 +22,15 @@ export async function liquidsoapRoutes(fastify: FastifyInstance) {
     if (!parsed.success) {
       return reply.status(400).send({ errors: parsed.error.errors });
     }
+    const previous = await readLiquidsoapConfig();
     await writeLiquidsoapConfig(parsed.data);
-    return reply.status(200).send({ success: true });
+
+    let recomputed: number | undefined;
+    if (previous.loudness_normalization.target_lufs !== parsed.data.loudness_normalization.target_lufs) {
+      recomputed = await recomputeLoudnessGainForTarget(parsed.data.loudness_normalization.target_lufs);
+    }
+
+    return reply.status(200).send({ success: true, ...(recomputed !== undefined && { recomputed_gain_count: recomputed }) });
   });
 
   fastify.get('/liquidsoap/script/raw', async (_request, reply) => {
