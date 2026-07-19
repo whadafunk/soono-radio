@@ -2,6 +2,21 @@ import { useState, useMemo } from 'react';
 import { ChevronDown, ChevronRight, X, SlidersHorizontal } from 'lucide-react';
 import type { FacetsResponse } from '@soono/shared';
 
+export type UploadedWindow = 'any' | '24h' | '7d' | '30d';
+
+export const UPLOADED_WINDOW_DAYS: Record<Exclude<UploadedWindow, 'any'>, number> = {
+  '24h': 1,
+  '7d': 7,
+  '30d': 30,
+};
+
+const UPLOADED_WINDOW_LABELS: Record<UploadedWindow, string> = {
+  any: 'Any time',
+  '24h': 'Last 24 hours',
+  '7d': 'Last 7 days',
+  '30d': 'Last 30 days',
+};
+
 export interface FacetFilters {
   genres: string[];
   artists: string[];
@@ -13,6 +28,8 @@ export interface FacetFilters {
   bpm_max: string;
   moods: string[];
   keys: string[];
+  uploadedWindow: UploadedWindow;
+  notInPlaylist: boolean;
 }
 
 export const EMPTY_FACET_FILTERS: FacetFilters = {
@@ -26,6 +43,8 @@ export const EMPTY_FACET_FILTERS: FacetFilters = {
   bpm_max: '',
   moods: [],
   keys: [],
+  uploadedWindow: 'any',
+  notInPlaylist: false,
 };
 
 export function countActiveFacets(f: FacetFilters): number {
@@ -39,7 +58,9 @@ export function countActiveFacets(f: FacetFilters): number {
     (f.bpm_min ? 1 : 0) +
     (f.bpm_max ? 1 : 0) +
     f.moods.length +
-    f.keys.length
+    f.keys.length +
+    (f.uploadedWindow !== 'any' ? 1 : 0) +
+    (f.notInPlaylist ? 1 : 0)
   );
 }
 
@@ -280,6 +301,40 @@ export function FacetDrawer({
               </label>
             ))}
           </div>
+        </Section>
+
+        {/* Uploaded */}
+        <Section
+          title="Uploaded"
+          activeCount={filters.uploadedWindow !== 'any' ? 1 : 0}
+          defaultOpen={false}
+        >
+          <div className="px-3 space-y-1">
+            {(['any', '24h', '7d', '30d'] as const).map((v) => (
+              <label key={v} className="flex items-center gap-2 cursor-pointer py-0.5">
+                <input
+                  type="radio"
+                  checked={filters.uploadedWindow === v}
+                  onChange={() => onChange({ ...filters, uploadedWindow: v })}
+                  className="w-3.5 h-3.5 text-brand-600 border-zinc-600 bg-zinc-800 focus:ring-brand-500"
+                />
+                <span className="text-sm text-zinc-300">{UPLOADED_WINDOW_LABELS[v]}</span>
+              </label>
+            ))}
+          </div>
+        </Section>
+
+        {/* Playlist membership */}
+        <Section
+          title="Playlist"
+          activeCount={filters.notInPlaylist ? 1 : 0}
+          defaultOpen={false}
+        >
+          <CheckItem
+            label="Not in any playlist"
+            checked={filters.notInPlaylist}
+            onChange={() => onChange({ ...filters, notInPlaylist: !filters.notInPlaylist })}
+          />
         </Section>
 
         {/* BPM */}

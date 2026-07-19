@@ -7,7 +7,7 @@ import {
   SlidersHorizontal, ListPlus, Plus,
 } from 'lucide-react';
 import { MEDIA_CATEGORIES, playlistMediaCategory, PLAYLIST_SUBCATEGORIES, MediaCategory, Media, MediaPatch, TranscodeOptions } from '@soono/shared';
-import { FacetDrawer, FacetFilters, EMPTY_FACET_FILTERS, countActiveFacets } from './FacetDrawer';
+import { FacetDrawer, FacetFilters, EMPTY_FACET_FILTERS, countActiveFacets, UPLOADED_WINDOW_DAYS } from './FacetDrawer';
 
 const CATEGORY_LABELS: Record<MediaCategory, string> = {
   music:     'Music',
@@ -26,19 +26,6 @@ const TAB_CATEGORIES = {
   production: ['recording'] as MediaCategory[],
 };
 type LibraryTab = keyof typeof TAB_CATEGORIES;
-
-type UploadedWindow = 'any' | '24h' | '7d' | '30d';
-const UPLOADED_WINDOW_LABELS: Record<UploadedWindow, string> = {
-  any: 'Uploaded',
-  '24h': 'Last 24 hours',
-  '7d': 'Last 7 days',
-  '30d': 'Last 30 days',
-};
-const UPLOADED_WINDOW_DAYS: Record<Exclude<UploadedWindow, 'any'>, number> = {
-  '24h': 1,
-  '7d': 7,
-  '30d': 30,
-};
 
 const TAB_LABELS: Record<LibraryTab, string> = {
   all: 'All',
@@ -150,8 +137,6 @@ export function LibraryBrowse() {
   const [categorySet, setCategorySet] = useState<Set<MediaCategory>>(new Set());
   const [favoriteOnly, setFavoriteOnly] = useState(false);
   const [flaggedOnly, setFlaggedOnly] = useState(false);
-  const [uploadedWindow, setUploadedWindow] = useState<UploadedWindow>('any');
-  const [notInPlaylistOnly, setNotInPlaylistOnly] = useState(false);
   const [sort, setSort] = useState<ColumnId>('created_at');
   const [order, setOrder] = useState<'asc' | 'desc'>('desc');
   const [offset, setOffset] = useState(0);
@@ -176,7 +161,7 @@ export function LibraryBrowse() {
 
   useEffect(() => {
     setOffset(0);
-  }, [debouncedQ, categorySet, activeTab, favoriteOnly, flaggedOnly, uploadedWindow, notInPlaylistOnly, sort, order, facetFilters]);
+  }, [debouncedQ, categorySet, activeTab, favoriteOnly, flaggedOnly, sort, order, facetFilters]);
 
   const categoryParam = useMemo(() => {
     const tabCats = TAB_CATEGORIES[activeTab];
@@ -197,10 +182,10 @@ export function LibraryBrowse() {
   };
 
   const uploadedAfterParam = useMemo(() => {
-    if (uploadedWindow === 'any') return undefined;
-    const days = UPLOADED_WINDOW_DAYS[uploadedWindow];
+    if (facetFilters.uploadedWindow === 'any') return undefined;
+    const days = UPLOADED_WINDOW_DAYS[facetFilters.uploadedWindow];
     return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
-  }, [uploadedWindow]);
+  }, [facetFilters.uploadedWindow]);
 
   const facetParams = useMemo(() => ({
     genre:         facetFilters.genres.length        ? facetFilters.genres.join(',')        : undefined,
@@ -216,7 +201,7 @@ export function LibraryBrowse() {
   }), [facetFilters]);
 
   const { data, isLoading, error } = useQuery<LibraryListResponse>({
-    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, flaggedOnly, uploadedAfterParam, notInPlaylistOnly, sort, order, limit, offset, facetParams }],
+    queryKey: ['library', { q: debouncedQ, categoryParam, favoriteOnly, flaggedOnly, uploadedAfterParam, notInPlaylist: facetFilters.notInPlaylist, sort, order, limit, offset, facetParams }],
     queryFn: () =>
       fetchLibrary({
         q: debouncedQ || undefined,
@@ -224,7 +209,7 @@ export function LibraryBrowse() {
         favorite: favoriteOnly ? true : undefined,
         flagged: flaggedOnly ? true : undefined,
         uploadedAfter: uploadedAfterParam,
-        notInPlaylist: notInPlaylistOnly ? true : undefined,
+        notInPlaylist: facetFilters.notInPlaylist ? true : undefined,
         sort,
         order,
         limit,
@@ -470,21 +455,6 @@ export function LibraryBrowse() {
             onChange={handlePlaylistEditSelect}
           />
         )}
-
-        <UploadedFilterDropdown value={uploadedWindow} onChange={setUploadedWindow} />
-
-        <button
-          onClick={() => setNotInPlaylistOnly((v) => !v)}
-          title="Only media not part of any playlist of its own category"
-          className={`flex items-center gap-1 px-3 py-2 border rounded-lg transition-colors ${
-            notInPlaylistOnly
-              ? 'bg-brand-600/20 border-brand-600 text-brand-300'
-              : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
-          }`}
-        >
-          <ListPlus className="w-4 h-4" />
-          Not in playlist
-        </button>
 
         <button
           onClick={() => setFavoriteOnly((v) => !v)}
@@ -1278,64 +1248,6 @@ function PlaylistSelectDropdown({
                 {value === p.id && <Check className="w-3 h-3 text-white" />}
               </span>
               <span className="truncate">{p.name}</span>
-            </button>
-          ))}
-        </div>
-      )}
-    </div>
-  );
-}
-
-const UPLOADED_WINDOW_OPTIONS: UploadedWindow[] = ['any', '24h', '7d', '30d'];
-
-function UploadedFilterDropdown({
-  value,
-  onChange,
-}: {
-  value: UploadedWindow;
-  onChange: (next: UploadedWindow) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const ref = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false);
-    };
-    document.addEventListener('mousedown', onDocClick);
-    return () => document.removeEventListener('mousedown', onDocClick);
-  }, [open]);
-
-  return (
-    <div ref={ref} className="relative">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className={`flex items-center gap-2 px-3 py-2 border rounded-lg transition-colors ${
-          value !== 'any'
-            ? 'bg-brand-600/20 border-brand-600 text-brand-200'
-            : 'bg-zinc-800 border-zinc-700 text-zinc-300 hover:bg-zinc-700'
-        }`}
-      >
-        <span>{UPLOADED_WINDOW_LABELS[value]}</span>
-        <ChevronDown className={`w-3 h-3 transition-transform ${open ? 'rotate-180' : ''}`} />
-      </button>
-      {open && (
-        <div className="absolute z-30 mt-1 w-44 bg-zinc-900 border border-zinc-800 rounded-lg shadow-lg p-1">
-          {UPLOADED_WINDOW_OPTIONS.map((opt) => (
-            <button
-              key={opt}
-              onClick={() => { onChange(opt); setOpen(false); }}
-              className="w-full flex items-center gap-2 px-3 py-1.5 text-sm text-zinc-200 hover:bg-zinc-800 rounded transition-colors"
-            >
-              <span
-                className={`w-4 h-4 rounded border flex items-center justify-center flex-shrink-0 transition-colors ${
-                  value === opt ? 'bg-brand-600 border-brand-600' : 'border-zinc-600'
-                }`}
-              >
-                {value === opt && <Check className="w-3 h-3 text-white" />}
-              </span>
-              <span>{opt === 'any' ? 'Any time' : UPLOADED_WINDOW_LABELS[opt]}</span>
             </button>
           ))}
         </div>
