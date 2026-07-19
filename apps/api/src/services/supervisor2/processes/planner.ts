@@ -68,7 +68,12 @@ import type {
 const MIN_FILL_GAP_SECONDS = 5;
 // Reason strings for segment envelopes — an internal contract: the replan
 // path recognizes a plan's trailing pending closer BY THIS STRING (D104), so
-// the write sites and the detection must never drift apart.
+// the write sites and the detection must never drift apart. All write sites
+// go through brandingToItem, which appends " (<subtype>)" — so detection is
+// PREFIX-based (startsWith), never exact equality. Found live 2026-07-19
+// during D107: the original === comparison could never match the stored
+// reason, so every replan since D104 silently dropped the pending closer
+// (closer_restored was always false).
 const SEGMENT_START_ENVELOPE_REASON = 'segment_start envelope';
 const SEGMENT_END_ENVELOPE_REASON = 'segment_end envelope';
 
@@ -598,11 +603,30 @@ export class PlannerProcess {
               )
             : null;
 
+        // D109: replacements must rotate clips against what the plan already
+        // holds — seed the per-clip counts from the plan's pending campaign
+        // items, then keep them current as substitutions land.
+        const spotPlacedCounts = new Map<number, number>();
+        for (const item of pendingItems) {
+          if (item.content_type === 'campaign') {
+            spotPlacedCounts.set(item.media_id, (spotPlacedCounts.get(item.media_id) ?? 0) + 1);
+          }
+        }
         for (const item of pendingItems) {
           const stillValid = isItemStillValid(item, freshMusic, freshCampaign);
           if (stillValid) continue;
-          const replacement = pickReplacement(item, freshMusic, freshCampaign, config);
+          // The item being replaced won't air — remove it from the counts
+          // before picking so it doesn't skew the rotation.
+          if (item.content_type === 'campaign') {
+            const n = (spotPlacedCounts.get(item.media_id) ?? 1) - 1;
+            if (n <= 0) spotPlacedCounts.delete(item.media_id);
+            else spotPlacedCounts.set(item.media_id, n);
+          }
+          const replacement = pickReplacement(item, freshMusic, freshCampaign, config, spotPlacedCounts);
           if (!replacement) continue;
+          if (replacement.content_type === 'campaign') {
+            spotPlacedCounts.set(replacement.media_id, (spotPlacedCounts.get(replacement.media_id) ?? 0) + 1);
+          }
           await this.db
             .delete(planItemsTable)
             .where(eq(planItemsTable.id, item.id));
@@ -777,7 +801,7 @@ export class PlannerProcess {
       .orderBy(asc(planItemsTable.position));
     const lastPending = pendingAll[pendingAll.length - 1] ?? null;
     const trailingCloser =
-      lastPending != null && lastPending.reason === SEGMENT_END_ENVELOPE_REASON ? lastPending : null;
+      lastPending != null && lastPending.reason.startsWith(SEGMENT_END_ENVELOPE_REASON) ? lastPending : null;
     const effectiveFrom = trailingCloser
       ? Math.min(fromPosition, trailingCloser.position)
       : fromPosition;
@@ -817,7 +841,11 @@ export class PlannerProcess {
     } else {
       // For mid-segment replanning, the show context is unchanged (show
       // envelopes played at the start/end are not re-inserted). Pass show_id
-      // for branding pool selection but disable envelope insertion.
+      // for branding pool selection but disable envelope insertion — both
+      // show envelopes (via the false flags) and segment envelopes (D107:
+      // the opener already aired; the pending closer is re-placed below).
+      // Budget excludes the re-placed closer's duration for the same reason
+      // the music branch's chunk budget does.
       const showCtx: ShowContext = {
         showId: showResolved?.show_id ?? null,
         showName: showResolved?.show_name ?? null,
@@ -828,9 +856,10 @@ export class PlannerProcess {
       result = await this.assembleForSegment(
         segment,
         plan.clock_instance_started_at,
-        remainingSeconds,
+        chunkBudgetSeconds,
         nowMs,
         showCtx,
+        { skipSegmentEnvelopes: true },
       );
     }
 
@@ -972,6 +1001,13 @@ export class PlannerProcess {
     targetDurationSeconds: number,
     nowMs: number,
     showCtx: ShowContext,
+    // D107: mid-flight replan re-assembles the remainder of an already-airing
+    // segment — its opening envelope already aired and its pending closer is
+    // re-placed by the D104 mechanism, so the assemblers must not insert
+    // fresh segment envelopes. Draft/finalize paths omit this (full plans
+    // get their envelopes). Music handles the same concern via its dedicated
+    // continuation-chunk routine instead.
+    opts: { skipSegmentEnvelopes?: boolean } = {},
   ): Promise<AssemblyResult> {
     switch (segment.type) {
       case 'music':
@@ -989,6 +1025,7 @@ export class PlannerProcess {
           targetDurationSeconds,
           nowMs,
           showCtx,
+          opts,
         );
       case 'news':
       case 'bulletin':
@@ -999,6 +1036,7 @@ export class PlannerProcess {
           targetDurationSeconds,
           nowMs,
           showCtx,
+          opts,
         );
       case 'live':
         return emptyResult();
@@ -1305,9 +1343,36 @@ export class PlannerProcess {
     targetDurationSeconds: number,
     nowMs: number,
     showCtx: ShowContext,
+    opts: { skipSegmentEnvelopes?: boolean } = {},
   ): Promise<AssemblyResult> {
     const { config } = showCtx;
     const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
+
+    // D107: stop-sets honor their configured segment envelopes (break
+    // bumpers) like every other segment type. Resolve them FIRST so their
+    // durations can be reserved out of the sellable budget — the campaign
+    // pool request below must see the reduced target, or the space estimate
+    // (and thus sale-time inventory math) would count bumper time as
+    // sellable. Skipped entirely on mid-flight replan (the opener already
+    // aired; the pending closer is re-placed by the D104 mechanism).
+    let branding: BrandingCandidatePool | null = null;
+    if (!opts.skipSegmentEnvelopes && (segment.start_clip_media_id || segment.end_clip_media_id)) {
+      branding = await this.requestPool<BrandingCandidatePool>(
+        'branding',
+        segment,
+        instance,
+        targetDurationSeconds,
+        nowMs,
+        showCtx.showId,
+      );
+    }
+    const segmentStart = branding?.segment_start;
+    const segmentEnd = branding?.segment_end;
+    const usedBrandingIds = new Set<number>();
+    const segStartDur = segmentStart?.duration_seconds ?? 0;
+    const segEndReserve = segmentEnd?.duration_seconds ?? 0;
+    const fillBudgetSeconds = Math.max(0, targetDurationSeconds - segStartDur - segEndReserve);
+
     // D96: Decision 75's recovery boost is retired — breaks stay
     // nominal-sized. Catch-up happens across days (quota pacing) and by
     // displacing promos inside breaks, never by stretching the break.
@@ -1315,7 +1380,7 @@ export class PlannerProcess {
       'campaign',
       segment,
       instance,
-      targetDurationSeconds,
+      fillBudgetSeconds,
       nowMs,
     );
 
@@ -1326,9 +1391,24 @@ export class PlannerProcess {
     // appear more than once in a break; only adjacency (below) and
     // advertiser_separation_spots constrain repeats.
     const placedCampaignIds = new Set<number>();
+    // D109: per-clip placement counts for this assembly, folded into
+    // pickSpotWeighted's delivered figure so in-break repeats rotate clips.
+    const spotPlacedCounts = new Map<number, number>();
     const usedPromoIds = new Set<number>();
     const excluded = new Set<number>();
-    let remainingSeconds = targetDurationSeconds;
+    let remainingSeconds = fillBudgetSeconds;
+
+    // (0) Segment-start envelope — the break opener bumper. Sits OUTSIDE the
+    // sale: slot 1 (the first-in-slot position) is the first SPOT, which the
+    // feeder's ground-truth stop_set_position stamping already guarantees
+    // (it counts campaign ordinals, not item indexes).
+    if (segmentStart) {
+      items.push(withCutSkip(
+        brandingToItem(segmentStart, SEGMENT_START_ENVELOPE_REASON),
+        config,
+      ));
+      usedBrandingIds.add(segmentStart.id);
+    }
 
     // (a) First-in-slot resolution (D96).
     // 'always' (slot_1_required) means EVERY play opens a break — such a
@@ -1344,7 +1424,7 @@ export class PlannerProcess {
     if (slot1Required.length > 0) {
       const winner = pickFirstInSlot(slot1Required);
       if (winner) {
-        const spot = pickSpotWeighted(winner.spot_pool, remainingSeconds);
+        const spot = pickSpotWeighted(winner.spot_pool, remainingSeconds, spotPlacedCounts);
         if (spot) {
           const item = withCutSkip(
             campaignToItem(winner, spot, 0, 'slot_1 winner (first-in-slot: every play)'),
@@ -1354,6 +1434,7 @@ export class PlannerProcess {
           placed.push(item);
           remainingSeconds -= spot.duration_seconds;
           placedCampaignIds.add(winner.id);
+          spotPlacedCounts.set(spot.media_id, (spotPlacedCounts.get(spot.media_id) ?? 0) + 1);
           slot1Claimed = true;
           for (const id of winner.competing_exclusions) excluded.add(id);
         }
@@ -1374,7 +1455,7 @@ export class PlannerProcess {
         .sort((a, b) => b.pacing_score - a.pacing_score || a.campaign_id - b.campaign_id);
       const first = preferred[0];
       if (first) {
-        const spot = pickSpotWeighted(first.spot_pool, remainingSeconds);
+        const spot = pickSpotWeighted(first.spot_pool, remainingSeconds, spotPlacedCounts);
         if (spot) {
           const item = withCutSkip(
             campaignToItem(first, spot, 0, 'slot_1 (first-in-slot: at least once daily)'),
@@ -1384,6 +1465,7 @@ export class PlannerProcess {
           placed.push(item);
           remainingSeconds -= spot.duration_seconds;
           placedCampaignIds.add(first.id);
+          spotPlacedCounts.set(spot.media_id, (spotPlacedCounts.get(spot.media_id) ?? 0) + 1);
           for (const id of first.competing_exclusions) excluded.add(id);
         }
       }
@@ -1451,7 +1533,7 @@ export class PlannerProcess {
       });
 
       const chosen = eligible[0];
-      const spot = pickSpotWeighted(chosen.spot_pool, remainingSeconds);
+      const spot = pickSpotWeighted(chosen.spot_pool, remainingSeconds, spotPlacedCounts);
       if (!spot) break;
 
       const reason =
@@ -1461,6 +1543,7 @@ export class PlannerProcess {
       placed.push(item);
       remainingSeconds -= spot.duration_seconds;
       placedCampaignIds.add(chosen.id);
+      spotPlacedCounts.set(spot.media_id, (spotPlacedCounts.get(spot.media_id) ?? 0) + 1);
       for (const id of chosen.competing_exclusions) excluded.add(id);
     }
 
@@ -1562,10 +1645,17 @@ export class PlannerProcess {
       }
     }
 
+    // (f) Segment-end envelope — the break closer bumper, placed from the
+    // reserve taken up-front (same mechanism as the music path's step (e)).
+    if (segmentEnd) {
+      items.push(withCutSkip(brandingToItem(segmentEnd, SEGMENT_END_ENVELOPE_REASON), config));
+      usedBrandingIds.add(segmentEnd.id);
+    }
+
     return {
       items,
       unused_music_ids: [],
-      unused_branding_ids: [],
+      unused_branding_ids: branding ? collectUnusedBrandingIds(branding, usedBrandingIds) : [],
       unused_campaign_ids: pool.candidates
         .filter((c) => !placedCampaignIds.has(c.id))
         .map((c) => c.id),
@@ -1585,6 +1675,7 @@ export class PlannerProcess {
     targetDurationSeconds: number,
     nowMs: number,
     showCtx: ShowContext,
+    opts: { skipSegmentEnvelopes?: boolean } = {},
   ): Promise<AssemblyResult> {
     const { config } = showCtx;
     const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
@@ -1615,12 +1706,17 @@ export class PlannerProcess {
     const usedBrandingIds = new Set<number>();
     const usedRundownIds = new Set<number>();
 
+    // D107: mid-flight replan must not re-insert segment envelopes (the
+    // opener already aired; the pending closer is re-placed by the caller).
+    const segmentStart = opts.skipSegmentEnvelopes ? undefined : branding.segment_start;
+    const segmentEnd = opts.skipSegmentEnvelopes ? undefined : branding.segment_end;
+
     // Reserve durations up-front.
     const showStartDur = (showCtx.isShowStart && branding.show_start)
       ? branding.show_start.duration_seconds : 0;
     const showEndReserve = (showCtx.isShowEnd && branding.show_end)
       ? branding.show_end.duration_seconds : 0;
-    const segEndReserve = branding.segment_end?.duration_seconds ?? 0;
+    const segEndReserve = segmentEnd?.duration_seconds ?? 0;
 
     // (0) Show-start envelope.
     if (showCtx.isShowStart && branding.show_start) {
@@ -1629,12 +1725,12 @@ export class PlannerProcess {
     }
 
     // (a) Segment-start envelope.
-    if (branding.segment_start) {
+    if (segmentStart) {
       items.push(withCutSkip(
-        brandingToItem(branding.segment_start, SEGMENT_START_ENVELOPE_REASON),
+        brandingToItem(segmentStart, SEGMENT_START_ENVELOPE_REASON),
         config,
       ));
-      usedBrandingIds.add(branding.segment_start.id);
+      usedBrandingIds.add(segmentStart.id);
     }
 
     // (b) Rundown items in position order (mandatory), within budget.
@@ -1650,7 +1746,7 @@ export class PlannerProcess {
       0,
       targetDurationSeconds
         - showStartDur
-        - (branding.segment_start?.duration_seconds ?? 0)
+        - (segmentStart?.duration_seconds ?? 0)
         - segEndReserve
         - showEndReserve,
     );
@@ -1698,7 +1794,7 @@ export class PlannerProcess {
       }, 'planner: rundown content exceeds the segment budget — tail clips dropped (D35)');
     }
 
-    const startEnvDur = (branding.segment_start?.duration_seconds ?? 0) + showStartDur;
+    const startEnvDur = (segmentStart?.duration_seconds ?? 0) + showStartDur;
     let remaining =
       targetDurationSeconds - startEnvDur - totalRundownDuration - segEndReserve - showEndReserve;
 
@@ -1731,14 +1827,14 @@ export class PlannerProcess {
 
     // (d) Segment-end envelope.
     if (
-      branding.segment_end &&
-      branding.segment_end.duration_seconds <= remaining + segEndReserve + MIN_FILL_GAP_SECONDS
+      segmentEnd &&
+      segmentEnd.duration_seconds <= remaining + segEndReserve + MIN_FILL_GAP_SECONDS
     ) {
       items.push(withCutSkip(
-        brandingToItem(branding.segment_end, SEGMENT_END_ENVELOPE_REASON),
+        brandingToItem(segmentEnd, SEGMENT_END_ENVELOPE_REASON),
         config,
       ));
-      usedBrandingIds.add(branding.segment_end.id);
+      usedBrandingIds.add(segmentEnd.id);
     }
 
     // (e) Show-end envelope.
@@ -2310,14 +2406,26 @@ function pickFirstInSlot(pool: CampaignCandidate[]): CampaignCandidate | null {
 function pickSpotWeighted(
   pool: SpotCandidate[],
   remainingSeconds: number,
+  // D109: `delivered` is a play_history figure snapshotted into the pool —
+  // blind to picks made earlier in the same assembly, so a campaign repeated
+  // within one break would re-air the identical clip forever (the tie-breaks
+  // are deterministic). Callers that can place the same campaign more than
+  // once per assembly pass their running per-clip counts here; folding them
+  // into `delivered` makes the existing weighted rotation alternate clips
+  // within a break exactly as it already does across breaks.
+  placedThisAssembly?: Map<number, number>,
 ): SpotCandidate | null {
   const fits = pool.filter((s) => s.duration_seconds >= 1 && s.duration_seconds <= remainingSeconds);
   if (fits.length === 0) return null;
+  const effectiveDelivered = (s: SpotCandidate) =>
+    s.delivered + (placedThisAssembly?.get(s.media_id) ?? 0);
   fits.sort((a, b) => {
-    const ra = a.delivered / Math.max(1, a.weight);
-    const rb = b.delivered / Math.max(1, b.weight);
+    const da = effectiveDelivered(a);
+    const db = effectiveDelivered(b);
+    const ra = da / Math.max(1, a.weight);
+    const rb = db / Math.max(1, b.weight);
     if (ra !== rb) return ra - rb;
-    if (a.delivered !== b.delivered) return a.delivered - b.delivered;
+    if (da !== db) return da - db;
     return a.media_id - b.media_id;
   });
   return fits[0] ?? null;
@@ -2394,6 +2502,9 @@ function pickReplacement(
   freshMusic: MusicCandidatePool | null,
   freshCampaign: StopSetCandidatePool | null,
   config: SupervisorConfig,
+  // D109: per-clip counts of campaign spots already in the plan, so the
+  // replacement pick rotates instead of re-picking a clip the plan holds.
+  spotPlacedCounts?: Map<number, number>,
 ): PendingAssemblyItem | null {
   if (item.content_type === 'music' && freshMusic) {
     const fits = freshMusic.candidates
@@ -2412,7 +2523,7 @@ function pickReplacement(
       .sort((a, b) => b.pacing_score - a.pacing_score);
     const pick = sorted[0];
     if (pick) {
-      const spot = pickSpotWeighted(pick.spot_pool, item.planned_duration_seconds);
+      const spot = pickSpotWeighted(pick.spot_pool, item.planned_duration_seconds, spotPlacedCounts);
       if (spot) {
         return withCutSkip(
           campaignToItem(pick, spot, 0, `replacement: ${pick.name} pacing_score=${pick.pacing_score.toFixed(2)}`),

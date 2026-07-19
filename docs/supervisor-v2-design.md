@@ -3082,7 +3082,7 @@ Verified: migration applied, branding resolves a configured clip end-to-end on a
 
 ### Decision 107 — Stop-set segments never receive their configured envelopes
 
-**Status: defect confirmed live 2026-07-19; fix designed below, not yet implemented.**
+**Status: defect confirmed live 2026-07-19; IMPLEMENTED + verified on dev same day.** Implementation notes at the end of this entry.
 
 **The gap.** The Clocks UI lets the operator configure `start_clip_media_id` /
 `end_clip_media_id` on any segment (Transitions tab, D105), and the branding process fully
@@ -3107,6 +3107,30 @@ Reuse the existing `SEGMENT_START/END_ENVELOPE_REASON` constants so replan/conti
 logic recognizes them (D104's contract). Decide explicitly during implementation whether
 first-in-slot sale semantics ("position 1") mean first spot after the bumper — recommended,
 and matches how the feeder stamps `stop_set_position` (campaign ordinal, not item index).
+
+**Implementation notes (2026-07-19).** As designed, plus two things the work surfaced:
+- Envelope durations are reserved BEFORE the campaign pool request, so the pool (and its
+  space estimate → sale-time inventory) sees the reduced sellable budget, not the full
+  window. Mid-flight replan passes `skipSegmentEnvelopes` through `assembleForSegment`
+  (honored by both the stop-set and rundown assemblers — rundown had the same latent
+  re-insert exposure on its replan path) and now uses the closer-reduced chunk budget for
+  non-music segments, same as the music branch always did.
+- **Pre-existing D104 bug found by the replan verification: the trailing-closer detection
+  compared `reason === SEGMENT_END_ENVELOPE_REASON`, but every write site stores the
+  reason via `brandingToItem`, which appends `" (<subtype>)"` — the match could never
+  fire, so every replan since D104 shipped silently DROPPED the pending closer
+  (`closer_restored` was always false, music plans included).** Detection is now
+  prefix-based (`startsWith`), and the constant's comment pins that contract.
+- Verified by driving the real planner + campaign/branding processes against the dev DB
+  (segment 389 with 1s opener / 12.3s closer; two test campaigns, one with two clips):
+  fresh draft placed opener at position 0, slot fill, closer last; the same campaign's
+  repeat within the break ROTATED clips (D109 — media 20 then media 21; pre-fix both
+  picks were media 20); mid-flight replan kept the played opener, inserted no duplicate,
+  and re-placed the pending closer at the true end. All fixtures cleaned after.
+
+**Rundown checked (the entry's open question): it already placed envelopes** — the gap
+was stop-set-only. What rundown DID share was the replan re-insert exposure, closed by
+the same flag.
 
 ---
 
@@ -3176,7 +3200,7 @@ rotate).
 ### Decision 109 — In-break campaign repeats stay legal; repeat placements must rotate clips
 
 **Status: decided by the operator 2026-07-19 (resolves the open question logged under
-D108); clip-rotation fix designed below, not yet implemented.**
+D108); clip-rotation fix IMPLEMENTED + verified on dev same day.**
 
 **The operator's ruling.** A campaign playing more than once in the same break is fine —
 D22 stands — provided the intra-break separation field is respected. What is NOT fine:
