@@ -215,12 +215,20 @@ queue_out = cross(duration={{float crossfade.duration_seconds}}, crossfade_trans
 {{/if}}
 {{/if}}
 # Source priority — live takes over when present, queue otherwise
-{{#if harbor_and_ducking}}
-# Ducking requested but not yet implemented in this LS version (TODO).
-# Operator settings: depth={{ducking.depth_db}} dB, attack={{ducking.attack_ms}} ms, release={{ducking.release_ms}} ms
-{{/if}}
 {{#if harbor.enabled}}
+{{#if harbor_mix_mode}}
+# Live Input Mode: Mix with Segment Audio — live and automation play
+# simultaneously; automation ducks under live via smooth_add, LiquidSoap's
+# built-in fade between "normal alone" and "normal ducked + special layered
+# on top," driven by whether the live source is actually producing audio.
+# Presence-based, not signal-level: it reacts to the harbor connection being
+# up, not to how loud the DJ is talking.
+mixed = smooth_add(duration={{float ducking.duration_seconds}}, p={{float ducking_p}}, normal=queue_out, special=live)
+radio = fallback(track_sensitive=false, [mixed, queue_out, blank()])
+{{else}}
+# Live Input Mode: Take Over — live completely replaces automation.
 radio = fallback(track_sensitive=false, [live, queue_out, blank()])
+{{/if}}
 {{else}}
 radio = fallback(track_sensitive=false, [queue_out, blank()])
 {{/if}}

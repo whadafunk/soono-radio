@@ -97,7 +97,9 @@ function renderScript(templateSource: string, config: LiquidsoapConfig, icecastS
     codec_string: formatCodec(config.output.codec, config.output.bitrate_kbps),
     crossfade_enabled: config.crossfade.duration_seconds > 0,
     crossfade_shape_ls: FADE_SHAPE_LS[config.crossfade.fade_shape] ?? 'lin',
-    harbor_and_ducking: config.harbor.enabled && config.ducking.enabled,
+    harbor_mix_mode: config.harbor.enabled && config.harbor.live_mode === 'mix',
+    // Linear amplitude fraction smooth_add's `p` expects, derived from depth_db.
+    ducking_p: Math.pow(10, config.ducking.depth_db / 20),
     harbor_tls_transport,
   };
 

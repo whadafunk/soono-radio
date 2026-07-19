@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { useForm } from 'react-hook-form';
+import { useForm, useWatch } from 'react-hook-form';
 import { zodResolver } from '@hookform/resolvers/zod';
 import { LiquidsoapConfig, LiquidsoapConfigSchema } from '@soono/shared';
 import {
@@ -66,6 +66,8 @@ export function LiquidSoapSettings() {
     resolver: zodResolver(LiquidsoapConfigSchema),
     values: config,
   });
+
+  const liveMode = useWatch({ control, name: 'harbor.live_mode' });
 
   const mutation = useMutation({
     mutationFn: async (data: LiquidsoapConfig) => {
@@ -152,10 +154,10 @@ export function LiquidSoapSettings() {
       >
         <OutputSection register={register} errors={errors} control={control} icecastSockets={icecastSockets} />
         <HarborSection control={control} register={register} errors={errors} />
+        {liveMode === 'mix' && <DuckingSection register={register} control={control} />}
         <CrossfadeSection register={register} errors={errors} control={control} />
         <LoudnessNormalizationSection register={register} control={control} setValue={setValue} />
         <MasterBusSection register={register} control={control} setValue={setValue} />
-        <DuckingSection register={register} control={control} />
         <SilenceDetectionSection register={register} control={control} />
         <LoggingSection register={register} />
 

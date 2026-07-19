@@ -13,6 +13,7 @@ interface Props {
 }
 
 export function HarborSection({ control, register, errors }: Props) {
+  const harborEnabled = useWatch({ control, name: 'harbor.enabled' }) ?? false;
   const tlsEnabled = useWatch({ control, name: 'harbor.tls.enabled' }) ?? false;
   const { data: certsData } = useQuery({
     queryKey: ['certificates'],
@@ -30,8 +31,24 @@ export function HarborSection({ control, register, errors }: Props) {
             className="w-4 h-4 rounded border-zinc-700 bg-zinc-800 text-brand-600 focus:ring-brand-500"
           />
           <span className="text-sm font-medium text-zinc-200">Accept live broadcasts</span>
-          <HelpTooltip text="When enabled, broadcasters (e.g., BUTT) can connect directly to the Mix Engine, which takes over the stream and crossfades back to the queue when they disconnect." />
+          <HelpTooltip text="When enabled, broadcasters (e.g., BUTT) can connect directly to the Mix Engine's harbor. What happens next depends on Live Input Mode below." />
         </label>
+
+        {harborEnabled && (
+          <div>
+            <label className="block text-sm font-medium text-zinc-300 mb-2 flex items-center">
+              Live Input Mode
+              <HelpTooltip text="Take Over: automation is fully silent while a live source is connected (today's default behavior). Mix with Segment Audio: both play simultaneously, automation ducked under the live source — see Ducking below." />
+            </label>
+            <select
+              {...register('harbor.live_mode')}
+              className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white focus:outline-none focus:border-brand-500"
+            >
+              <option value="takeover">Take Over</option>
+              <option value="mix">Mix with Segment Audio</option>
+            </select>
+          </div>
+        )}
 
         <div className="grid grid-cols-2 gap-4">
           <div>

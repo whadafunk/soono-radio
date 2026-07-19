@@ -84,6 +84,10 @@ export const LiquidsoapConfigSchema = z.object({
       enabled: z.boolean().default(false),
       certificate_path: z.string().nullable().default(null),
     }).default({}),
+    // 'takeover': live fully replaces automation (today's behavior, default).
+    // 'mix': live and automation play simultaneously, automation ducked under
+    // live per the `ducking` settings below.
+    live_mode: z.enum(['takeover', 'mix']).default('takeover'),
   }),
   crossfade: z.object({
     duration_seconds: z.number().nonnegative().max(30).default(3),
@@ -101,11 +105,13 @@ export const LiquidsoapConfigSchema = z.object({
     enabled: z.boolean().default(false),
     target_lufs: z.number().default(-23),
   }).default({}),
+  // Only meaningful when harbor.live_mode === 'mix' — presence-based (not
+  // signal-level) ducking of the automation queue while a live source is
+  // connected, using LiquidSoap's built-in smooth_add. One shared speed for
+  // both ducking down and recovering, not separate attack/release.
   ducking: z.object({
-    enabled: z.boolean().default(false),
     depth_db: z.number().min(-30).max(0).default(-9),
-    attack_ms: z.number().int().min(1).max(2000).default(100),
-    release_ms: z.number().int().min(1).max(10000).default(1000),
+    duration_seconds: z.number().min(0.05).max(10).default(1.0),
   }).default({}),
   silence_detection: z.object({
     threshold_seconds: z.number().int().min(1).max(60).default(5),
