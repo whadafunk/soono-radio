@@ -1530,8 +1530,14 @@ function formatDuration(minutes: number): string {
   return m > 0 ? `${h}h ${m}m` : `${h}h`;
 }
 
-function addMinutes(timeStr: string, minutes: number): string {
-  const total = (timeToMinutes(timeStr) + minutes) % (24 * 60);
+// Adds minutes to an HH:MM time, clamping at end-of-day (23:59) instead of
+// wrapping past midnight. Schedule windows can't wrap (the backend rejects
+// time_end < time_start — a wraparound window is unmatchable by the resolver
+// and has caused dead-air incidents), so an auto-computed end that would
+// cross midnight must saturate at 23:59, not silently come back around as a
+// tiny morning time.
+function addMinutesClamped(timeStr: string, minutes: number): string {
+  const total = Math.min(timeToMinutes(timeStr) + minutes, 24 * 60 - 1);
   return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`;
 }
 
@@ -2027,21 +2033,22 @@ function NewSlotPopover({
   const [selectedShowId,  setSelectedShowId]  = useState<number | null>(null);
   const [selectedClockId, setSelectedClockId] = useState<number | null>(null);
   const [timeStart, setTimeStart] = useState(initStart);
-  const [timeEnd,   setTimeEnd]   = useState(() => addMinutes(initStart, 60));
+  const [timeEnd,   setTimeEnd]   = useState(() => addMinutesClamped(initStart, 60));
 
   const computedEnd = useMemo(() => {
     if (selectedShowId) {
       const show = shows.find((s) => s.id === selectedShowId);
-      if (show) return addMinutes(timeStart, show.duration_minutes);
+      if (show) return addMinutesClamped(timeStart, show.duration_minutes);
     }
     if (selectedClockId) {
       const clock = clocks.find((c) => c.id === selectedClockId);
-      if (clock && clock.duration_seconds > 0) return addMinutes(timeStart, Math.round(clock.duration_seconds / 60));
+      if (clock && clock.duration_seconds > 0) return addMinutesClamped(timeStart, Math.round(clock.duration_seconds / 60));
     }
     return null;
   }, [selectedShowId, selectedClockId, timeStart, shows, clocks]);
 
   const effectiveEnd = computedEnd ?? timeEnd;
+  const windowInvalid = !!timeStart && !!effectiveEnd && timeToMinutes(effectiveEnd) <= timeToMinutes(timeStart);
 
   const left = Math.min(x + 12, window.innerWidth  - 288);
   const top  = Math.min(y,      window.innerHeight - 480);
@@ -2089,12 +2096,17 @@ function NewSlotPopover({
       />
 
       <div className="px-4 py-3 border-t border-zinc-800 flex flex-col gap-2">
+        {windowInvalid && (
+          <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-2.5 py-1.5">
+            End must be after start — windows can't cross midnight. Use 23:59 for end of day.
+          </p>
+        )}
         {error && (
           <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2.5 py-1.5">{error}</p>
         )}
         <button
           onClick={() => onSave(selectedShowId, selectedClockId, timeStart, effectiveEnd)}
-          disabled={isPending || !timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
+          disabled={isPending || !timeStart || !effectiveEnd || windowInvalid || (!selectedShowId && !selectedClockId)}
           className="w-full py-1.5 text-sm font-medium bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors disabled:opacity-40"
         >
           {isPending ? 'Scheduling…' : 'Schedule'}
@@ -2241,16 +2253,16 @@ function CalNewSlotPopover({
   const [selectedShowId,  setSelectedShowId]  = useState<number | null>(templateEntry?.show_id  ?? null);
   const [selectedClockId, setSelectedClockId] = useState<number | null>(templateEntry?.clock_id ?? null);
   const [timeStart, setTimeStart] = useState(initStart);
-  const [timeEnd,   setTimeEnd]   = useState(() => addMinutes(initStart, 60));
+  const [timeEnd,   setTimeEnd]   = useState(() => addMinutesClamped(initStart, 60));
 
   const computedEnd = useMemo(() => {
     if (selectedShowId) {
       const show = shows.find((s) => s.id === selectedShowId);
-      if (show) return addMinutes(timeStart, show.duration_minutes);
+      if (show) return addMinutesClamped(timeStart, show.duration_minutes);
     }
     if (selectedClockId) {
       const clock = clocks.find((c) => c.id === selectedClockId);
-      if (clock && clock.duration_seconds > 0) return addMinutes(timeStart, Math.round(clock.duration_seconds / 60));
+      if (clock && clock.duration_seconds > 0) return addMinutesClamped(timeStart, Math.round(clock.duration_seconds / 60));
     }
     return null;
   }, [selectedShowId, selectedClockId, timeStart, shows, clocks]);
@@ -2258,6 +2270,7 @@ function CalNewSlotPopover({
   // Pre-fill end for override: use the template entry's own end time
   const templateEnd = templateEntry ? templateEntry.time_end : null;
   const effectiveEnd = computedEnd ?? templateEnd ?? timeEnd;
+  const windowInvalid = !!timeStart && !!effectiveEnd && timeToMinutes(effectiveEnd) <= timeToMinutes(timeStart);
 
   const left        = Math.min(x + 12, window.innerWidth  - 288);
   const top         = Math.min(y,      window.innerHeight - 500);
@@ -2314,12 +2327,17 @@ function CalNewSlotPopover({
       />
 
       <div className="px-4 py-3 border-t border-zinc-800 flex flex-col gap-2">
+        {windowInvalid && (
+          <p className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-md px-2.5 py-1.5">
+            End must be after start — windows can't cross midnight. Use 23:59 for end of day.
+          </p>
+        )}
         {error && (
           <p className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2.5 py-1.5">{error}</p>
         )}
         <button
           onClick={() => onSave(date, selectedShowId, selectedClockId, timeStart, effectiveEnd, isOverride)}
-          disabled={isPending || !timeStart || !effectiveEnd || (!selectedShowId && !selectedClockId)}
+          disabled={isPending || !timeStart || !effectiveEnd || windowInvalid || (!selectedShowId && !selectedClockId)}
           className="w-full py-1.5 text-sm font-medium bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition-colors disabled:opacity-40"
         >
           {isPending ? 'Scheduling…' : isOverride ? 'Override for this day' : 'Schedule'}
