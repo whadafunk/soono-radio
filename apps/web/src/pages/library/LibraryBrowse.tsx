@@ -1498,6 +1498,15 @@ function Cell({
           {media.title || (
             <span className="text-zinc-500 italic">{media.original_filename}</span>
           )}
+          {!!media.playlist_count && (
+            <span
+              title={`In ${media.playlist_count} playlist${media.playlist_count !== 1 ? 's' : ''}`}
+              className="inline-flex items-center gap-0.5 ml-1.5 px-1.5 py-0.5 rounded-full bg-zinc-800 text-zinc-400 text-[10px] align-middle"
+            >
+              <ListPlus className="w-2.5 h-2.5" />
+              {media.playlist_count}
+            </span>
+          )}
           {playingId === media.id && (
             <div className="mt-1" onClick={(e) => e.stopPropagation()}>
               <audio

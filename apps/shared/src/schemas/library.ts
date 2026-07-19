@@ -75,6 +75,11 @@ export const MediaSchema = z.object({
   favorite: z.boolean(),
   created_at: z.coerce.date(),
   updated_at: z.coerce.date(),
+
+  // Computed at query time — how many same-category playlists this track
+  // belongs to. Only populated by GET /library; absent (not 0) on
+  // single-item endpoints that don't compute it.
+  playlist_count: z.number().int().nonnegative().optional(),
 });
 export type Media = z.infer<typeof MediaSchema>;
 

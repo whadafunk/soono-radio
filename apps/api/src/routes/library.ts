@@ -1,5 +1,5 @@
 import { FastifyInstance } from 'fastify';
-import { eq, and, or, like, desc, asc, inArray, sql, count, SQL } from 'drizzle-orm';
+import { eq, and, or, like, desc, asc, inArray, sql, count, getTableColumns, SQL } from 'drizzle-orm';
 import { createWriteStream, createReadStream } from 'fs';
 import { stat, unlink } from 'fs/promises';
 import { pipeline } from 'stream/promises';
@@ -334,7 +334,19 @@ export async function libraryRoutes(fastify: FastifyInstance) {
     const safeOffset = Math.max(0, parseInt(offset ?? '0', 10) || 0);
 
     const itemsQuery = db
-      .select()
+      .select({
+        ...getTableColumns(media),
+        // Drizzle renders ${media.id}/${media.category} unqualified when
+        // interpolated into a *selected* sql column (unlike inside .where(),
+        // where it qualifies correctly) — "id" then collides with both
+        // playlist_media.id and playlists.id, erroring as ambiguous. Reference
+        // the outer table explicitly instead of relying on interpolation.
+        playlist_count: sql<number>`(
+          SELECT COUNT(*) FROM playlist_media pm
+          JOIN playlists p ON p.id = pm.playlist_id
+          WHERE pm.media_id = media.id AND p.type = media.category
+        )`,
+      })
       .from(media)
       .orderBy(sortDir(sortColumn))
       .limit(safeLimit)
