@@ -190,6 +190,30 @@ queue_out = amplify(1.0, override="liq_amplify", queue)
 {{else}}
 queue_out = queue
 {{/if}}
+{{#if crossfade_enabled}}
+{{#if crossfade.smart}}
+# Smart crossfade: LiquidSoap compares the outgoing/incoming track's volume
+# level and picks the transition per pair (full cross / fade-out-only /
+# fade-in-only / no fade) — its internal fades are always sinusoidal,
+# regardless of crossfade.fade_shape (fades.liq's cross.smart hardcodes it).
+queue_out = crossfade(
+  duration={{float crossfade.duration_seconds}},
+  smart=true,
+  fade_in={{float crossfade.duration_seconds}},
+  fade_out={{float crossfade.duration_seconds}},
+  queue_out
+)
+{{else}}
+# Plain crossfade with the configured fade shape (fades.liq's cross.simple
+# hardcodes "sin" — this is a custom transition so fade_shape actually applies).
+def crossfade_transition(a, b) =
+  def crossfade_fade_out(s) = fade.out(type="{{crossfade_shape_ls}}", duration={{float crossfade.duration_seconds}}, s) end
+  def crossfade_fade_in(s) = fade.in(type="{{crossfade_shape_ls}}", duration={{float crossfade.duration_seconds}}, s) end
+  add(normalize=false, [crossfade_fade_in(b.source), crossfade_fade_out(a.source)])
+end
+queue_out = cross(duration={{float crossfade.duration_seconds}}, crossfade_transition, queue_out)
+{{/if}}
+{{/if}}
 # Source priority — live takes over when present, queue otherwise
 {{#if harbor_and_ducking}}
 # Ducking requested but not yet implemented in this LS version (TODO).
@@ -199,9 +223,6 @@ queue_out = queue
 radio = fallback(track_sensitive=false, [live, queue_out, blank()])
 {{else}}
 radio = fallback(track_sensitive=false, [queue_out, blank()])
-{{/if}}
-{{#if crossfade_enabled}}
-# Crossfade requested ({{crossfade.duration_seconds}}s {{crossfade.type}}) but skipped — LS 2.2's crossfade rejects fallible sources. TODO.
 {{/if}}
 {{#if master_bus.soft_limiter}}
 # Master bus limiter (high-ratio compressor, only engages above threshold_db) —

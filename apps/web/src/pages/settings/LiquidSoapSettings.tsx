@@ -152,7 +152,7 @@ export function LiquidSoapSettings() {
       >
         <OutputSection register={register} errors={errors} control={control} icecastSockets={icecastSockets} />
         <HarborSection control={control} register={register} errors={errors} />
-        <CrossfadeSection register={register} errors={errors} />
+        <CrossfadeSection register={register} errors={errors} control={control} />
         <LoudnessNormalizationSection register={register} control={control} setValue={setValue} />
         <MasterBusSection register={register} control={control} setValue={setValue} />
         <DuckingSection register={register} control={control} />

@@ -12,8 +12,18 @@ export const CODEC_BITRATES: Record<Codec, number[]> = {
   vorbis: [96, 128, 160, 192, 256],
 };
 
-export const CROSSFADE_TYPES = ['linear', 'smart', 'logarithmic'] as const;
-export type CrossfadeType = (typeof CROSSFADE_TYPES)[number];
+// Fade curve shape, independent of "smart" mode — matches LiquidSoap's
+// fade.in/fade.out `type` argument (lin|log|sin|exp). Only takes effect when
+// crossfade.smart is off: LiquidSoap's built-in smart-crossfade transition
+// (cross.smart in fades.liq) hardcodes its internal fades to sinusoidal
+// regardless of this setting, so the shape picker has no effect in smart mode.
+export const FADE_SHAPES = [
+  { key: 'linear', label: 'Linear', ls: 'lin' },
+  { key: 'logarithmic', label: 'Logarithmic', ls: 'log' },
+  { key: 'sinusoidal', label: 'Sinusoidal', ls: 'sin' },
+  { key: 'exponential', label: 'Exponential', ls: 'exp' },
+] as const;
+export type FadeShape = (typeof FADE_SHAPES)[number]['key'];
 
 // Common integrated-loudness targets. target_lufs accepts any number — these
 // are just the presets offered in the Settings UI dropdown.
@@ -77,7 +87,8 @@ export const LiquidsoapConfigSchema = z.object({
   }),
   crossfade: z.object({
     duration_seconds: z.number().nonnegative().max(30).default(3),
-    type: z.enum(CROSSFADE_TYPES).default('linear'),
+    smart: z.boolean().default(false),
+    fade_shape: z.enum(['linear', 'logarithmic', 'sinusoidal', 'exponential']).default('linear'),
   }),
   master_bus: z.object({
     soft_limiter: z.boolean().default(false),

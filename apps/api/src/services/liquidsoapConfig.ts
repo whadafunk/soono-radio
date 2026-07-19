@@ -27,6 +27,14 @@ const ICECAST_CONFIG_PATH =
 // into the template must go through this helper rather than a bare {{path}}.
 Handlebars.registerHelper('float', (value: number) => (Number.isInteger(value) ? `${value}.0` : `${value}`));
 
+// Maps our schema's fade_shape key to LiquidSoap's fade.in/fade.out `type` literal.
+const FADE_SHAPE_LS: Record<string, string> = {
+  linear: 'lin',
+  logarithmic: 'log',
+  sinusoidal: 'sin',
+  exponential: 'exp',
+};
+
 const DEFAULT_CONFIG: LiquidsoapConfig = LiquidsoapConfigSchema.parse({
   output: {},
   harbor: { password: 'changeme' },
@@ -88,6 +96,7 @@ function renderScript(templateSource: string, config: LiquidsoapConfig, icecastS
     icecast_source_password: escapeStr(icecastSourcePassword),
     codec_string: formatCodec(config.output.codec, config.output.bitrate_kbps),
     crossfade_enabled: config.crossfade.duration_seconds > 0,
+    crossfade_shape_ls: FADE_SHAPE_LS[config.crossfade.fade_shape] ?? 'lin',
     harbor_and_ducking: config.harbor.enabled && config.ducking.enabled,
     harbor_tls_transport,
   };
