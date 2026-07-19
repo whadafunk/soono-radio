@@ -3327,6 +3327,54 @@ Apply button (monitoring surface, not an editing surface).
 
 ---
 
+### Decision 111 — Sweeper campaigns become their own entity, with their own delivery design (design phase, OPEN)
+
+**Status: opened 2026-07-19 at the operator's request. Design not started — this entry
+pins the current facts, the entity decision, and the open questions.**
+
+**Current facts (verified in code 2026-07-19): sweeps are contract-only — nothing
+delivers them.** `campaigns.sweeps_per_month` / `max_sweeps_per_day` are stored and read
+by nothing; the campaign engine's spot pool filters `campaign_media.play_as_spot = true`,
+so clips marked as sweepers are invisible to it; `clock_segments.accept_sweepers` /
+`sweeper_config` are written by the Clocks UI and read by no supervisor code. The D65
+"written by the UI, read by nothing" class, acknowledged and now scheduled for a real
+design instead of an accidental one.
+
+**The entity decision (agreed with the operator):** sweeper campaigns split out of the
+spot campaign into a sibling entity — same customer, own dates, own monthly count, own
+clips, own validator and ledger. Rationale: the D96 contract is spot-shaped end to end
+(total_plays = break plays, duration brackets quantize break capacity, 7-gate eligibility
+is break-based, validator counts break inventory, ledger/forecast count break plays).
+Sweeps share none of that — they air in branding positions inside music segments
+(`accept_sweepers`), have no bracket, and consume no break capacity — so keeping them
+inside `campaigns` means every spot-side feature grows an "except for sweeps" carve-out
+forever. Precedent: music campaigns are already a separate entity/tab, not a mode of the
+spot form. The sold-as-a-package concern ("90 spots + 40 sweeps, one deal") is a BILLING
+concern, resolved at invoice level (per-customer aggregation, two line items), not by
+merging delivery models.
+
+**Migration is cheap while nothing reads the fields:** move `sweeps_per_month` /
+`max_sweeps_per_day` and the non-spot clips to the new entity, drop the Sweep Pacing
+section and the per-clip spot/sweeper toggle from the campaign form. (Form-field removals
+are destructive UI changes — re-confirm with the operator at implementation time per the
+CLAUDE.md rule, though this entry records his intent.)
+
+**Open questions for the design session:**
+1. Delivery rules: which positions take a sweeper (interstitial branding slots in music
+   segments where `accept_sweepers` allows? replacing a station ID at cadence, or in
+   addition?), what `sweeper_config` should actually mean, and per-day/per-hour pacing
+   from the monthly count.
+2. Separation semantics: distance from the same advertiser's SPOTS (a sweep right after
+   the same customer's break spot sounds like a mistake) and from other sweepers.
+3. Ledger/billing: sweep plays counted in their own ledger; invoice line composition
+   with the spot campaign; whether aborted sweeps follow the D63 aborted=zero rule.
+4. Validator: what sale-time feasibility means for sweeps (eligible music-segment
+   inventory per day vs monthly count) and whether the campaign problem badges extend.
+5. Whether existing `campaigns` rows with sweep values need migrating (prod: check
+   before assuming none).
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
