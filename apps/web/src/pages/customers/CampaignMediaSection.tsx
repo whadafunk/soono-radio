@@ -213,7 +213,10 @@ function LibraryPickerModal({
           {items.map((mediaItem) => {
             const attachmentId = attachedByMediaId.get(mediaItem.id);
             const isAttached = attachmentId !== undefined;
-            const tooLong = !isAttached && durationBracket != null && (mediaItem.duration_seconds ?? 0) > durationBracket;
+            // No bracket yet → any clip up to the largest bracket (90s) is
+            // attachable; the first one sets the bracket server-side.
+            const maxSeconds = durationBracket ?? 90;
+            const tooLong = !isAttached && (mediaItem.duration_seconds ?? 0) > maxSeconds;
             return (
               <button
                 key={mediaItem.id}
@@ -270,8 +273,10 @@ function LibraryPickerModal({
           })}
         </div>
 
-        <div className="px-4 py-3 border-t border-zinc-800 text-xs text-zinc-500">
-          Click a spot to add or remove it. Close when done.
+        <div className="px-4 py-3 border-t border-zinc-800 text-xs text-zinc-400">
+          {durationBracket == null
+            ? 'No bracket set — the first spot you attach sets it (rounded up to the nearest bracket).'
+            : 'Click a spot to add or remove it. Close when done.'}
         </div>
       </div>
     </div>
@@ -289,6 +294,8 @@ export function CampaignMediaSection({
 }) {
   const queryClient = useQueryClient();
   const [showPicker, setShowPicker] = useState(false);
+  const [derivedNote, setDerivedNote] = useState<string | null>(null);
+  const [attachError, setAttachError] = useState<string | null>(null);
 
   const { data: clips = [], isLoading } = useQuery<CampaignMediaWithMedia[]>({
     queryKey: ['campaign-media', campaignId],
@@ -300,7 +307,21 @@ export function CampaignMediaSection({
 
   const addMutation = useMutation({
     mutationFn: (data: CampaignMediaAdd) => addCampaignMedia(campaignId, data),
-    onSuccess: invalidate,
+    onSuccess: (res) => {
+      invalidate();
+      setAttachError(null);
+      if (res.derived_duration_bracket != null) {
+        // The attach set the campaign's bracket server-side — refresh
+        // everything that reads it: the campaign row (edit form + attach
+        // filter), the validation badges, and the budget (the campaign now
+        // counts as demand).
+        queryClient.invalidateQueries({ queryKey: ['campaigns'] });
+        queryClient.invalidateQueries({ queryKey: ['campaign-validation-summary'] });
+        queryClient.invalidateQueries({ predicate: (q) => String(q.queryKey[0]).startsWith('spot-budget') });
+        setDerivedNote(`Duration bracket set to ${res.derived_duration_bracket}s from this clip.`);
+      }
+    },
+    onError: (err) => setAttachError((err as Error).message),
   });
 
   const toggleMutation = useMutation({
@@ -362,6 +383,18 @@ export function CampaignMediaSection({
               isPending={isPending}
             />
           ))
+        )}
+
+        {derivedNote && (
+          <p className="text-xs text-brand-400">{derivedNote}</p>
+        )}
+        {attachError && (
+          <p className="text-xs text-red-400">{attachError}</p>
+        )}
+        {durationBracket == null && (
+          <p className="text-xs text-zinc-400">
+            No duration bracket set — the first spot you attach sets it (rounded up to the nearest bracket).
+          </p>
         )}
 
         <button

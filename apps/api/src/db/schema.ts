@@ -815,7 +815,10 @@ export const campaigns = sqliteTable(
     // (play_history, aborted=false). Default 0 exists only for the column
     // add on legacy rows (wiped for D96); forms always set it.
     total_plays: integer('total_plays').notNull().default(0),
-    duration_bracket: integer('duration_bracket').notNull().default(30),
+    // Null = not yet set — chosen manually or derived from the first attached
+    // spot clip (rounded up to the nearest bracket). Bracket-less campaigns
+    // can't air (no clips → engine Gate 5) and don't count as budget demand.
+    duration_bracket: integer('duration_bracket'),
     max_plays_per_day: integer('max_plays_per_day'),
     // D96: minimum minutes between two plays of this campaign (anti-clustering).
     min_gap_minutes: integer('min_gap_minutes'),

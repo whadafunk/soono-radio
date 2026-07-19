@@ -371,7 +371,11 @@ export const CampaignSchema = z.object({
   ends_on: z.string(),
   // Contract volume over [starts_on, ends_on] (D96 — not a monthly figure).
   total_plays: z.number().int().positive(),
-  duration_bracket: durationBracketField,
+  // Null = not yet set — chosen manually or derived from the first attached
+  // spot clip (rounded up to the nearest bracket). A bracket-less campaign
+  // has no clips, so it can't air (engine Gate 5) and is excluded from
+  // budget demand.
+  duration_bracket: durationBracketField.nullable(),
   max_plays_per_day: z.number().int().positive().nullable(),
   min_gap_minutes: z.number().int().positive().nullable(),
   pacing_mode: z.enum(PACING_MODES).default('even'),
@@ -406,7 +410,7 @@ export const CampaignCreateSchema = z.object({
   ),
   ends_on: z.string().min(1, 'End date required'),
   total_plays: z.number().int().positive('Must be at least 1'),
-  duration_bracket: durationBracketField,
+  duration_bracket: durationBracketField.nullable().optional(),
   max_plays_per_day: z.number().int().positive().nullable().optional(),
   min_gap_minutes: z.number().int().positive().nullable().optional(),
   pacing_mode: z.enum(PACING_MODES).default('even'),
@@ -431,7 +435,7 @@ export const CampaignPatchSchema = z.object({
   starts_on: z.string().optional(),
   ends_on: z.string().optional(),
   total_plays: z.number().int().positive().optional(),
-  duration_bracket: durationBracketField.optional(),
+  duration_bracket: durationBracketField.nullable().optional(),
   max_plays_per_day: z.number().int().positive().nullable().optional(),
   min_gap_minutes: z.number().int().positive().nullable().optional(),
   pacing_mode: z.enum(PACING_MODES).optional(),
@@ -479,7 +483,7 @@ export const CampaignValidationDraftSchema = z.object({
   starts_on: z.string(),
   ends_on: z.string(),
   total_plays: z.number().int().positive(),
-  duration_bracket: durationBracketField,
+  duration_bracket: durationBracketField.nullable().optional(),
   allowed_interval_ids: z.array(z.number().int()).nullable().optional(),
   interval_id: z.number().int().nullable().optional(),
   interval_plays_per_day: z.number().int().positive().nullable().optional(),
@@ -714,6 +718,9 @@ export const CampaignMediaWithMediaSchema = CampaignMediaSchema.extend({
   artist: z.string().nullable(),
   duration_seconds: z.number().nullable(),
   original_filename: z.string().nullable(),
+  // Set on the attach response when the campaign had no duration bracket and
+  // this clip's length derived one (rounded up to the nearest bracket).
+  derived_duration_bracket: durationBracketField.nullable().optional(),
 });
 export type CampaignMediaWithMedia = z.infer<typeof CampaignMediaWithMediaSchema>;
 

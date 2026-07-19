@@ -167,7 +167,11 @@ export async function validateCampaignDraft(
 
   // ── Bracket vs break sizes ────────────────────────────────────────────────
   const minBreak = Math.min(...eligible.map((o) => o.durationSeconds));
-  if (draft.duration_bracket > minBreak) {
+  if (draft.duration_bracket == null) {
+    // Warn, never fail: a missing bracket is a normal pre-media state, not a
+    // sale blocker — it gets derived from the first attached spot clip.
+    push('bracket', 'warn', 'Duration bracket not set — it will be derived from the first attached clip.');
+  } else if (draft.duration_bracket > minBreak) {
     push('bracket', 'fail',
       `The ${draft.duration_bracket}s bracket does not fit the smallest break in the allowed windows (${Math.round(minBreak)}s) — those breaks could never carry this spot.`);
   } else {
@@ -196,28 +200,34 @@ export async function validateCampaignDraft(
   }
 
   // ── Seconds: sold against effective capacity (promo margin reserved) ──────
-  const effectiveSeconds = eligible.reduce((s, o) => s + o.durationSeconds, 0) * (1 - promoMargin);
-  const draftDemand = draftRemaining * draft.duration_bracket;
-  let overlapDemand = 0;
-  for (const c of others) {
-    const rem = Math.max(0, c.total_plays - (deliveredByCampaign.get(c.id) ?? 0));
-    if (rem === 0) continue;
-    const cAllowed = normalizeIds(c.allowed_interval_ids) ?? stationDefaults;
-    const cEligible = occurrences.filter((o) => occInAllowed(o, cAllowed, windows));
-    if (cEligible.length === 0) continue;
-    const shared = cEligible.filter((o) => eligibleKeys.has(occKey(o))).length;
-    overlapDemand += rem * c.duration_bracket * (shared / cEligible.length);
-  }
-  const totalDemand = draftDemand + overlapDemand;
-  if (totalDemand > effectiveSeconds) {
-    push('seconds', 'fail',
-      `This campaign needs ${Math.round(draftDemand / 60)} min of sellable time; together with the ${Math.round(overlapDemand / 60)} min other campaigns already claim in the same windows, that exceeds the ${Math.round(effectiveSeconds / 60)} min available (after the ${Math.round(promoMargin * 100)}% station reserve).`);
-  } else if (totalDemand > effectiveSeconds * 0.9) {
-    push('seconds', 'warn',
-      `Sellable time in the allowed windows would be ${Math.round((totalDemand / effectiveSeconds) * 100)}% committed — deliverable, but the station reserve becomes the only slack.`);
+  if (draft.duration_bracket == null) {
+    push('seconds', 'warn', 'Seconds-capacity check skipped — bracket not set yet (derived from the first attached clip).');
   } else {
-    push('seconds', 'ok',
-      `${Math.round(draftDemand / 60)} min needed, ${Math.round((effectiveSeconds - overlapDemand) / 60)} min free in the allowed windows.`);
+    const effectiveSeconds = eligible.reduce((s, o) => s + o.durationSeconds, 0) * (1 - promoMargin);
+    const draftDemand = draftRemaining * draft.duration_bracket;
+    let overlapDemand = 0;
+    for (const c of others) {
+      // Bracket-less campaigns have no clips, can't air, and claim no time.
+      if (c.duration_bracket == null) continue;
+      const rem = Math.max(0, c.total_plays - (deliveredByCampaign.get(c.id) ?? 0));
+      if (rem === 0) continue;
+      const cAllowed = normalizeIds(c.allowed_interval_ids) ?? stationDefaults;
+      const cEligible = occurrences.filter((o) => occInAllowed(o, cAllowed, windows));
+      if (cEligible.length === 0) continue;
+      const shared = cEligible.filter((o) => eligibleKeys.has(occKey(o))).length;
+      overlapDemand += rem * c.duration_bracket * (shared / cEligible.length);
+    }
+    const totalDemand = draftDemand + overlapDemand;
+    if (totalDemand > effectiveSeconds) {
+      push('seconds', 'fail',
+        `This campaign needs ${Math.round(draftDemand / 60)} min of sellable time; together with the ${Math.round(overlapDemand / 60)} min other campaigns already claim in the same windows, that exceeds the ${Math.round(effectiveSeconds / 60)} min available (after the ${Math.round(promoMargin * 100)}% station reserve).`);
+    } else if (totalDemand > effectiveSeconds * 0.9) {
+      push('seconds', 'warn',
+        `Sellable time in the allowed windows would be ${Math.round((totalDemand / effectiveSeconds) * 100)}% committed — deliverable, but the station reserve becomes the only slack.`);
+    } else {
+      push('seconds', 'ok',
+        `${Math.round(draftDemand / 60)} min needed, ${Math.round((effectiveSeconds - overlapDemand) / 60)} min free in the allowed windows.`);
+    }
   }
 
   // ── Interval guarantee: worst daily occurrence binds ──────────────────────

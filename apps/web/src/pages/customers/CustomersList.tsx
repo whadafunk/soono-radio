@@ -97,6 +97,22 @@ function fmtMinutes(mins: number): string {
   return mins.toFixed(1);
 }
 
+// Names of form fields that failed validation, for a visible submit-failure
+// summary — react-hook-form otherwise blocks the submit silently, which reads
+// as "the button does nothing" (same pattern as LiquidSoapSettings).
+function collectErrorPaths(obj: Record<string, unknown>, prefix = ''): string[] {
+  const paths: string[] = [];
+  for (const [key, val] of Object.entries(obj)) {
+    const path = prefix ? `${prefix}.${key}` : key;
+    if (val && typeof val === 'object' && 'message' in val) {
+      paths.push(path);
+    } else if (val && typeof val === 'object') {
+      paths.push(...collectErrorPaths(val as Record<string, unknown>, path));
+    }
+  }
+  return paths;
+}
+
 // ─── Global Budget Panel ──────────────────────────────────────────────────────
 
 function GlobalBudgetPanel() {
@@ -427,10 +443,11 @@ function BudgetImpactRow({
   startsOn: string;
   endsOn: string;
   totalPlays: number;
-  durationBracket: number;
+  durationBracket: number | null;
   firstInSlot: boolean;
 }) {
-  const isValid = startsOn.length === 10 && endsOn.length === 10 && totalPlays > 0;
+  const isValid = startsOn.length === 10 && endsOn.length === 10 && totalPlays > 0
+    && durationBracket != null;
 
   // Always use the 30-day rolling reference window, not the campaign's own dates.
   const today = new Date().toISOString().slice(0, 10);
@@ -444,6 +461,18 @@ function BudgetImpactRow({
     enabled: isValid,
     staleTime: 5 * 60 * 1000,
   });
+
+  // No fake numbers: without a bracket there is no honest draw estimate.
+  if (durationBracket == null) {
+    return (
+      <div className="rounded-lg bg-zinc-800/40 border border-zinc-700/50 px-3 py-2">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Budget Impact (next 30 days)</p>
+        <p className="text-xs text-zinc-400 mt-1">
+          Appears once the duration bracket is set — by picking it above or attaching the first clip.
+        </p>
+      </div>
+    );
+  }
 
   if (!isValid) return null;
 
@@ -784,10 +813,21 @@ export function CustomersList() {
 
   const createCampaignMutation = useMutation({
     mutationFn: createCampaign,
-    onSuccess: () => {
+    onSuccess: (created) => {
+      // Seed the cache before opening the edit modal — EditModal resolves the
+      // campaign from the ['campaigns'] query with a non-null assertion, so
+      // the row must exist before setEditTarget fires.
+      queryClient.setQueryData<(Campaign & { customer_name: string })[]>(
+        ['campaigns'],
+        (old = []) => [
+          ...old,
+          { ...created, customer_name: customers.find((c) => c.id === created.customer_id)?.name ?? '' },
+        ],
+      );
       queryClient.invalidateQueries({ queryKey: ['campaigns'] });
       setIsCreatingCampaign(false);
-      showSaveStatus('success', 'Campaign created');
+      setEditTarget({ type: 'campaign', id: created.id });
+      showSaveStatus('success', 'Campaign created — attach media below');
     },
     onError: (err) => showSaveStatus('error', (err as Error).message),
   });
@@ -1723,11 +1763,13 @@ function CreateCampaignForm({
   const { data: shows = [] }     = useQuery<Show[]>({ queryKey: ['shows'], queryFn: fetchShows });
   const { data: intervals = [] } = useQuery<BroadcastInterval[]>({ queryKey: ['intervals'], queryFn: fetchIntervals });
 
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const { control, register, handleSubmit, formState, setValue } = useForm<CampaignCreate>({
     resolver: zodResolver(CampaignCreateSchema),
     defaultValues: {
       customer_id: defaultCustomerId,
       total_plays: 90,
+      duration_bracket: null,
       pacing_mode: 'even',
       allowed_interval_ids: null,
       advertiser_separation_spots: 1,
@@ -1748,14 +1790,17 @@ function CreateCampaignForm({
   const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? '';
   const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? '';
   const watchedPlays       = useWatch({ control, name: 'total_plays' }) ?? 0;
-  const watchedDuration    = useWatch({ control, name: 'duration_bracket' }) ?? 30;
+  const watchedDuration    = useWatch({ control, name: 'duration_bracket' }) ?? null;
 
   // Broadcast Interval and Associated Show are mutually exclusive
   useEffect(() => { if (selectedIntervalId) { setValue('show_id', null); setValue('plays_per_show', null); } }, [selectedIntervalId]);
   useEffect(() => { if (selectedShowId) { setValue('interval_id', null); setValue('interval_plays_per_day', null); } }, [selectedShowId]);
 
   return (
-    <form onSubmit={handleSubmit(onSubmit)}>
+    <form onSubmit={handleSubmit(
+      (data) => { setSubmitError(null); onSubmit(data); },
+      (errs) => setSubmitError(`Check these fields: ${collectErrorPaths(errs as Record<string, unknown>).join(', ')}`),
+    )}>
       <div className="px-6 py-5 space-y-4 max-h-[70vh] overflow-y-auto">
         <div>
           <label className={LABEL}>Customer *</label>
@@ -1795,11 +1840,15 @@ function CreateCampaignForm({
           <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Spot Pacing</p>
           <div>
             <label className={LABEL}>
-              Duration Bracket *
-              <HelpTooltip text="The sold slot length for this campaign. Clips longer than this bracket cannot be attached." />
+              Duration Bracket
+              <HelpTooltip text="The sold slot length for this campaign. Leave unset to derive it from the first attached clip (rounded up to the nearest bracket). Clips longer than the bracket cannot be attached." />
             </label>
-            <select {...register('duration_bracket', { valueAsNumber: true })} disabled={isLoading} className={INPUT}>
-              <option value="" className="bg-zinc-900">— Select —</option>
+            <select
+              {...register('duration_bracket', { setValueAs: (v) => (v === '' || v == null ? null : Number(v)) })}
+              disabled={isLoading}
+              className={INPUT}
+            >
+              <option value="" className="bg-zinc-900">— Not set — derived from first clip</option>
               {[15,30,45,60,90].map((s) => (
                 <option key={s} value={s} className="bg-zinc-900">{s}s</option>
               ))}
@@ -1901,7 +1950,7 @@ function CreateCampaignForm({
                 <HelpTooltip text="Pay-extra guarantee: at least N plays every day inside this named window. A minimum, not a fence — other plays still land anywhere in the allowed airing windows. Mutually exclusive with a show guarantee." />
               </label>
               <select
-                {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
+                {...register('interval_id', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
                 disabled={isLoading || !!selectedShowId}
                 className={INPUT + (selectedShowId ? ' opacity-40' : '')}
               >
@@ -1933,7 +1982,7 @@ function CreateCampaignForm({
                 <HelpTooltip text="Guarantee: at least N plays in every airing of this show. A minimum, not a fence. Mutually exclusive with an interval guarantee." />
               </label>
               <select
-                {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
+                {...register('show_id', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
                 disabled={isLoading || !!selectedIntervalId}
                 className={INPUT + (selectedIntervalId ? ' opacity-40' : '')}
               >
@@ -2038,7 +2087,8 @@ function CreateCampaignForm({
 
         <CampaignValidationPanel raw={allFormValues} />
       </div>
-      <div className="px-6 py-4 border-t border-zinc-700 flex justify-end gap-2 bg-zinc-800/50 rounded-b-xl">
+      <div className="px-6 py-4 border-t border-zinc-700 flex items-center justify-end gap-3 bg-zinc-800/50 rounded-b-xl">
+        {submitError && <p className="text-xs text-red-400 mr-auto">{submitError}</p>}
         <button type="button" onClick={onCancel} disabled={isLoading} className="px-4 py-1.5 bg-zinc-700 hover:bg-zinc-600 text-white text-sm rounded-lg transition-colors disabled:opacity-50">
           Cancel
         </button>
@@ -2807,11 +2857,22 @@ function CampaignEditForm({
   const watchedStartsOn    = useWatch({ control, name: 'starts_on' }) ?? campaign.starts_on;
   const watchedEndsOn      = useWatch({ control, name: 'ends_on' }) ?? campaign.ends_on;
   const watchedPlays       = useWatch({ control, name: 'total_plays' }) ?? campaign.total_plays;
-  const watchedDuration    = useWatch({ control, name: 'duration_bracket' }) ?? campaign.duration_bracket;
+  const rawWatchedDuration = useWatch({ control, name: 'duration_bracket' });
+  const watchedDuration    = rawWatchedDuration ?? campaign.duration_bracket;
   const [mediaError, setMediaError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
 
   // Clear media error whenever clips change (user added/removed a clip)
   useEffect(() => { setMediaError(null); }, [campaignMedia.length]);
+
+  // When attaching the first clip derives the bracket server-side, sync it
+  // into the form — otherwise Save would patch null back over the derived
+  // value. The campaign prop refreshes via the ['campaigns'] invalidation.
+  useEffect(() => {
+    if (campaign.duration_bracket != null && rawWatchedDuration == null) {
+      setValue('duration_bracket', campaign.duration_bracket);
+    }
+  }, [campaign.duration_bracket]);
 
   const doSubmit = async (data: CampaignPatch) => {
     const sweepsGoingAway = !data.sweeps_per_month && campaign.sweeps_per_month;
@@ -2848,11 +2909,19 @@ function CampaignEditForm({
     }
 
     setMediaError(null);
+    setSubmitError(null);
     onSubmit(data);
   };
 
   return (
-    <form id="edit-form" onSubmit={handleSubmit(doSubmit)} className="space-y-5">
+    <form
+      id="edit-form"
+      onSubmit={handleSubmit(
+        doSubmit,
+        (errs) => setSubmitError(`Check these fields: ${collectErrorPaths(errs as Record<string, unknown>).join(', ')}`),
+      )}
+      className="space-y-5"
+    >
       <div>
         <label className={LABEL}>Customer</label>
         <div className="px-3 py-2 bg-zinc-800/50 border border-zinc-700 rounded-lg text-sm text-zinc-300">
@@ -2890,7 +2959,14 @@ function CampaignEditForm({
             Duration Bracket *
             <HelpTooltip text="The sold slot length for this campaign. Clips longer than this bracket cannot be attached." />
           </label>
-          <select {...register('duration_bracket', { valueAsNumber: true })} disabled={isLoading} className={INPUT}>
+          <select
+            {...register('duration_bracket', { setValueAs: (v) => (v === '' || v == null ? null : Number(v)) })}
+            disabled={isLoading}
+            className={INPUT}
+          >
+            {campaign.duration_bracket == null && (
+              <option value="" className="bg-zinc-900">— Not set — derived from first clip</option>
+            )}
             {[15,30,45,60,90].map((s) => (
               <option key={s} value={s} className="bg-zinc-900">{s}s</option>
             ))}
@@ -2994,7 +3070,7 @@ function CampaignEditForm({
               <HelpTooltip text="Pay-extra guarantee: at least N plays every day inside this named window. A minimum, not a fence — other plays still land anywhere in the allowed airing windows. Mutually exclusive with a show guarantee." />
             </label>
             <select
-              {...register('interval_id', { setValueAs: v => v === '' ? null : Number(v) })}
+              {...register('interval_id', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
               disabled={isLoading || !!selectedShowId}
               className={INPUT + (selectedShowId ? ' opacity-40' : '')}
             >
@@ -3026,7 +3102,7 @@ function CampaignEditForm({
               <HelpTooltip text="Guarantee: at least N plays in every airing of this show. A minimum, not a fence. Mutually exclusive with an interval guarantee." />
             </label>
             <select
-              {...register('show_id', { setValueAs: v => v === '' ? null : Number(v) })}
+              {...register('show_id', { setValueAs: v => (v === '' || v == null) ? null : Number(v) })}
               disabled={isLoading || !!selectedIntervalId}
               className={INPUT + (selectedIntervalId ? ' opacity-40' : '')}
             >
@@ -3151,6 +3227,7 @@ function CampaignEditForm({
           <HelpTooltip text="Inactive campaigns are excluded from scheduling. At least one media clip must be uploaded before activating." />
         </label>
       </div>
+      {submitError && <p className="text-xs text-red-400">{submitError}</p>}
     </form>
   );
 }

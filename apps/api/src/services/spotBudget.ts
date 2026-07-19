@@ -598,6 +598,11 @@ async function computeDemand(
   const byCampaign: SpotBudgetDemand['byCampaign'] = [];
 
   for (const c of activeCampaigns) {
+    // No duration bracket = not fully sold yet: the campaign has no clips,
+    // can't air (engine Gate 5), and reserves no budget — neither minutes
+    // nor break counts.
+    if (c.duration_bracket == null) continue;
+
     // Clamp campaign window to the analysis period.
     const campStart = c.starts_on > periodStartStr ? c.starts_on : periodStartStr;
     const campEnd = c.ends_on < periodEndStr ? c.ends_on : periodEndStr;
@@ -896,6 +901,8 @@ export async function getCampaignAvailable(
     let totalPartnerMinutes = 0;
 
     for (const partner of partnerCampaigns) {
+      // Bracket-less partners have no clips, can't air, and claim nothing.
+      if (partner.duration_bracket == null) continue;
       if (partner.ends_on < periodStartStr || partner.starts_on > periodEndStr) continue;
 
       let partnerP: number;

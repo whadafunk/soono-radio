@@ -9,6 +9,7 @@ import {
   CampaignValidationDraftSchema,
   CampaignPatchSchema,
   CampaignMediaCreateSchema,
+  DURATION_BRACKETS,
 } from '@soono/shared';
 import { db } from '../db/index.js';
 import {
@@ -275,7 +276,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       starts_on: parsed.data.starts_on,
       ends_on: parsed.data.ends_on,
       total_plays: parsed.data.total_plays,
-      duration_bracket: parsed.data.duration_bracket,
+      duration_bracket: parsed.data.duration_bracket ?? null,
       max_plays_per_day: parsed.data.max_plays_per_day ?? null,
       min_gap_minutes: parsed.data.min_gap_minutes ?? null,
       pacing_mode: parsed.data.pacing_mode ?? 'even',
@@ -488,6 +489,35 @@ export async function customerRoutes(fastify: FastifyInstance) {
     const campaignId = Number(request.params.id);
     const parsed = CampaignMediaCreateSchema.safeParse(request.body);
     if (!parsed.success) return reply.status(400).send({ errors: parsed.error.errors });
+
+    const [campaign] = await db.select({ duration_bracket: campaigns.duration_bracket })
+      .from(campaigns).where(eq(campaigns.id, campaignId));
+    if (!campaign) return reply.status(404).send({ error: 'Campaign not found' });
+
+    // Derive the duration bracket from the first spot clip when none is set:
+    // smallest bracket that fits the clip (38s clip → 45s bracket).
+    let derivedBracket: number | null = null;
+    const isSpot = parsed.data.play_as_spot ?? true;
+    if (campaign.duration_bracket == null && isSpot) {
+      const [mediaRow] = await db.select({ duration_seconds: media.duration_seconds })
+        .from(media).where(eq(media.id, parsed.data.media_id));
+      const clipSeconds = mediaRow?.duration_seconds;
+      if (clipSeconds != null) {
+        const bracket = DURATION_BRACKETS.find((b) => b >= Math.ceil(clipSeconds));
+        if (bracket == null) {
+          return reply.status(400).send({
+            error: `Clip is ${Math.round(clipSeconds)}s — longer than the largest duration bracket (${DURATION_BRACKETS[DURATION_BRACKETS.length - 1]}s). Attach a shorter clip.`,
+          });
+        }
+        await db.update(campaigns)
+          .set({ duration_bracket: bracket, updated_at: sql`(unixepoch())` })
+          .where(eq(campaigns.id, campaignId));
+        // The campaign now counts as budget demand — drop the cached demand.
+        invalidateDemand();
+        derivedBracket = bracket;
+      }
+    }
+
     const [entry] = await db.insert(campaignMedia).values({
       campaign_id: campaignId,
       media_id: parsed.data.media_id,
@@ -513,7 +543,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       .from(campaignMedia)
       .leftJoin(media, eq(campaignMedia.media_id, media.id))
       .where(eq(campaignMedia.id, entry.id));
-    return reply.status(201).send(withMedia);
+    return reply.status(201).send({ ...withMedia, derived_duration_bracket: derivedBracket });
   });
 
   fastify.patch<{ Params: { id: string }; Body: { play_as_spot?: boolean; play_as_sweep?: boolean; weight?: number } }>(
