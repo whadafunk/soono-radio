@@ -14,6 +14,7 @@ import {
   fetchPlaylists,
   applyTemplate,
   clearCalendar,
+  fetchEditReconcilePreview,
   ApiError,
 } from '../../api';
 import type { RundownSlotContent } from '../../api';
@@ -494,11 +495,18 @@ export function SchedulePage() {
 
   const applyTemplateBatchMutation = useMutation({
     mutationFn: (ops: TemplateEntryBatchOp[]) => batchTemplateEntries(ops),
-    onSuccess: () => {
+    onSuccess: async () => {
       setPendingTemplateOps(new Map());
       invalidateTemplate();
-      setTemplateSaveStatus({ type: 'success', message: 'Template changes applied' });
-      setTimeout(() => setTemplateSaveStatus(null), 3000);
+      // D108 — saved, but the running supervisor may have deferred reacting
+      // (station airing ahead of wall clock: no mid-flight rewinds).
+      if ((await fetchEditReconcilePreview()) === 'deferred') {
+        setTemplateSaveStatus({ type: 'warning', message: 'Template changes saved — the station is running ahead of schedule, so they take effect from the next segment. Use Align to Wall Clock on the Supervisor page to apply them now.' });
+        setTimeout(() => setTemplateSaveStatus(null), 8000);
+      } else {
+        setTemplateSaveStatus({ type: 'success', message: 'Template changes applied' });
+        setTimeout(() => setTemplateSaveStatus(null), 3000);
+      }
     },
     onError: (err) => setTemplateSaveStatus({ type: 'error', message: extractApiError(err) }),
   });
@@ -555,12 +563,18 @@ export function SchedulePage() {
 
   const applyCalendarBatchMutation = useMutation({
     mutationFn: (ops: CalendarEntryBatchOp[]) => batchCalendarEntries(ops),
-    onSuccess: () => {
+    onSuccess: async () => {
       setPendingCalendarOps(new Map());
       invalidateCal();
       invalidateContent();
-      setCalendarSaveStatus({ type: 'success', message: 'Calendar changes applied' });
-      setTimeout(() => setCalendarSaveStatus(null), 3000);
+      // D108 — same deferred-reconcile notice as the template path.
+      if ((await fetchEditReconcilePreview()) === 'deferred') {
+        setCalendarSaveStatus({ type: 'warning', message: 'Calendar changes saved — the station is running ahead of schedule, so they take effect from the next segment. Use Align to Wall Clock on the Supervisor page to apply them now.' });
+        setTimeout(() => setCalendarSaveStatus(null), 8000);
+      } else {
+        setCalendarSaveStatus({ type: 'success', message: 'Calendar changes applied' });
+        setTimeout(() => setCalendarSaveStatus(null), 3000);
+      }
     },
     onError: (err) => setCalendarSaveStatus({ type: 'error', message: extractApiError(err) }),
   });

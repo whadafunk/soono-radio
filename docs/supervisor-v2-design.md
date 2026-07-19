@@ -3136,9 +3136,10 @@ the same flag.
 
 ### Decision 108 — Reconcile-on-clock-save rewinds an early-running station to the wall-clock segment
 
-**Status: defect confirmed live 2026-07-19; fix direction sketched, NOT designed — requires
-a traced pass through reconcile()/activePlanSegmentEndMs/reconcileOccurrence before any code
-change (same standing rule as the redraft-churn finding).**
+**Status: RESOLVED by operator decision 2026-07-19 — containment at the trigger, not guard
+surgery. Phase 1 (edit-reconcile gate + deferred toast) implemented + verified on dev same
+day; the guard-internals fix direction below is kept for provenance but deliberately NOT
+pursued. The long-term home for this is the staged-editing model — see Decision 110.**
 
 **Incident (2026-07-19 13:27–13:34 UTC, first hour of real campaign airing).** The station
 was running ~194s early — organic and correct: the first real break (plan 9033) aired 52s
@@ -3195,6 +3196,33 @@ mislabeling seen in the incident (the summary for force-retired 9034 logged segm
 break — resolved same day by the operator as Decision 109 (repeats stay legal; clips must
 rotate).
 
+**Resolution (operator decision, 2026-07-19).** Making the reconciler smarter about
+ahead-plans risks the robustness of a proven algorithm for a marginal payoff; the operator
+prefers bounded, visible unpredictability ("one or two segments air with pre-edit
+structure, or I click Align") over silent background corrections. So: contain at the
+trigger. **Edit-triggered reconciles are timid** — while any plan is actively airing, they
+may only refresh the upcoming plan via the trusted path; when the wall-clock state is
+ambiguous (the exact situation that used to rewind), they defer entirely, log
+`RECONCILE_DEFERRED`, and the edit takes effect at the next natural boundary (every
+next-plan draft re-resolves the schedule fresh). Authoritative triggers keep full
+authority: `startup` (establishing IS its job), `operator`/`align_to_clock` (explicit
+intent — Align to Wall Clock is the "apply now" button), `operator_skip` (live action).
+The whitelist is on authoritative triggers, so future edit routes are gated by default.
+
+Surfacing: `GET /supervisor/v2/edit-reconcile-preview` mirrors the gate's decision from
+persisted state (approximation documented in editReconcilePreview.ts); the Clocks and
+Schedule pages call it after a save and show an amber notice when deferred ("takes effect
+from the next segment — use Align to Wall Clock to apply now").
+
+Verified on dev: startup reconcile unchanged; a calendar-entry edit while a plan was
+airing under an unresolvable wall-clock state logged RECONCILE_DEFERRED and touched
+nothing (pre-fix: drafted + activated a duplicate); preview returned 'deferred'
+consistently; Align to Wall Clock afterwards performed the full establish as before.
+
+Deliberately accepted: an edit to the currently-airing segment never restructures it
+mid-flight; Align-while-ahead can still re-air an already-played break (explicit button,
+not background behavior).
+
 ---
 
 ### Decision 109 — In-break campaign repeats stay legal; repeat placements must rotate clips
@@ -3235,6 +3263,55 @@ delivery upside (catch-up when a break has room), not sellable inventory. Sellin
 repeat capacity would violate the "sell nominal, never boosted" principle from Part 1.
 Engine and validator now *deliberately* differ: conservative floor at sale time,
 opportunistic ceiling on air.
+
+---
+
+### Decision 110 — Staged schedule editing: stage → review → apply for every live-schedule mutation (design phase, OPEN)
+
+**Status: opened 2026-07-19 (operator's direction during the D108 resolution). Design not
+started — this entry pins scope, prior art, and the open questions.**
+
+**The doctrine (operator):** changes to a running broadcast never happen without explicit
+operator approval. Auto-reconcile-on-save "somehow slipped through" that principle; D108's
+gate contains the damage, but the destination is a proper stage → commit flow for every
+edit that shapes the live schedule.
+
+**Prior art already in the codebase — D55.** The Schedule page's template and calendar
+editors ALREADY stage: edits accumulate in pending-ops maps with explicit Apply / Discard,
+and only Apply hits the API (the `template_batch_apply` / `calendar_batch_apply` routes).
+So the UI-staging pattern exists and is operator-proven; D110 is about extending it, not
+inventing it. The unstaged remainder: the **Clocks page** (every segment save writes live
+and fires reconcile — the D108 incident's actual trigger) and the **show default-clock
+field**.
+
+**The architectural crux:** D55 stages *in the browser* — unsaved ops live in React state,
+lost on refresh, invisible to other pages. True staging (and the "staged changes" badge)
+needs the staged layer to be server-side, because the resolver must stay blind to staged
+rows until Apply while the UI renders them everywhere. Candidate shapes: (a) a
+staged-changes journal (JSON ops replayed through existing route logic on Apply) vs (b)
+shadow tables (the V1 rebuild doc's Phase D deferral — its revisit conditions are
+recorded there). Journal is lighter; shadow tables give free diff/preview.
+
+**UX (operator + assistant, agreed in outline):** a persistent "Staged changes: N" pill in
+the left nav (edits span Clocks/Schedule/Shows), opening a review drawer that lists each
+staged change with **Apply all** and **Discard**. Apply is the ONLY place an edit
+reconcile fires, and it runs the D108 gate + toast as its decision logic — nothing from
+Phase 1 is thrown away. The Dashboard may display the pending badge but does not own the
+Apply button (monitoring surface, not an editing surface).
+
+**Open questions for the design session:**
+1. Staged-storage shape: journal vs shadow tables (read the V1 rebuild doc's Phase D
+   deferral conditions first).
+2. How forms render staged-but-unapplied values (overlay? staged rows win in the UI
+   query layer?) and how conflicts with concurrent live changes surface.
+3. Discard semantics and staged-change persistence across API restarts.
+4. Perimeter: clocks + template + calendar + show default-clock staged; operator skip and
+   Align stay immediate. Does an *unscheduled* clock skip staging entirely (editing an
+   inert clock through stage/apply is pure friction)?
+5. Migration path from D55's browser-side staging to the server-side layer without
+   regressing the Schedule page UX.
+6. Whether Apply becomes the natural host for a pre-apply validation pass (the campaign
+   validator pattern applied to schedule edits — "this change empties segment X's pool").
 
 ---
 

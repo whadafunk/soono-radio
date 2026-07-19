@@ -59,6 +59,7 @@ import {
   fetchSupervisorConfig,
   fetchShowPlaylists,
   fetchStationSettings,
+  fetchEditReconcilePreview,
 } from '../../api';
 import type { PlaylistSummary } from '../../api';
 import { HelpTooltip, BadgeTooltip } from '../../components/HelpTooltip';
@@ -276,7 +277,7 @@ export function ClocksPage() {
   const [clockDirty, setClockDirty] = useState(false);
   const [segsDirty, setSegsDirty] = useState(false);
   const [expandedId, setExpandedId] = useState<number | null>(null);
-  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [saveStatus, setSaveStatus] = useState<{ type: 'success' | 'error' | 'warning'; message: string } | null>(null);
   const [creatingNew, setCreatingNew] = useState(false);
   const [newName, setNewName] = useState('');
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -285,9 +286,10 @@ export function ClocksPage() {
 
   const dirty = clockDirty || segsDirty;
 
-  const showSaveStatus = (type: 'success' | 'error', message: string) => {
+  const showSaveStatus = (type: 'success' | 'error' | 'warning', message: string) => {
     setSaveStatus({ type, message });
     if (type === 'success') setTimeout(() => setSaveStatus(null), 3000);
+    if (type === 'warning') setTimeout(() => setSaveStatus(null), 8000);
     // errors stay until dismissed so the message can be read
   };
 
@@ -321,12 +323,18 @@ export function ClocksPage() {
         promises.push(replaceClockSegments(draftClock.id, draftSegs));
       await Promise.all(promises);
     },
-    onSuccess: () => {
+    onSuccess: async () => {
       queryClient.invalidateQueries({ queryKey: ['clocks'] });
       queryClient.invalidateQueries({ queryKey: ['clock-segments', selectedId] });
       setClockDirty(false);
       setSegsDirty(false);
-      showSaveStatus('success', 'Clock saved');
+      // D108 — the save landed, but if the station is airing ahead of wall
+      // clock the supervisor deferred reacting to it (no mid-flight rewinds).
+      if ((await fetchEditReconcilePreview()) === 'deferred') {
+        showSaveStatus('warning', 'Clock saved — the station is running ahead of schedule, so the change takes effect from the next segment. Use Align to Wall Clock on the Supervisor page to apply it now.');
+      } else {
+        showSaveStatus('success', 'Clock saved');
+      }
     },
     onError: (e) => {
       console.error('[clock save]', e);

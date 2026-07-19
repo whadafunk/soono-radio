@@ -5,6 +5,7 @@ import { db } from '../db/index.js';
 import { supervisorState, planItems, plans, clockSegments } from '../db/schema.js';
 import { HarborClient } from '../services/supervisor2/harborClient.js';
 import { bus, requestReconcile } from '../services/supervisor2/bus.js';
+import { previewEditReconcile } from '../services/supervisor2/editReconcilePreview.js';
 import { resolveCurrentSegment, segmentBoundsWithinClock } from '../services/supervisor2/clockResolver.js';
 import { abortRow } from '../services/supervisor2/playHistoryService.js';
 
@@ -53,6 +54,15 @@ export async function supervisorControlRoutes(fastify: FastifyInstance) {
   // supervisor-reconciler-redesign design notes. The route can't call the
   // supervisor process directly (it's registered before that process
   // exists), so this just nudges it via the bus, same pattern as resume().
+  // D108 — tells the UI whether a just-saved schedule edit was applied to
+  // the running supervisor immediately or deferred by the edit-reconcile
+  // gate (station airing ahead of wall clock). Pages call this after a
+  // schedule-affecting save and toast on 'deferred'.
+  fastify.get('/supervisor/v2/edit-reconcile-preview', async (_request, reply) => {
+    const outcome = await previewEditReconcile();
+    return reply.send({ outcome });
+  });
+
   fastify.post('/supervisor/v2/align-to-wall-clock', async (_request, reply) => {
     bus.emit({
       type: 'RECONCILE_REQUESTED',

@@ -2009,6 +2009,49 @@ export class SupervisorProcess {
       segment_id: resolved.segment.id, clock_instance_started_at: resolved.clockInstanceStartedAt,
     }, 'reconcile: starting');
 
+    // D108 — edit-triggered reconciles are TIMID. Every schedule-editing
+    // route fires a reconcile on save; when the station is running ahead of
+    // wall clock (organic early handoff), the establish-ground-truth branch
+    // below would resolve the wall-clock segment, find its plan already
+    // completed (the candidate query excludes terminal plans), and draft +
+    // activate a SECOND plan for an occurrence that already aired — cutting
+    // the airing plan mid-track and re-airing sold inventory (confirmed live
+    // 2026-07-19: operator clock edits while ~194s early re-aired stop-set
+    // 228 and cut music plan 9034). Operator's decision: contain at the
+    // trigger, don't make the guard smarter. While ANY plan is actively
+    // airing, an edit reconcile may only refresh the upcoming plan via the
+    // trusted path — it must never fall through to establish/rewind. The
+    // edit still lands in the DB and takes effect at the next natural
+    // boundary (every next-plan draft re-resolves the schedule fresh), or
+    // immediately via the explicit Align to Wall Clock action. Authoritative
+    // triggers keep full authority: startup (nothing airing is trusted yet —
+    // establishing IS its job), operator/align_to_clock (explicit intent),
+    // operator_skip (live action needing immediate re-evaluation).
+    const AUTHORITATIVE_TRIGGERS = new Set(['startup', 'operator', 'align_to_clock', 'operator_skip']);
+    if (!AUTHORITATIVE_TRIGGERS.has(trigger) && this.activePlanId != null) {
+      const [airing] = await this.db
+        .select({ status: plansTable.status })
+        .from(plansTable)
+        .where(eq(plansTable.id, this.activePlanId));
+      if (airing?.status === 'active') {
+        const trustedEndMs = await this.activePlanSegmentEndMs(resolved, nowMs);
+        if (trustedEndMs != null) {
+          this.currentSegmentEndMs = trustedEndMs;
+          await this.reconcileNext(trustedEndMs, nowMs);
+          await this.db.update(supervisorStateTable)
+            .set({ current_segment_id: this.currentSegmentId })
+            .where(eq(supervisorStateTable.id, 1));
+        } else {
+          this.logger?.info({
+            process: 'supervisor', event: 'RECONCILE_DEFERRED', trigger,
+            active_plan_id: this.activePlanId,
+            resolved_segment_id: resolved.segment.id,
+          }, 'reconcile: deferred — a plan is airing and the wall-clock state is ambiguous (likely running ahead); the edit applies at the next boundary or via Align to Wall Clock');
+        }
+        return;
+      }
+    }
+
     // The active plan may already legitimately be AHEAD of what wall-clock
     // resolution alone says is current — organic early handoff within a
     // clock instance is intentional (see handleExhaustedPlan: a short plan

@@ -1375,6 +1375,21 @@ export async function postSupervisorAlignToClock(): Promise<SupervisorV2ControlR
   return SupervisorV2ControlResponseSchema.parse(await res.json());
 }
 
+// D108 — after a schedule-affecting save, asks whether the running
+// supervisor applied the edit immediately or deferred it (station airing
+// ahead of wall clock). Best-effort: failures resolve 'immediate' so a
+// status hiccup never blocks the save feedback itself.
+export async function fetchEditReconcilePreview(): Promise<'immediate' | 'deferred' | 'idle'> {
+  try {
+    const res = await fetch(`${API_BASE}/supervisor/v2/edit-reconcile-preview`);
+    if (!res.ok) return 'immediate';
+    const body = (await res.json()) as { outcome?: string };
+    return body.outcome === 'deferred' || body.outcome === 'idle' ? body.outcome : 'immediate';
+  } catch {
+    return 'immediate';
+  }
+}
+
 
 // ─── Logs ─────────────────────────────────────────────────────────────────────
 
