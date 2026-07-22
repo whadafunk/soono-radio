@@ -3506,11 +3506,15 @@ Full detail in the `supervisor_silent_failure_audit` memory.
 
 ---
 
-### Decision 114 — Finalize substitution: gap-fill by budget, not per-item duration match (music IMPLEMENTED, stop-set OPEN)
+### Decision 114 — Finalize substitution: gap-fill by budget, not per-item duration match (music DEPLOYED, stop-set OPEN)
 
 **Status: opened 2026-07-22, live incident + design discussion same day. Music side
-IMPLEMENTED same day (`finalizeMusicGapFill`, `planner.ts`) — `pnpm type-check` clean,
-not yet verified live/on dev (no test infra exists for `supervisor2`). Stop-set side
+DEPLOYED same day (`finalizeMusicGapFill`, `planner.ts`; commits `4994036`/`ec9d471`)
+— unit-tested (`musicGapFill.test.ts`, first test infra this project has had) and
+live on the station, confirmed healthy post-deploy. Deploy itself hit an unrelated
+Docker build issue (a `pnpm prune --prod` step, added alongside this for image
+hygiene, caused a brief live outage and was reverted the same session — see the
+`feedback_docker_build_before_compose_up` memory; not a D114 defect). Stop-set side
 deliberately scoped out — see "Scoping note" at the end of this entry.**
 
 **The bug.** Plan 9386 (segment 231, "Music-4"), live 2026-07-21: all 3 pending music
