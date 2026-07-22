@@ -224,6 +224,8 @@ Every form must surface validation failures visibly: pass a second argument to `
 - Type checking with `pnpm type-check` catches most bugs
 
 **Backend**
+- `apps/api` uses vitest (added 2026-07-22). Run with `pnpm --filter api test` (or `pnpm test` from the root, which runs `test` across every workspace package that defines one). Watch mode: `pnpm --filter api test:watch`. Test files live next to the code they cover, named `*.test.ts` (see `apps/api/src/services/supervisor2/processes/musicGapFill.test.ts`).
+- DB- and bus-coupled code (drizzle client, the supervisor2 bus) isn't easily unit-testable as-is — importing `db/index.ts` opens a real libsql connection at module load. When a piece of logic is worth a real test, prefer extracting the pure/decision-making part into its own dependency-free module (type-only imports of shapes like `PlanItem`/`MusicCandidate` are fine — they're erased at compile time) rather than mocking the DB or the bus.
 - Write minimal integration tests for new API endpoints
 - Test against real Icecast XML file (mocking not recommended for config changes)
 - Validate Zod schemas catch all malformed input before hitting logic

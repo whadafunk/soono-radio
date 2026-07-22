@@ -5,8 +5,10 @@
   "type": "module",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "tsc",
+    "build": "tsc -p tsconfig.build.json",
     "type-check": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "start": "node --env-file-if-exists=../../.env dist/index.js"
   },
   "dependencies": {
@@ -27,6 +29,7 @@
     "@types/node": "^20.10.4",
     "drizzle-kit": "^0.31.10",
     "tsx": "^4.7.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^3.2.7"
   }
 }

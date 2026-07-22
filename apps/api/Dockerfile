@@ -42,6 +42,10 @@ COPY apps/api apps/api
 RUN pnpm --filter @soono/shared build \
     && pnpm --filter @soono/api build
 
+# Strip devDependencies (vitest, drizzle-kit, typescript, etc.) now that the
+# build output exists — the running container only needs `dist/` + prod deps.
+RUN pnpm prune --prod
+
 EXPOSE 3000
 
 CMD ["node", "apps/api/dist/index.js"]

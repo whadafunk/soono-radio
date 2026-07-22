@@ -10,7 +10,8 @@
   "scripts": {
     "dev": "pnpm -r --parallel run dev",
     "build": "pnpm -r run build",
-    "type-check": "pnpm -r run type-check"
+    "type-check": "pnpm -r run type-check",
+    "test": "pnpm -r run test"
   },
   "devDependencies": {
     "@playwright/test": "^1.59.1",
