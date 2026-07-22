@@ -46,12 +46,14 @@ import {
   stopSetEstimates as stopSetEstimatesTable,
   supervisorConfig as supervisorConfigTable,
   type ClockSegment,
+  type PlanItem,
   type PlanItemContentType,
   type PlanItemInsert,
   type SupervisorConfig,
 } from '../../../db/schema.js';
 import { resolveCurrentSegment } from '../clockResolver.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
+import { groupInvalidMusicRuns, pickSmallestEligibleCandidate } from './musicGapFill.js';
 import type {
   BrandingCandidate,
   BrandingCandidatePool,
@@ -603,16 +605,24 @@ export class PlannerProcess {
               )
             : null;
 
+        // D114: music substitution is pulled out of this loop entirely — it's
+        // a budget-scoped gap-fill (below) with its own dedup guarantee,
+        // rather than sharing pickReplacement's per-item, unguarded search
+        // (the bug: two invalidated items with similar target durations could
+        // both resolve to the same fresh candidate, since nothing recorded
+        // what the loop had already handed out earlier in the same pass).
+        const nonMusicPendingItems = pendingItems.filter((it) => it.content_type !== 'music');
+
         // D109: replacements must rotate clips against what the plan already
         // holds — seed the per-clip counts from the plan's pending campaign
         // items, then keep them current as substitutions land.
         const spotPlacedCounts = new Map<number, number>();
-        for (const item of pendingItems) {
+        for (const item of nonMusicPendingItems) {
           if (item.content_type === 'campaign') {
             spotPlacedCounts.set(item.media_id, (spotPlacedCounts.get(item.media_id) ?? 0) + 1);
           }
         }
-        for (const item of pendingItems) {
+        for (const item of nonMusicPendingItems) {
           const stillValid = isItemStillValid(item, freshMusic, freshCampaign);
           if (stillValid) continue;
           // The item being replaced won't air — remove it from the counts
@@ -623,7 +633,19 @@ export class PlannerProcess {
             else spotPlacedCounts.set(item.media_id, n);
           }
           const replacement = pickReplacement(item, freshMusic, freshCampaign, config, spotPlacedCounts);
-          if (!replacement) continue;
+          if (!replacement) {
+            // D113 finding #7: this was previously silent — a stale item
+            // stayed in the plan un-replaced with zero visibility.
+            this.logger?.warn({
+              event: 'FINALIZE_SUBSTITUTION_FAILED',
+              plan_id: planId,
+              segment_id: segment.id,
+              plan_item_id: item.id,
+              content_type: item.content_type,
+              media_id: item.media_id,
+            }, 'planner: finalize found no replacement for an invalidated item — leaving it in place');
+            continue;
+          }
           if (replacement.content_type === 'campaign') {
             spotPlacedCounts.set(replacement.media_id, (spotPlacedCounts.get(replacement.media_id) ?? 0) + 1);
           }
@@ -645,6 +667,31 @@ export class PlannerProcess {
             skip_allowed: replacement.skip_allowed ? 1 : 0,
           });
           substitutions += 1;
+        }
+
+        // D114: music gap-fill — survivors stay exactly where they are; each
+        // contiguous run of invalidated music positions gets exactly one
+        // smallest-eligible filler (no duration-matching), then whatever of
+        // the segment's real budget is still unaccounted for is picked up by
+        // the same greedy fill-to-budget loop draft assembly already uses,
+        // continuing interstitial cadence from wherever this plan already
+        // left off. One dedup set spans survivors + every gap filler + the
+        // tail fill — see docs/supervisor-v2-design.md Decision 114.
+        if (freshMusic) {
+          const musicPendingItems = pendingItems.filter((it) => it.content_type === 'music');
+          if (musicPendingItems.length > 0) {
+            substitutions += await this.finalizeMusicGapFill(
+              planId,
+              plan.clock_instance_started_at,
+              segment,
+              config,
+              freshMusic,
+              pendingItems,
+              effectiveTargetSeconds,
+              nowMs,
+              lightweightShow?.show_id ?? null,
+            );
+          }
         }
 
         // Upsert the stop-set estimate with fresh numbers if available (D28).
@@ -690,6 +737,157 @@ export class PlannerProcess {
       },
       'planner: finalize complete',
     );
+  }
+
+  // D114: finalize-time music substitution as a budget-scoped gap-fill.
+  //
+  // Still-valid music items stay at their existing position — nothing gets
+  // reordered. Each contiguous run of invalidated music positions ("gap")
+  // gets exactly one replacement: the smallest-duration still-eligible
+  // candidate, with no attempt to match the gap's original size (a filler
+  // bigger or smaller than its gap is fine — the tail fill below absorbs the
+  // difference the same way draft assembly already absorbs the gap between
+  // its last placed track and the segment boundary). One `usedMusicIds` set
+  // spans survivors + every gap filler + the tail fill, so nothing already
+  // standing in this plan can be picked again in the same pass — this is
+  // the actual fix for the reported bug (media 654 picked twice 7 minutes
+  // apart, plan 9386, 2026-07-21); everything else here is about picking
+  // replacements well, not about preventing repeats.
+  //
+  // Returns the number of gaps successfully filled, folded into the
+  // finalize-complete log's `substitutions` count.
+  private async finalizeMusicGapFill(
+    planId: number,
+    clockInstanceStartedAt: number,
+    segment: ClockSegment,
+    config: SupervisorConfig,
+    freshMusic: MusicCandidatePool,
+    pendingItems: PlanItem[],
+    effectiveTargetSeconds: number,
+    nowMs: number,
+    showId: number | null,
+  ): Promise<number> {
+    const ordered = pendingItems.slice().sort((a, b) => a.position - b.position);
+
+    // Seed dedup with every music item still standing (valid survivors) —
+    // nothing a gap filler or the tail places may repeat one of these.
+    const usedMusicIds = new Set<number>();
+    for (const it of ordered) {
+      if (it.content_type === 'music') usedMusicIds.add(it.media_id);
+    }
+
+    const { runs, survivorMusicCount } = groupInvalidMusicRuns(
+      ordered,
+      (it) => it.content_type === 'music' && !isItemStillValid(it, freshMusic, null),
+    );
+    let finalMusicCount = survivorMusicCount;
+
+    if (runs.length === 0) return 0;
+
+    let runningSeconds = ordered.reduce((acc, it) => acc + it.planned_duration_seconds, 0);
+    let gapsFilled = 0;
+    let gapsFailed = 0;
+
+    for (const run of runs) {
+      const runSeconds = run.reduce((acc, it) => acc + it.planned_duration_seconds, 0);
+      const candidate = pickSmallestEligibleCandidate(freshMusic.candidates, usedMusicIds);
+
+      if (!candidate) {
+        gapsFailed += 1;
+        finalMusicCount += run.length; // stale items stay in place, uncounted otherwise
+        this.logger?.warn(
+          {
+            event: 'FINALIZE_GAP_FILL_FAILED',
+            plan_id: planId,
+            segment_id: segment.id,
+            gap_item_ids: run.map((it) => it.id),
+            gap_seconds: runSeconds,
+          },
+          'planner: finalize gap-fill found no eligible replacement — leaving stale item(s) in place',
+        );
+        continue;
+      }
+
+      usedMusicIds.add(candidate.media_id);
+      finalMusicCount += 1;
+      await this.db
+        .delete(planItemsTable)
+        .where(inArray(planItemsTable.id, run.map((it) => it.id)));
+      await this.db.insert(planItemsTable).values({
+        plan_id: planId,
+        position: run[0].position,
+        media_id: candidate.media_id,
+        content_type: 'music',
+        campaign_id: null,
+        music_campaign_id: candidate.music_campaign_id ?? null,
+        planned_duration_seconds: candidate.duration_seconds,
+        mandatory: false,
+        reason: `${candidate.reason_hint} (finalize gap-fill)`,
+        status: 'pending',
+        cut_allowed: cutAllowedForType('music', config) ? 1 : 0,
+        skip_allowed: skipAllowedForType('music', false, config) ? 1 : 0,
+      });
+      gapsFilled += 1;
+      runningSeconds = runningSeconds - runSeconds + candidate.duration_seconds;
+    }
+
+    // Tail fill: whatever the segment's real budget still needs after
+    // survivors + gap fillers, using the exact same greedy walk + boundary
+    // decision draft assembly already uses — cadence counters are seeded so
+    // interstitial spacing continues from here rather than restarting at 0.
+    const remainingForTail = effectiveTargetSeconds - runningSeconds;
+    let tailItemsAdded = 0;
+    let tailSecondsAdded = 0;
+    if (remainingForTail > MIN_FILL_GAP_SECONDS) {
+      const instance = { segment_id: segment.id, clock_instance_started_at: clockInstanceStartedAt };
+      const freshBranding = await this.requestPool<BrandingCandidatePool>(
+        'branding',
+        segment,
+        instance,
+        remainingForTail,
+        nowMs,
+        showId,
+      );
+      const tailItems: PendingAssemblyItem[] = [];
+      const usedBrandingIds = new Set<number>();
+      this.fillMusicItems(
+        freshMusic,
+        freshBranding,
+        segment,
+        config,
+        remainingForTail,
+        tailItems,
+        usedMusicIds,
+        usedBrandingIds,
+        { musicCount: finalMusicCount },
+      );
+      if (tailItems.length > 0) {
+        const currentMax = ordered.reduce((acc, it) => Math.max(acc, it.position), 0);
+        for (let i = 0; i < tailItems.length; i++) {
+          const item = tailItems[i];
+          await this.db.insert(planItemsTable).values(toInsertRow(planId, currentMax + 1 + i, item));
+          tailSecondsAdded += item.planned_duration_seconds;
+        }
+        tailItemsAdded = tailItems.length;
+      }
+    }
+
+    this.logger?.info(
+      {
+        event: 'FINALIZE_MUSIC_GAP_FILL',
+        plan_id: planId,
+        segment_id: segment.id,
+        gaps_found: runs.length,
+        gaps_filled: gapsFilled,
+        gaps_failed: gapsFailed,
+        tail_items_added: tailItemsAdded,
+        tail_seconds_added: tailSecondsAdded,
+        remaining_for_tail: remainingForTail,
+      },
+      'planner: finalize music gap-fill complete',
+    );
+
+    return gapsFilled;
   }
 
   // Drops every pending plan_item at position >= fromPosition, signals
@@ -1088,6 +1286,12 @@ export class PlannerProcess {
     items: PendingAssemblyItem[],
     usedMusicIds: Set<number>,
     usedBrandingIds: Set<number>,
+    // D114: lets a caller resume interstitial cadence mid-segment instead of
+    // restarting the count at 0 — used when this fills only the TAIL of a
+    // segment that already has music/interstitials placed earlier (finalize
+    // gap-fill). Draft/continuation-chunk callers omit this and get today's
+    // from-zero behavior unchanged.
+    initialCadence?: { musicCount?: number; jingleCursor?: number; stationIdCursor?: number },
   ): number {
     let remaining = budgetSeconds;
     // (b/c) Music + interstitial cadence.
@@ -1096,9 +1300,9 @@ export class PlannerProcess {
     const stationIdsEnabled = segment.interstitial_station_id_enabled;
     const stationIdEveryN = segment.station_id_every_n_tracks ?? 0;
 
-    let jingleCursor = 0;
-    let stationIdCursor = 0;
-    let musicCount = 0;
+    let jingleCursor = initialCadence?.jingleCursor ?? 0;
+    let stationIdCursor = initialCadence?.stationIdCursor ?? 0;
+    let musicCount = initialCadence?.musicCount ?? 0;
 
     // D103 — the pool is typed, and placement honors the types instead of
     // eating front-to-back (which buried everything behind the rotation

@@ -3375,6 +3375,286 @@ CLAUDE.md rule, though this entry records his intent.)
 
 ---
 
+### Decision 112 — Rotation-vs-playlist visibility window (design phase, OPEN)
+
+**Status: opened 2026-07-20 at the operator's request. Design not started — this entry
+pins the current facts and open questions.**
+
+**The ask:** pick a playlist, see all rotations configured against it in the station
+setup, pick one of those rotations, and see how that rotation currently views the
+playlist — eligibility, cooldown, pick order. The operator's own framing: "that info I
+guess is there anyway updated by content pickers" — i.e. expose existing picker state
+rather than build new tracking.
+
+**Current facts (verified in code 2026-07-19):**
+- **No direct FK either direction between `playlists` and `rotations`.** The
+  association is indirect, through two separate junction points, genuinely
+  many-to-many: `show_playlists.rotation_id` (per show+playlist, nullable — null means
+  "falls back to default") and each `{type:'playlist', playlist_id, rotation_id}` entry
+  inside the JSON `clock_segments.sources` array (per segment, same nullable-fallback
+  meaning). Which one governs a given segment is resolved by Decision 106's
+  `resolveContentOwnership` (show-level wins whole-type when present). **The reverse
+  lookup — given a playlist, list every rotation referencing it — does not exist
+  anywhere today** and would need to union both sources, deduped and labeled by
+  show/clock/segment name.
+- **The "how the rotation sees the playlist" half is already computed, just never
+  persisted.** `draftRotationCandidates` / `draftHotPlayCandidates` /
+  `draftHeavyRotationCandidates` (`apps/api/src/services/supervisor2/processes/music.ts`)
+  work out, fresh from `play_history` + `playlist_media` on every real pick: per-track
+  last-played time, separation/cooldown pass-fail, full LRP sort order, and a
+  human-readable reason string per track ("last played 2h14m ago" / "never played").
+  Nothing is snapshotted — surfacing this read-only needs no new tracking, but it *is*
+  currently wired to a live segment + the internal bus (`REQUEST_CANDIDATES`), not
+  callable for an arbitrary `(rotation, playlist)` pair chosen ad hoc from a UI — that
+  entry point would need extracting, not inventing.
+- **Two rotation types would show something misleading today.** `round_robin` and
+  `weighted` are not actually implemented — they silently fall back to LRP
+  (`ROTATION_TYPE_UNIMPLEMENTED`). `random_separation`'s draw is weighted-random, not a
+  fixed order, so "current order" for that type is a ranked list of probabilities, not
+  a definite sequence.
+
+**Shape sketched in conversation (not committed):** two screens — playlist → its
+rotations (new reverse-lookup query); rotation + playlist → ranked eligibility table
+(new stateless preview entry point reusing the existing picker logic).
+
+**Open questions for the design session:**
+1. Ship the preview honestly labeling round_robin/weighted as "not implemented, showing
+   LRP fallback," or use this as the occasion to actually build them first?
+2. How to represent `random_separation`'s probabilistic order in a UI table — weights/
+   percentages per track, or a single sampled example order?
+3. Does the reverse lookup deserve its own reusable endpoint, or stay scoped to this
+   one screen?
+4. Where does this live in the nav — under Rotations, under Library/Playlists, or as
+   its own page?
+5. Does "associated rotations" include the global default-fallback rotation whenever no
+   explicit `rotation_id` is set anywhere for that playlist?
+
+---
+
+### Decision 113 — Silent-failure audit refresh (findings logged, not a design decision)
+
+**Status: audit refresh completed 2026-07-20, at the operator's request. Findings only
+— nothing here is a design question, and nothing has been fixed. Logged here purely for
+the same reference/discoverability D110-112 get.**
+
+The 2026-07-02 silent-bail audit (7 findings, see the "Why this matters" note it left
+behind) predated the full supervisor rewrite (Decisions 83-89) and everything since
+(D96, D101-111). Re-verified each finding against current code, and separately scanned
+the D96-111 layer itself for the same failure shape, since it had never been audited.
+
+**Of the 8 original findings (one covered two dead fields together):**
+- **2 genuinely fixed:** the cold-start uncapped retry loop (D94, survived the rewrite
+  intact); `RundownProcess` now has a real logger (though its `emptyPool()` returns are
+  still silent — a residual gap, not a full fix).
+- **1 improved, not resolved:** total-schedule-gap resolution gained a 4th fallback
+  tier (D53's `default_clock_id`) and now logs `segment_unresolved` on the remaining
+  edge case — still zero fallback *content*, just no longer silent about it.
+- **1 restructured away, not directly fixed:** the "no independent staleness check"
+  finding doesn't cleanly apply anymore — Decisions 60/61 replaced the wall-clock-diff
+  transition model with event-driven activation off confirmed on-air webhooks, which
+  sits under a different mechanism now (`resolvePlayhead()` + LiquidSoap silence
+  corroboration) rather than the literal check the finding described.
+- **1 resolved by deletion:** Pause/Resume (part of the "no audit trail" finding) was
+  found non-functional and removed entirely (`0696797`, 2026-07-11) rather than fixed.
+  Skip and align-to-clock remain, still with zero audit logging, and the app has no
+  operator-identity concept at all to attribute "who."
+- **3 completely unchanged:** the two dead schema fields (`shows.extension_policy`,
+  `supervisorConfig.silence_gap_tolerance_s`); `HARD_START_FILL`'s uncapped larger-gap
+  case; `maybeRequestFinalization()`'s silent-forever `if (!plan) return`.
+
+**New findings in the D96-111 layer** (never audited before), one with real stakes and
+seven diagnostics-only:
+1. **A campaign contracted for a guaranteed slot ("every break" / "at least once
+   daily") can silently miss a break with zero log line** (`planner.ts:1424-1472`) — if
+   the slot-1 winner doesn't fit the remaining budget, the campaign is excluded from
+   the rest of that break by the very next loop; `PLAN_DRAFT_COMPLETE` just shows a
+   lower count. Unlike the rest below, this is a silent **contract violation**, not
+   just a missing diagnostic — the one worth prioritizing on its own if any of this
+   gets picked up.
+2. `resolveContentOwnership` (D106, `contentOwnership.ts:50-118`) takes no logger
+   parameter at all — structurally can't log which of show-vs-segment won ownership.
+3. Music-ownership logging is asymmetric (`music.ts:162-167`) — only the `'show'`
+   branch logs `MUSIC_OWNERSHIP`; the `'segment'` fallback branch (the one you'd want
+   visibility into when it changes unexpectedly) logs nothing.
+4. A source with a missing/dangling `rotation_id` is silently dropped from the pool
+   (`music.ts:176-177,182`), distinct from the existing `ROTATION_FALLBACK` log which
+   only fires when *all* sources for a segment fail.
+5. Hot-play cadence deferring has no log despite being an explicitly documented
+   intentional gate (`planner.ts:1116-1130`).
+6. A spotless stop-set break (zero spots/promos, the exact D107 amendment scenario)
+   logs only a bare `plan_id` on return (`planner.ts:1648-1667`) — no segment, pool
+   size, or reason.
+7. Finalize-time substitution failures are invisible (`planner.ts:615-626`) — a stale
+   item stays in the plan un-replaced if no substitute is found, and the aggregate
+   `PLAN_FINALIZE_COMPLETE` log can't distinguish "0 needed" from "N needed, M failed."
+8. Several dangling-media swallows, same silent shape: empty hot-play playlist
+   (`music.ts:560`), unresolvable hot-play candidate media (`music.ts:631`), empty
+   heavy-rotation campaign playlist (`music.ts:699`), deleted envelope/bumper clip
+   (`branding.ts:264`).
+
+**Confirmed clean:** D108's `RECONCILE_DEFERRED` gate logs correctly (event, trigger,
+plan/segment ids, `supervisor.ts:2044-2050`) — genuinely visible in `supervisor.log`,
+not just a UI toast. Logging *convention* is consistent throughout D96-111 (structured
+`{event, ...fields}` shape everywhere, no stray `console.log`) — the gaps are specific
+omissions, not a style drift.
+
+**How to apply:** no design questions here — just a punch list for whenever the
+"every bail either recovers or logs" sweep this audit was always meant to justify
+finally gets scheduled. If only one thing gets picked up in isolation, make it #1
+(the campaign-guarantee silent miss) — it's revenue/compliance-adjacent, not cosmetic.
+Full detail in the `supervisor_silent_failure_audit` memory.
+
+---
+
+### Decision 114 — Finalize substitution: gap-fill by budget, not per-item duration match (music IMPLEMENTED, stop-set OPEN)
+
+**Status: opened 2026-07-22, live incident + design discussion same day. Music side
+IMPLEMENTED same day (`finalizeMusicGapFill`, `planner.ts`) — `pnpm type-check` clean,
+not yet verified live/on dev (no test infra exists for `supervisor2`). Stop-set side
+deliberately scoped out — see "Scoping note" at the end of this entry.**
+
+**The bug.** Plan 9386 (segment 231, "Music-4"), live 2026-07-21: all 3 pending music
+items were invalidated at finalize in one pass. `pickReplacement` (`planner.ts:2521-2564`)
+picked each replacement independently — closest-duration match against a single
+`freshMusic` pool fetched once before the loop (`planner.ts:591-593`) — with no memory of
+what it had already handed out earlier in the same pass. Positions 0 and 2 both needed
+~208s; both resolved to the same track (media 654, "Das Leben ist schön" — Sarah Connor),
+7 minutes apart on air (4:47:18 AM and 4:54:32 AM). Position 1 (a different target
+duration) got something else, which is why only two of the three collided.
+
+Campaign replacements already carry a per-pass counter for exactly this shape of problem
+— `spotPlacedCounts` (D109) rotates repeat clip picks within one assembly. Music's branch
+of `pickReplacement` has no equivalent set; it always searches the full, unfiltered
+`freshMusic.candidates` array.
+
+**Why this is architectural, not a one-line miss.** Draft assembly (`fillMusicItems`,
+`planner.ts:1082-1248`) already does the right thing: a greedy walk against a shrinking
+`remaining` budget, with a `usedMusicIds` set threaded through the whole call so nothing
+repeats, ending in a single trailing boundary decision (D72/D101) when nothing else fits.
+`assembleStopSetPlan` (`planner.ts:1340-1689`) is the same shape for stop-sets. Finalize's
+`needsFullReassembly` branch (`planner.ts:491-580`) reuses these unchanged against one
+combined `effectiveTargetSeconds` (committed content netted out of the drift-adjusted
+target, `planner.ts:466-471`) — i.e. "full reassembly" is already a correct budget-fill.
+
+Lightweight substitution (`planner.ts:581-660`) is a *third*, bespoke algorithm that
+reuses neither the draft fill loop nor its dedup set, and per-item duration-matches
+instead of budget-filling. Worse: which branch runs is decided purely by aggregate
+duration match (`contentGapSeconds` / `driftDeltaSeconds` vs. `second_pass_drift_delta_threshold_s`,
+`planner.ts:480-487`) — not by how many items were invalidated. A plan where *every* item
+turns over can still land on the lightweight, unguarded path, exactly as happened here,
+because replacement durations happened to net out close enough to target.
+
+**Design converged on, after several discarded intermediate shapes** (per-item duration
+match with a dedup set added; combined-budget refill of each gap; edge-butting survivors
+to the front) — the shape below, chosen because it reuses the most existing code and
+carries the least additional risk, in particular for stop-set separation rules:
+
+1. Still-valid pending items stay exactly where they are — no reordering, no
+   repositioning of survivors.
+2. Each contiguous run of invalidated positions ("gap") gets exactly **one** replacement
+   item: the smallest-duration candidate that's still eligible (LRP-due order for music,
+   `mandatory`/`pacing_score` order for campaign — see open question below), with **no
+   requirement that it fit inside the gap's original size**. A gap that held two
+   invalidated items collapses to one filler; a filler bigger than its gap is accepted
+   and simply pushes everything after it later.
+3. After every gap has its one filler, run the segment's normal fill-to-budget logic —
+   the same `fillMusicItems` / stop-set fill-loop-plus-boundary-decision already used at
+   draft time — for whatever duration remains, against the segment's actual end. This
+   absorbs all the slop from step 2 (over or under, per gap) the same way draft already
+   absorbs the gap between its last placed track and the segment boundary — not a new
+   kind of imbalance, the same one drift-correction (D31/D67/D73/D101) already exists to
+   carry.
+4. One dedup set spans survivors + every gap filler + the tail fill — extend the
+   `spotPlacedCounts` pattern (D109) to music, which doesn't have an equivalent today.
+   This single change is what actually closes the reported bug; everything else in this
+   decision is about *how* replacements get chosen, not about preventing repeats.
+
+**Why not "smaller than the gap":** considered and rejected. A filler required to fit
+inside its gap can legitimately have no eligible candidate (e.g. a 15s gap with nothing
+in the pool under 90s) — a real dead end, for no benefit, since drift-correction already
+exists specifically to absorb "content total ≠ nominal target." Accepting overshoot isn't
+a new failure mode; the tail fill's existing zero-remaining-budget guard already handles
+the case where interior fillers alone consume the segment's target before the tail runs
+— worth a log line (mirroring `SEPARATION_RELAXED`'s visibility) if it happens often, not
+a design blocker.
+
+**Why not edge-butting survivors to the front (discarded):** compacting removes spacing
+that stop-set separation rules relied on. Two survivors that were never adjacent in the
+original plan (separated by now-dropped items) would become directly adjacent — a
+relationship `advertiser_separation_spots` and the same-campaign-adjacency rule never
+validated, because they weren't neighbors when the draft was built. For music this
+specific risk doesn't apply, but compaction still desyncs interstitial cadence counters
+from wherever each survivor now sits, requiring the same recomputation this design needs
+anyway — no savings, an added correctness hazard for the stop-set case.
+
+**What's reused unchanged vs. genuinely new:**
+- **Reused as-is:** `fillMusicItems`'s and `assembleStopSetPlan`'s greedy-walk-plus-
+  boundary-decision logic, for the tail step — it already knows how to fill a large
+  budget well; a gap-fill remainder is well inside its normal operating range.
+- **Reused as-is:** the stop-set fill loop's backward-looking eligibility filters
+  (`advertiser_separation_spots`'s tail-slice check and the immediate-adjacent-campaign
+  exclusion, `planner.ts:1499-1525`) — both operate on the `placed` array's tail, so
+  seeding `placed` with the real surviving item(s) immediately before a gap makes these
+  checks correct with no modification.
+- **New, small:** a single-candidate "pick one filler" step, reusing one iteration of
+  the existing selection order (LRP for music, mandatory/pacing_score for campaign)
+  rather than the whole fill loop.
+- **New, small:** a *forward* check that doesn't exist anywhere today — after picking a
+  gap's filler, validate it against the survivor immediately *after* the gap. Draft and
+  full reassembly never need this (nothing is ever already placed ahead of the build
+  cursor). Recommended shape: pick normally, validate once against the following
+  survivor, and on violation drop the pick and log rather than backtrack-search — this
+  should be a rare collision, not a case worth a general search/backtrack mechanism.
+- **New, small:** `fillMusicItems` needs an optional initial cadence state
+  (`musicCount`, `jingleCursor`, `stationIdCursor`) so the tail-fill step continues
+  interstitial cadence from wherever survivors + gap fillers left off, instead of
+  restarting the count at 0 and desyncing jingle/station-ID spacing.
+  `hotPlayStreak` needs no equivalent — it's already recomputed fresh from
+  `play_history` by the content pool on every request (D103), independent of what's
+  mid-flight in this assembly.
+- **New, stop-set-only:** if a gap sits at the very front of the plan (position 0
+  invalidated), first-in-slot resolution (`planner.ts:1413-1472`) needs to re-run for
+  that gap specifically — an `always`/`slot_1_required` campaign is entitled to position
+  0 regardless of size; "smallest eligible" alone would silently skip that entitlement.
+
+**Open questions before implementation:**
+1. Log event name/fields for a dropped forward-separation-violating filler, matching the
+   `SEPARATION_RELAXED` convention.
+2. Should "smallest eligible" for a stop-set gap filler respect the main loop's priority
+   order first (`mandatory` desc, then `pacing_score` desc, take smallest *within* the
+   top tier) rather than smallest across all eligible candidates regardless of priority —
+   otherwise a low-priority campaign's short spot could win a gap purely on size while a
+   mandatory campaign's slightly longer spot loses it.
+3. Does this replace lightweight substitution outright, or does `needsFullReassembly`
+   become dead once gap-fill can correctly handle any number of invalidated items,
+   including all of them?
+
+**Scoping note (2026-07-22):** implemented for music only. `finalizeMusicGapFill`
+(`planner.ts`, called from `finalizePlan`'s lightweight branch) does exactly the design
+above for `content_type === 'music'` items — contiguous-run detection, one
+smallest-eligible filler per gap, a seeded-cadence tail fill reusing `fillMusicItems`
+(now accepts an optional `initialCadence` for `musicCount`/`jingleCursor`/
+`stationIdCursor`), one `usedMusicIds` set spanning survivors + fillers + tail. Folded
+in D113 finding #7 while touching this code: both the music gap-fill path and the
+remaining non-music `pickReplacement` loop now log (`FINALIZE_GAP_FILL_FAILED` /
+`FINALIZE_SUBSTITUTION_FAILED`) instead of silently leaving a stale item in place.
+The gap-detection and candidate-selection logic was pulled out into
+`musicGapFill.ts` (dependency-free — no DB/bus import) specifically so it's
+unit-testable; `musicGapFill.test.ts` covers it, including a case built from the
+plan-9386 incident shape. First test infra this project has ever had (`pnpm
+--filter api test`) — see CLAUDE.md's Testing Strategy section.
+
+Stop-set (`content_type === 'campaign'`) still goes through the old per-item
+`pickReplacement` path, untouched — deliberately deferred, not an oversight. Items 1-4
+under "What's reused unchanged vs. genuinely new" above (the `assembleStopSetPlan`
+fill-loop extraction, backward+forward separation-context seeding, front-of-plan
+slot-1 re-resolution, `spotPlacedCounts` continuity into a seeded tail) are all still
+outstanding and unproven even on paper — pick this back up starting from that
+breakdown rather than re-deriving it, and settle open questions 1-2 above before
+writing code.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.
