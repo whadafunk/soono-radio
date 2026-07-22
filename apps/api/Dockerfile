@@ -42,13 +42,13 @@ COPY apps/api apps/api
 RUN pnpm --filter @soono/shared build \
     && pnpm --filter @soono/api build
 
-# Strip devDependencies (vitest, drizzle-kit, typescript, etc.) now that the
-# build output exists — the running container only needs `dist/` + prod deps.
-# pnpm treats removing the modules dir as destructive and refuses without a
-# TTY to confirm against — CI=true is pnpm's own documented non-interactive
-# opt-in (RUN never has a TTY, confirmed live: build aborted with
-# ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY without this).
-RUN CI=true pnpm prune --prod
+# `pnpm prune --prod` was tried here to strip devDependencies from the image
+# and caused a live outage 2026-07-22: in this workspace layout it removed
+# `fastify` itself (a real production dependency), not just devDependencies —
+# soono-api crashed on boot with ERR_MODULE_NOT_FOUND and soono-liquidsoap
+# (dependent on soono-api's healthcheck) never started. Reverted. Root cause
+# not yet understood — do not re-add a prune step here without figuring out
+# why `--prod` over-pruned in this workspace first (see backlog memory).
 
 EXPOSE 3000
 
