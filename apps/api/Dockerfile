@@ -44,7 +44,11 @@ RUN pnpm --filter @soono/shared build \
 
 # Strip devDependencies (vitest, drizzle-kit, typescript, etc.) now that the
 # build output exists — the running container only needs `dist/` + prod deps.
-RUN pnpm prune --prod
+# pnpm treats removing the modules dir as destructive and refuses without a
+# TTY to confirm against — CI=true is pnpm's own documented non-interactive
+# opt-in (RUN never has a TTY, confirmed live: build aborted with
+# ERR_PNPM_ABORTED_REMOVE_MODULES_DIR_NO_TTY without this).
+RUN CI=true pnpm prune --prod
 
 EXPOSE 3000
 
