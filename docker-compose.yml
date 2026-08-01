@@ -30,8 +30,6 @@ services:
       CONTAINERS: 1   # allow /containers/* endpoints
       POST: 1         # allow POST (needed for restart)
       # All other resource types (images, networks, volumes, etc.) default to 0.
-    networks:
-      - soono-net
 
   # ── Icecast ─────────────────────────────────────────────────────────────────
   icecast:
@@ -44,7 +42,7 @@ services:
       - ./icecast/logs:/usr/local/icecast/logs
       - ./data/certs:/etc/icecast2/certs:ro
     networks:
-      soono-net:
+      default:
       dmz:
         ipv4_address: 192.168.40.69
 
@@ -84,7 +82,7 @@ services:
       retries: 10
       start_period: 30s
     networks:
-      - soono-net
+      - default
       - egress   # AcoustID/MusicBrainz lookups need outbound internet; other soono-net
                  # peers (icecast, web, liquidsoap) stay internal-only.
 
@@ -96,7 +94,7 @@ services:
     container_name: soono-web
     restart: unless-stopped
     networks:
-      soono-net:
+      default:
       dmz:
         ipv4_address: 192.168.40.68
 
@@ -123,15 +121,16 @@ services:
       icecast:
         condition: service_started
     networks:
-      soono-net:
+      default:
       dmz:
         ipv4_address: 192.168.40.70
 
 # ── Networks ──────────────────────────────────────────────────────────────────
 networks:
-  soono-net:
+  default:
     driver: bridge
     internal: true   # containers cannot initiate outbound internet connections
+    name: soono-net
   egress:
     name: soono-egress   # outbound-only internet access for soono-api (AcoustID/MusicBrainz
                           # lookups); not internal, but also not shared with other services or
