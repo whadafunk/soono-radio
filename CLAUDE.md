@@ -134,6 +134,10 @@ When implementing the supervisor/picker/scheduler algorithm — which is genuine
 
 If you're unsure whether a change is additive or destructive, treat it as destructive and ask.
 
+### Don't implement on an exploratory question
+
+"What can we do to make this work?", "how should we approach this?", "what do you think?" — these are requests for a plan or recommendation, not a green light to start editing files. Answer in a few sentences (the approach, the files it touches, the main tradeoff) and stop. Only start editing once Daniel explicitly confirms — "do it", "go ahead", "fix it", "yes" to a specific proposal. This applies regardless of how confident the recommended fix is or how small the diff would be; confidence in the fix is not the same as authorization to make it. Investigation (reading files, SSHing in to check live state, git log/diff) is always fine without asking — it's file edits that need the explicit go-ahead.
+
 ---
 
 ## Development Workflow & SDLC

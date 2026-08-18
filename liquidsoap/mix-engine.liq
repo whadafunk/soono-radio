@@ -175,9 +175,18 @@ on_end(
     )
 )
 
+queue_out = queue
+# Plain crossfade with the configured fade shape (fades.liq's cross.simple
+# hardcodes "sin" — this is a custom transition so fade_shape actually applies).
+def crossfade_transition(a, b) =
+  def crossfade_fade_out(s) = fade.out(type="lin", duration=3.0, s) end
+  def crossfade_fade_in(s) = fade.in(type="lin", duration=3.0, s) end
+  add(normalize=false, [crossfade_fade_in(b.source), crossfade_fade_out(a.source)])
+end
+queue_out = cross(duration=3.0, crossfade_transition, queue_out)
 # Source priority — live takes over when present, queue otherwise
-radio = fallback(track_sensitive=false, [live, queue, blank()])
-# Crossfade requested (3s linear) but skipped — LS 2.2's crossfade rejects fallible sources. TODO.
+# Live Input Mode: Take Over — live completely replaces automation.
+radio = fallback(track_sensitive=false, [live, queue_out, blank()])
 # Output to Icecast (source password resolved from icecast.xml at generation time)
 output.icecast(
   %mp3(bitrate=256, samplerate=44100, stereo=true),

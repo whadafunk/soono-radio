@@ -1,0 +1,13 @@
+{
+  "last_sweep": {
+    "at_ms": 1784711680388,
+    "cutoff_ms": 1774343680388,
+    "plans_retired": 0,
+    "plans_deleted": 0,
+    "plan_items_deleted": 0,
+    "stop_set_estimates_deleted": 0,
+    "live_events_deleted": 0,
+    "vacuumed": false
+  },
+  "plans_retention_days": 120
+}
