@@ -3659,6 +3659,99 @@ writing code.
 
 ---
 
+### Decision 115 — The next-plan slot must follow the plan on air; reconciles finish by themselves and never rewind a station that is ahead (IMPLEMENTED 2026-11-10)
+
+**Status: incident 2026-11-09/10, diagnosed and fixed 2026-11-10. Part 1 (`ca17614`)
+DEPLOYED 2026-11-10 07:25 UTC. Parts 2–4 implemented the same day after a second,
+smaller incident caused by the recovery itself; `nextPlanSlot.ts` is unit-tested
+(`nextPlanSlot.test.ts`), the supervisor wiring is not — none of the four paths had
+been observed firing on the live station when this entry was written.**
+
+**The incident.** The host went down at ~20:16 UTC on 2026-11-09 (cause undiagnosed —
+no logs survive from that window) and came back at 20:44. At the moment it died, plan
+29741 (segment 225) was on its last track and the first item of plan 29743 (segment
+227) had just been pushed to LiquidSoap, so 29743 was `Transitioning` and its item
+unconfirmed. After the restart the station was silent for ~10.5 hours, until an
+operator Reconcile at 07:07 UTC.
+
+Two things held it there:
+
+1. `maybeInvalidateStuckTransition` (D84) depends on `nextPlanTransitioningSinceMs`,
+   which is in-memory and stamped only at push time. After the restart it was null, so
+   the check returned early on every tick.
+2. `handleExhaustedPlan` returned silently for any next-plan status other than
+   `draft`/`finalized`. Every reality check logged `exhausted_plan` and did nothing.
+
+And one thing made the operator's recovery slow: the dead plan still occupied the
+next-plan slot, so every reconcile's fresh draft was parked behind it
+(`NEXT_PLAN_DRAFT_DEFERRED`), and each Reconcile press advanced exactly one step
+(draft → finalize → activate). Two presses at 06:48/06:49 were lost when the wall-clock
+segment rolled over; the chain restarted at 07:02 and completed on the third press.
+
+**The second incident (same morning).** The leftover plan 29743 stayed in the slot and
+activated at 07:18 — a plan for the previous evening's 20:00 hour, measured as 39,667s
+behind. After the 07:25 deploy restart the station was correctly anchored and ~5 min
+*ahead* of wall clock, in music segment 229. Three Align to Clock presses at 07:28 then:
+rebuilt from wall clock (segment 227), cut over to stop-set 228 — which had aired at
+07:25 — and left the 07:45 stop-set's plan (segment 230) in the next slot. On air:
+stop-set 228 a second time at 07:30:43, stop-set 230 straight after at 07:32:07, music
+segment 229 skipped. The Vodafone spot aired three times in seven minutes, La Romica
+twice; the station ended ~14 min ahead.
+
+Root of the rewind: `activePlanSegmentEndMs` compares the active plan's
+`resolution_identity` against the *wall-clock* segment's identity, which includes the
+segment id. A plan that is simply in a later segment therefore reads as untrustworthy
+and authoritative triggers fell through to the establish branch — contradicting both
+the 2026-07-03 comment in `reconcile()` ("once something is truly active we let it
+ride") and the Align route's own "forward-only" comment.
+
+**The decision.**
+
+1. **An exhausted active plan with an un-activatable next plan is never silent**
+   (`handleUnactivatableNextPlan`). Next plan `Transitioning` with no stopwatch
+   running → start it, so D84's invalidation fires after the normal grace and the
+   `no_next_plan` recovery takes over. Next plan `completed`/`Invalid` → drop the
+   pointer at once. Both log `PLAN_STALL`.
+2. **The next-plan slot is checked at every activation**
+   (`releaseMismatchedNextPlan`, decision table in `nextPlanSlot.ts`). The activation
+   path already resolves which occurrence should follow; a held plan for any other
+   segment or clock instance is released (`NEXT_PLAN_RELEASED`). Exception: if one of
+   its items has been pushed and LiquidSoap does not positively report an empty queue,
+   it is kept (`NEXT_PLAN_MISMATCH_KEPT`) — pushed content cannot be recalled and will
+   air regardless of DB state (the D84 double-plan lesson). A released plan's row is
+   left as-is so it can still be adopted if its own occurrence comes up; only a
+   `Transitioning` plan whose push is confirmed gone is marked `Invalid`.
+3. **A reconcile that is establishing an occurrence finishes by itself**
+   (`reconcileFollowUps`, `maybeFollowUpReconcile`). When `reconcileOccurrence` is
+   allowed to activate but must first request a draft or a finalize, it records an
+   intent for that occurrence; when the planner answers, the same reconcile is re-run
+   with the same trigger. Each re-run is exactly what another press would have done,
+   so no new rules — bounded at 4 hops and 60s so a plan that can never establish
+   cannot loop.
+4. **Reconcile and Align to Clock never rewind a station that is ahead and airing**
+   (`aheadAiringPlanSegmentEndMs`; operator's decision, 2026-11-10). If the active
+   plan's own segment starts after the wall-clock segment, its schedule slot still
+   resolves to the same identity, it has content pending or playing, and audio was
+   confirmed within the silence threshold, the reconcile leaves it alone and only
+   refreshes what follows (`RECONCILE_AHEAD_PLAN_KEPT`). The station comes back to the
+   clock through the normal drift correction.
+
+**Scope notes.**
+
+- Part 4 applies to every authoritative trigger, not just the two buttons: `startup`
+  and `operator_skip` used to rewind an ahead station too. Edit-triggered reconciles
+  keep the D108 gate unchanged.
+- Consequence accepted by the operator: while the station is ahead and playing there
+  is no control that forces it back to the wall-clock segment. A station that is
+  *behind* is unchanged — Reconcile/Align still jump forward to the wall-clock segment.
+- Not addressed: a mismatched held plan whose pushed item really is still in
+  LiquidSoap's queue is kept and will activate when that item airs. Fixing that needs
+  a way to remove a request from LiquidSoap's queue, which does not exist today.
+- Not addressed: the play history for 2026-11-10 07:25–07:33 records the repeated
+  spots as real plays, so campaign pacing counts them.
+
+---
+
 ## Build Plan — Locked 2026-05-27
 
 Six phases. Optimized for clean code and developer efficiency — no compatibility with V1 during construction, no safety fallbacks until the feature is actually built.

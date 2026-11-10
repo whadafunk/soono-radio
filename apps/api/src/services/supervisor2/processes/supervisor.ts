@@ -101,6 +101,7 @@ import {
   stampStarted,
 } from '../playHistoryService.js';
 import { resolvePlayhead } from '../playhead.js';
+import { judgeHeldNextPlan } from './nextPlanSlot.js';
 import { computeDriftAdjustedTarget } from '../requestPlan.js';
 
 // ── Thresholds ────────────────────────────────────────────────────────────────
@@ -129,6 +130,8 @@ const IN_FLIGHT_TIMEOUT_MS = 60_000;
 // already computed for its own decision this cycle.
 const SUPERVISOR_SNAPSHOT_INTERVAL_MS = 60_000;    // periodic in-memory state dump
 const STILL_OPEN_WAIT_LOG_THROTTLE_MS = 30_000;    // re-log cadence for a sustained "still open" wait
+const RECONCILE_FOLLOW_UP_MAX_HOPS = 4;          // automatic re-runs one reconcile may chain (draft → finalize → activate, current + next)
+const RECONCILE_FOLLOW_UP_MAX_AGE_MS = 60_000;   // an unanswered follow-up intent older than this is dropped, not acted on
 const SILENCE_ALERT_REPEAT_MS = 60_000;            // re-alert cadence while a stall persists
 const SILENCE_ALERT_ESCALATE_S = 300;              // past this many seconds, escalate warn -> error
 
@@ -327,6 +330,15 @@ export class SupervisorProcess {
   // was exhausted, not segment/instance (this fires on a plan, not a segment).
   private exhaustedPlanReconciledFor: number | null = null;
 
+  // A reconcile that decided "this occurrence should be on air now" but had
+  // to request a draft or finalize first leaves an intent here, keyed
+  // `${segment_id}:${clock_instance_started_at}`. When the planner answers,
+  // the same reconcile is re-run so the occurrence finishes establishing by
+  // itself. Without it each reconcile advanced exactly one lifecycle step
+  // and then stopped — the operator had to press Reconcile / Align to Clock
+  // three times (draft, finalize, activate). Confirmed live 2026-11-10.
+  private reconcileFollowUps = new Map<string, { trigger: string; hops: number; atMs: number }>();
+
   // Decision 84: when nextPlanId's first item gets pushed while it's still
   // 'finalized' (the queue-ahead nudge, D44/D60), it's promoted to
   // 'Transitioning' and this is stamped. If it never gets ground-truth
@@ -438,14 +450,14 @@ export class SupervisorProcess {
     );
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PLAN_DRAFT_READY' }>('PLAN_DRAFT_READY', (msg) => {
-        void this.handlePlanDraftReady(msg).catch((err) => {
+        void this.handlePlanDraftReady(msg).then(() => this.maybeFollowUpReconcile(msg.plan_id)).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PLAN_DRAFT_READY' }, 'supervisor: PLAN_DRAFT_READY handler failed');
         });
       }),
     );
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PLAN_FINALIZED' }>('PLAN_FINALIZED', (msg) => {
-        void this.handlePlanFinalized(msg).catch((err) => {
+        void this.handlePlanFinalized(msg).then(() => this.maybeFollowUpReconcile(msg.plan_id)).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PLAN_FINALIZED' }, 'supervisor: PLAN_FINALIZED handler failed');
         });
       }),
@@ -2046,7 +2058,8 @@ export class SupervisorProcess {
   // finds different state either way) and on an explicit operator action
   // (align-to-wall-clock). Ordinary segment-to-segment handoffs keep using
   // the existing tick()/isNewSegment/D44 machinery untouched.
-  private async reconcile(nowMs: number, trigger: string): Promise<void> {
+  private async reconcile(nowMs: number, trigger: string, hops = 0): Promise<void> {
+    const followUp = { trigger, hops };
     const resolved = await resolveCurrentSegment(nowMs, this.db);
     if (!resolved) {
       this.logger?.warn({
@@ -2114,10 +2127,32 @@ export class SupervisorProcess {
     // plan that was actually right. Once something is truly active we let
     // it ride rather than yanking it back (same philosophy as not
     // interrupting in-progress content on a live schedule edit).
-    const trustedEndMs = await this.activePlanSegmentEndMs(resolved, nowMs);
+    let trustedEndMs = await this.activePlanSegmentEndMs(resolved, nowMs);
+    if (trustedEndMs == null) {
+      // The plan on air is for a LATER segment than wall clock says is
+      // current, and it is airing normally: leave it alone and only make
+      // sure what follows it is planned. activePlanSegmentEndMs can't see
+      // this case — it compares the plan against the wall-clock segment's
+      // identity, so a plan that is simply ahead reads as untrustworthy and
+      // used to fall through to the establish branch below, which rebuilt
+      // from wall clock and re-aired a segment that had already played.
+      // Confirmed live 2026-11-10: Align to Clock while ~5 min ahead re-aired
+      // stop-set 228 (sold spots, twice within 5 minutes). Operator's
+      // decision: Reconcile and Align to Clock never rewind a station that
+      // is ahead and airing — it works its way back through the normal
+      // drift correction.
+      const aheadEndMs = await this.aheadAiringPlanSegmentEndMs(resolved, nowMs);
+      if (aheadEndMs != null) {
+        this.logger?.info({
+          process: 'supervisor', event: 'RECONCILE_AHEAD_PLAN_KEPT', trigger,
+          active_plan_id: this.activePlanId, wall_clock_segment_id: resolved.segment.id,
+        }, 'reconcile: the plan on air is ahead of wall clock and airing normally — left alone, only what follows it is refreshed');
+        trustedEndMs = aheadEndMs;
+      }
+    }
     if (trustedEndMs != null) {
       this.currentSegmentEndMs = trustedEndMs;
-      await this.reconcileNext(trustedEndMs, nowMs);
+      await this.reconcileNext(trustedEndMs, nowMs, followUp);
     } else {
       // No trustworthy active plan for this clock instance — establish
       // ground truth from a fresh resolve. hydrateFromDb() only trusts
@@ -2131,8 +2166,9 @@ export class SupervisorProcess {
       await this.reconcileOccurrence(resolved, nowMs, {
         allowActivate: true,
         targetDurationSeconds: currentTargetDuration,
+        followUp,
       });
-      await this.reconcileNext(resolved.segmentEndMs, nowMs);
+      await this.reconcileNext(resolved.segmentEndMs, nowMs, followUp);
     }
 
     await this.db.update(supervisorStateTable)
@@ -2222,7 +2258,11 @@ export class SupervisorProcess {
   // drafting cadence, which a restart can otherwise miss entirely (tick()'s
   // isNewSegment won't re-fire for an already-current segment). Only early
   // ACTIVATION is gated by runway.
-  private async reconcileNext(afterMs: number, nowMs: number): Promise<void> {
+  private async reconcileNext(
+    afterMs: number,
+    nowMs: number,
+    followUp?: { trigger: string; hops: number },
+  ): Promise<void> {
     const { resolved: next } = await this.resolveNextOccurrence(afterMs + 1, nowMs);
     if (!next) {
       this.logger?.info({
@@ -2253,6 +2293,7 @@ export class SupervisorProcess {
       targetDurationSeconds: sizing.targetSeconds,
       predictedDriftSeconds: sizing.predictedDriftSeconds,
       appliedCorrectionSeconds: sizing.appliedCorrectionSeconds,
+      followUp,
     });
   }
 
@@ -2309,6 +2350,70 @@ export class SupervisorProcess {
     return bounds?.endMs ?? null;
   }
 
+  // Companion to activePlanSegmentEndMs for the one case it deliberately
+  // can't recognise: the active plan belongs to a LATER segment than the
+  // wall-clock one (organic early handoff — the station is ahead). Returns
+  // that plan's own segment end when it is airing normally, else null.
+  //   - status 'active', with content still pending or playing;
+  //   - its own segment starts after the wall-clock segment starts;
+  //   - the schedule slot it was built for still resolves to the same
+  //     resolution_identity (a schedule edit that replaced the slot makes
+  //     the plan stale, exactly as for the wall-clock case);
+  //   - audio was confirmed within the silence threshold — a plan that
+  //     looks alive in the DB while LiquidSoap is silent is not "airing
+  //     normally" and must not block an operator's Reconcile / Align.
+  // No runway-worth-it check here on purpose: when the plan is ahead, a
+  // short remaining runway is a reason to plan what follows it, never a
+  // reason to rebuild from a wall-clock segment that already aired.
+  private async aheadAiringPlanSegmentEndMs(resolved: ResolvedSegment, nowMs: number): Promise<number | null> {
+    if (this.activePlanId == null) return null;
+    const [plan] = await this.db
+      .select({
+        status: plansTable.status,
+        clock_instance_started_at: plansTable.clock_instance_started_at,
+        resolution_identity: plansTable.resolution_identity,
+        segment_id: clockSegmentsTable.id,
+        clock_id: clockSegmentsTable.clock_id,
+      })
+      .from(plansTable)
+      .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
+      .where(eq(plansTable.id, this.activePlanId));
+    if (!plan || plan.status !== 'active' || plan.clock_instance_started_at == null) return null;
+    const bounds = await segmentBoundsWithinClock(this.db, plan.clock_id, plan.segment_id, plan.clock_instance_started_at);
+    if (!bounds || bounds.startMs <= resolved.segmentStartMs) return null;
+    const ownSlot = await resolveCurrentSegment(bounds.startMs + 1, this.db);
+    if (!ownSlot || computeResolutionIdentity(ownSlot) !== plan.resolution_identity) return null;
+    if (!(await this.hasPendingOrPlayingItems(this.activePlanId))) return null;
+    if (nowMs - this.lastAudioConfirmedMs >= SILENCE_ALERT_THRESHOLD_S * 1_000) return null;
+    return bounds.endMs;
+  }
+
+  // Runs after every PLAN_DRAFT_READY / PLAN_FINALIZED: if a reconcile is
+  // waiting on this plan's occurrence (reconcileFollowUps), re-run it so the
+  // next lifecycle step happens without another operator press. Each re-run
+  // is the same reconcile() an extra press would have triggered, so all of
+  // its existing rules apply unchanged; RECONCILE_FOLLOW_UP_MAX_HOPS bounds
+  // the chain so a plan that can never establish can't loop.
+  private async maybeFollowUpReconcile(planId: number): Promise<void> {
+    if (this.reconcileFollowUps.size === 0) return;
+    const [plan] = await this.db
+      .select({ segment_id: plansTable.segment_id, clock_instance_started_at: plansTable.clock_instance_started_at })
+      .from(plansTable)
+      .where(eq(plansTable.id, planId));
+    if (!plan) return;
+    const key = `${plan.segment_id}:${plan.clock_instance_started_at}`;
+    const intent = this.reconcileFollowUps.get(key);
+    if (!intent) return;
+    this.reconcileFollowUps.delete(key);
+    const nowMs = Date.now();
+    if (nowMs - intent.atMs > RECONCILE_FOLLOW_UP_MAX_AGE_MS) return;
+    this.logger?.info({
+      process: 'supervisor', event: 'RECONCILE_FOLLOW_UP',
+      plan_id: planId, trigger: intent.trigger, hop: intent.hops + 1,
+    }, 'reconcile: planner answered for an occurrence a reconcile is establishing — continuing it');
+    await this.reconcile(nowMs, intent.trigger, intent.hops + 1);
+  }
+
   // Same reconstruction as activePlanSegmentEndMs, but for the plan that just
   // exhausted (handleExhaustedPlan) rather than a plan being validated against
   // an externally-known clock instance — there's nothing else to compare
@@ -2343,9 +2448,20 @@ export class SupervisorProcess {
       // remaining-wall-clock targets (ground-truth establish, hard retarget).
       predictedDriftSeconds?: number;
       appliedCorrectionSeconds?: number;
+      // Present only when called from reconcile() itself: lets a draft or
+      // finalize requested here for an occurrence that should activate
+      // re-run that reconcile when the planner answers (reconcileFollowUps).
+      followUp?: { trigger: string; hops: number };
     },
   ): Promise<void> {
     const identity = computeResolutionIdentity(resolved);
+    const noteFollowUp = (): void => {
+      if (!opts.allowActivate || !opts.followUp || opts.followUp.hops >= RECONCILE_FOLLOW_UP_MAX_HOPS) return;
+      this.reconcileFollowUps.set(
+        `${resolved.segment.id}:${resolved.clockInstanceStartedAt}`,
+        { trigger: opts.followUp.trigger, hops: opts.followUp.hops, atMs: nowMs },
+      );
+    };
     const candidates = await this.db
       .select({ id: plansTable.id, status: plansTable.status, resolution_identity: plansTable.resolution_identity })
       .from(plansTable)
@@ -2398,6 +2514,7 @@ export class SupervisorProcess {
     }
 
     if (valid && best.status === 'draft') {
+      noteFollowUp();
       if (this.finalizationRequestedForPlanId !== best.id) {
         this.finalizationRequestedForPlanId = best.id;
         this.finalizeInFlightForPlanId = best.id;
@@ -2432,6 +2549,7 @@ export class SupervisorProcess {
 
     // No valid plan for this occurrence — either none exists, or the one
     // that does was drafted against a schedule that has since changed.
+    noteFollowUp();
     const requestId = randomUUID();
     this.logger?.info({
       process: 'supervisor', event: 'PLAN_DRAFT_REQUESTED',
@@ -2821,6 +2939,72 @@ export class SupervisorProcess {
   //
   // Both terms estimate how much over/under the active plan will run at segment
   // N's boundary, so N+1's plan is pre-corrected before the T-30s second pass.
+  // Called once per activation, with the occurrence that should follow the
+  // plan that just went on air. If the plan held in the next slot is for a
+  // different occurrence, the slot is cleared so the right plan gets adopted
+  // or drafted below — see nextPlanSlot.ts for the decision table and the
+  // incident it comes from.
+  private async releaseMismatchedNextPlan(expected: ResolvedSegment): Promise<void> {
+    if (this.nextPlanId == null) return;
+    const heldId = this.nextPlanId;
+    const [row] = await this.db
+      .select({
+        segment_id: plansTable.segment_id,
+        clock_instance_started_at: plansTable.clock_instance_started_at,
+        status: plansTable.status,
+      })
+      .from(plansTable)
+      .where(eq(plansTable.id, heldId));
+    const expectedOccurrence = { segmentId: expected.segment.id, clockInstanceStartedAt: expected.clockInstanceStartedAt };
+    if (row && judgeHeldNextPlan({ ...row, hasPushedItem: false }, expectedOccurrence, null) === 'keep') return;
+
+    let hasPushedItem = false;
+    let lsQueueDepth: number | null = null;
+    if (row) {
+      const [pushed] = await this.db
+        .select({ id: planItemsTable.id })
+        .from(planItemsTable)
+        .where(and(eq(planItemsTable.plan_id, heldId), eq(planItemsTable.status, 'playing')))
+        .limit(1);
+      hasPushedItem = pushed != null;
+      if (hasPushedItem) {
+        try {
+          lsQueueDepth = (await HarborClient.getNowPlaying()).queue_depth;
+        } catch {
+          lsQueueDepth = null; // unreachable — treated as "may still be queued"
+        }
+      }
+    }
+    const verdict = judgeHeldNextPlan(row ? { ...row, hasPushedItem } : null, expectedOccurrence, lsQueueDepth);
+    if (verdict === 'keep') {
+      this.logger?.warn({
+        process: 'supervisor', event: 'NEXT_PLAN_MISMATCH_KEPT',
+        held_plan_id: heldId, held_segment_id: row?.segment_id ?? null, held_status: row?.status ?? null,
+        expected_segment_id: expected.segment.id, ls_queue_depth: lsQueueDepth,
+      }, 'supervisor: held next plan is not for the segment that follows the plan now on air, but its pushed content may still be in LiquidSoap\'s queue — keeping it');
+      return;
+    }
+
+    if (verdict === 'invalidate') {
+      await this.db.update(plansTable)
+        .set({ status: 'Invalid', reason: 'transition_failed' })
+        .where(and(eq(plansTable.id, heldId), eq(plansTable.status, 'Transitioning')));
+    }
+    this.logger?.warn({
+      process: 'supervisor', event: 'NEXT_PLAN_RELEASED',
+      held_plan_id: heldId, held_segment_id: row?.segment_id ?? null,
+      held_clock_instance_started_at: row?.clock_instance_started_at ?? null, held_status: row?.status ?? null,
+      expected_segment_id: expected.segment.id, expected_clock_instance_started_at: expected.clockInstanceStartedAt,
+      invalidated: verdict === 'invalidate',
+    }, 'supervisor: held next plan is not for the segment that follows the plan now on air — released so the right one is used');
+    this.nextPlanId = null;
+    this.nextPlanSegmentId = null;
+    this.nextPlanTransitioningSinceMs = null;
+    await this.db.update(supervisorStateTable)
+      .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
+      .where(eq(supervisorStateTable.id, 1));
+  }
+
   private async maybeRequestNextDraft(current: ResolvedSegment, nowMs: number): Promise<void> {
     const { resolved: next } = await this.resolveNextOccurrence(current.segmentEndMs + 1, nowMs);
     if (!next) {
@@ -2834,6 +3018,8 @@ export class SupervisorProcess {
     this.activePlanHardBoundary = readStartPolicy(next.segment.start_policy).type === 'hard'
       ? { segmentId: next.segment.id, startMs: next.segmentStartMs }
       : null;
+
+    await this.releaseMismatchedNextPlan(next);
 
     // Decision 84: idempotency at the target instead of a Supervisor-side
     // guard field — maybeRequestNextDraft only ever fires once per
