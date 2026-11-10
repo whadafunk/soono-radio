@@ -1148,7 +1148,10 @@ export class SupervisorProcess {
       .innerJoin(clockSegmentsTable, eq(clockSegmentsTable.id, plansTable.segment_id))
       .where(eq(plansTable.id, this.nextPlanId));
     if (!nextPlan) return;
-    if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') return;
+    if (nextPlan.status !== 'draft' && nextPlan.status !== 'finalized') {
+      await this.handleUnactivatableNextPlan(nextPlan.status, nowMs);
+      return;
+    }
 
     // Decision 78: never activate a plan whose finalize/reassembly we (or
     // maybeRequestFinalization) just requested but hasn't completed yet.
@@ -1249,6 +1252,54 @@ export class SupervisorProcess {
     }, 'supervisor: forcing plan advance — active plan exhausted, nothing playing');
     await this.activateNextPlan(nowMs);
     this._bus.emit({ type: 'PUSH_NEXT_REQUESTED', reason: 'plan_exhausted_advance' });
+  }
+
+  // The active plan is exhausted with nothing playing, and the next plan is in
+  // a status handleExhaustedPlan can't force-activate. This used to be a bare
+  // `return` — silent, and permanent whenever nothing else was going to move
+  // that plan. Confirmed live 2026-11-09/10: ~10.5h of dead air. The host
+  // went down right after the next plan's first item was pushed (plan
+  // 'Transitioning', item never confirmed on air); after the restart the
+  // plan was still 'Transitioning' in the DB but nextPlanTransitioningSinceMs
+  // — in-memory only, stamped only at push time — was null, so
+  // maybeInvalidateStuckTransition returned early on every tick forever. The
+  // dead plan also held the next_plan slot, so every reconcile's fresh draft
+  // was deferred behind it (NEXT_PLAN_DRAFT_DEFERRED) and Reconcile needed
+  // one press per lifecycle step.
+  //
+  // 'Transitioning' — legitimate for a moment at every handoff (the queued
+  //   first item is about to confirm), so it still gets the normal
+  //   SILENCE_ALERT_THRESHOLD_S grace. But if nobody is timing it, start
+  //   timing now: whichever path lost the stamp (restart hydrate, reconcile
+  //   adopting an already-Transitioning plan as next), the existing D84
+  //   invalidation then fires and the no_next_plan recovery takes over.
+  // 'completed' / 'Invalid' — a terminal plan can never activate; holding it
+  //   as next is the same permanent stall. Drop the pointer so the
+  //   no_next_plan recovery runs on the next cycle.
+  // 'active' — only reachable mid-activation; leave it to that path.
+  private async handleUnactivatableNextPlan(status: string, nowMs: number): Promise<void> {
+    if (status === 'Transitioning') {
+      if (this.nextPlanTransitioningSinceMs == null) {
+        this.nextPlanTransitioningSinceMs = nowMs;
+        this.logger?.warn({
+          process: 'supervisor', event: 'PLAN_STALL', reason: 'next_plan_transitioning_untimed',
+          active_plan_id: this.activePlanId, next_plan_id: this.nextPlanId,
+        }, 'supervisor: active plan exhausted with nothing playing; next plan is Transitioning but nothing was timing it — timing it from now, it is invalidated if it never confirms on air');
+      }
+      return;
+    }
+    if (status === 'completed' || status === 'Invalid') {
+      this.logger?.warn({
+        process: 'supervisor', event: 'PLAN_STALL', reason: 'next_plan_terminal',
+        active_plan_id: this.activePlanId, next_plan_id: this.nextPlanId, next_plan_status: status,
+      }, 'supervisor: active plan exhausted with nothing playing; next plan is already terminal and can never activate — dropping it so a fresh plan gets requested');
+      this.nextPlanId = null;
+      this.nextPlanSegmentId = null;
+      this.nextPlanTransitioningSinceMs = null;
+      await this.db.update(supervisorStateTable)
+        .set({ next_plan_id: null, next_plan_draft_drift_seconds: null, next_plan_drift_delta_seconds: null })
+        .where(eq(supervisorStateTable.id, 1));
+    }
   }
 
   // Retires a plan that is being abandoned before it ever activates — either
