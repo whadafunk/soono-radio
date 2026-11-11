@@ -250,3 +250,15 @@ export const SupervisorV2ControlResponseSchema = z.object({
   invalidated: z.boolean().optional(),
 });
 export type SupervisorV2ControlResponse = z.infer<typeof SupervisorV2ControlResponseSchema>;
+
+// Response of the station On Air / Off Air switch (POST /station/off-air,
+// POST /station/on-air).
+export const StationSwitchResponseSchema = z.object({
+  ok: z.boolean(),
+  off_air: z.boolean(),
+  // Off air only: false when scheduling stopped but the Mix Engine container
+  // couldn't be stopped yet (retried automatically) — `warning` says why.
+  mix_engine_stopped: z.boolean().optional(),
+  warning: z.string().optional(),
+});
+export type StationSwitchResponse = z.infer<typeof StationSwitchResponseSchema>;

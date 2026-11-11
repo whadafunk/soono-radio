@@ -120,6 +120,10 @@ export class QueueFeederProcess {
 
   private async doPush(source: string): Promise<void> {
     const state = await this.loadSupervisorState();
+    // Station off air: nothing may reach the mix engine. Checked here, at
+    // the single point every push passes through, against the persisted
+    // flag — not an in-memory copy that could lag the switch.
+    if (state?.paused) return;
     const activePlanId = state?.active_plan_id ?? null;
     const nextPlanId = state?.next_plan_id ?? null;
 
@@ -335,11 +339,12 @@ export class QueueFeederProcess {
 
   // ─── Helpers ────────────────────────────────────────────────────────────────
 
-  private async loadSupervisorState(): Promise<{ active_plan_id: number | null; next_plan_id: number | null } | null> {
+  private async loadSupervisorState(): Promise<{ active_plan_id: number | null; next_plan_id: number | null; paused: boolean } | null> {
     const [row] = await this.db
       .select({
         active_plan_id: supervisorStateTable.active_plan_id,
         next_plan_id: supervisorStateTable.next_plan_id,
+        paused: supervisorStateTable.paused,
       })
       .from(supervisorStateTable)
       .where(eq(supervisorStateTable.id, 1));

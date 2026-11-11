@@ -98,10 +98,14 @@ import {
   abortRow,
   closeMostRecentOpenRow,
   closeOpenRowsBefore,
+  closeRow,
+  deleteFailedPushAttempt,
   stampStarted,
 } from '../playHistoryService.js';
 import { resolvePlayhead } from '../playhead.js';
+import { LIQUIDSOAP_CONTAINER, stopContainer } from '../../dockerControl.js';
 import { judgeHeldNextPlan } from './nextPlanSlot.js';
+import { classifyInFlightItem, plannedEndMs } from './offAir.js';
 import { computeDriftAdjustedTarget } from '../requestPlan.js';
 
 // ── Thresholds ────────────────────────────────────────────────────────────────
@@ -134,6 +138,8 @@ const RECONCILE_FOLLOW_UP_MAX_HOPS = 4;          // automatic re-runs one reconc
 const RECONCILE_FOLLOW_UP_MAX_AGE_MS = 60_000;   // an unanswered follow-up intent older than this is dropped, not acted on
 const SILENCE_ALERT_REPEAT_MS = 60_000;            // re-alert cadence while a stall persists
 const SILENCE_ALERT_ESCALATE_S = 300;              // past this many seconds, escalate warn -> error
+const OFF_AIR_ENFORCE_INTERVAL_MS = 10_000;        // while off air: how often to check the mix engine is really down
+const OFF_AIR_ENFORCE_ERROR_LOG_MS = 60_000;       // re-log cadence while the mix engine can't be stopped
 
 // D71/D78 — cap how much drift one plan is asked to correct in one transition
 // (computeFirstPassTarget); the rest persists in boundaryDriftSeconds and gets
@@ -358,7 +364,17 @@ export class SupervisorProcess {
   private liveTakeoverActive = false;
   private liveTakeoverRowId: number | null = null;
   private pendingReplanForPlanId: number | null = null;
+  // Station off air — mirrors supervisor_state.paused, re-read every tick.
+  // The Dashboard's On Air / Off Air switch is the only writer. While set,
+  // nothing is planned, pushed, or logged as played.
   private isPaused = false;
+  // True once goOffAir()'s bookkeeping ran for the current off-air period —
+  // tick() uses the difference between this and isPaused to detect the
+  // transition in either direction, so the switch works the same whether the
+  // flag flipped under a running process or was already set at boot.
+  private offAirApplied = false;
+  private lastOffAirEnforceMs = 0;
+  private lastOffAirEnforceErrorLogMs = 0;
 
   // ── Segment observability ────────────────────────────────────────────────────
   private segmentEntryDriftSeconds = 0;
@@ -413,6 +429,7 @@ export class SupervisorProcess {
   start(): void {
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'LS_TRACK_STARTED' }>('LS_TRACK_STARTED', (msg) => {
+        if (this.isPaused) return; // station off air
         void this.handleTrackStarted(msg).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'LS_TRACK_STARTED' }, 'supervisor: LS_TRACK_STARTED handler failed');
         });
@@ -426,6 +443,7 @@ export class SupervisorProcess {
     // per event, so this doesn't affect queueFeeder's own handling.
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'LS_TRACK_ENDING' }>('LS_TRACK_ENDING', (msg) => {
+        if (this.isPaused) return; // station off air
         const nowMs = Date.now();
         void this.checkLsPid(msg.ls_pid, nowMs)
           .then(() => this.maybeHandleHardStartGate(nowMs))
@@ -436,6 +454,7 @@ export class SupervisorProcess {
     );
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'LS_LIVE_STARTED' }>('LS_LIVE_STARTED', (msg) => {
+        if (this.isPaused) return; // station off air
         void this.handleLiveStarted(msg).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'LS_LIVE_STARTED' }, 'supervisor: LS_LIVE_STARTED handler failed');
         });
@@ -443,6 +462,7 @@ export class SupervisorProcess {
     );
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'LS_LIVE_ENDED' }>('LS_LIVE_ENDED', (msg) => {
+        if (this.isPaused) return; // station off air
         void this.handleLiveEnded(msg).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'LS_LIVE_ENDED' }, 'supervisor: LS_LIVE_ENDED handler failed');
         });
@@ -450,6 +470,7 @@ export class SupervisorProcess {
     );
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PLAN_DRAFT_READY' }>('PLAN_DRAFT_READY', (msg) => {
+        if (this.isPaused) return; // station off air
         void this.handlePlanDraftReady(msg).then(() => this.maybeFollowUpReconcile(msg.plan_id)).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PLAN_DRAFT_READY' }, 'supervisor: PLAN_DRAFT_READY handler failed');
         });
@@ -457,6 +478,7 @@ export class SupervisorProcess {
     );
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PLAN_FINALIZED' }>('PLAN_FINALIZED', (msg) => {
+        if (this.isPaused) return; // station off air
         void this.handlePlanFinalized(msg).then(() => this.maybeFollowUpReconcile(msg.plan_id)).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PLAN_FINALIZED' }, 'supervisor: PLAN_FINALIZED handler failed');
         });
@@ -506,6 +528,7 @@ export class SupervisorProcess {
     // Track last push for silence alerting (Phase F).
     this.unsubscribers.push(
       this._bus.on<BusMessage & { type: 'PUSH_SENT' }>('PUSH_SENT', (msg) => {
+        if (this.isPaused) return; // station off air
         void this.maybePromoteToTransitioning(msg).catch((err) => {
           this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'PUSH_SENT_TRANSITIONING' }, 'supervisor: transitioning-promotion check failed');
         });
@@ -537,6 +560,9 @@ export class SupervisorProcess {
     // activePlanId being null for the brief window before this resolves.
     void (async () => {
       await this.hydrateFromDb();
+      // Booting while off air: nothing to establish. tick() applies the
+      // off-air bookkeeping, and going back on air runs its own reconcile.
+      if (this.isPaused) return;
       await this.reconcile(Date.now(), 'startup');
     })().catch((err) => {
       this.logger?.error({ err, process: 'supervisor', event: 'HANDLER_FAILED', source: 'startup_reconcile' }, 'supervisor: startup reconcile failed');
@@ -709,14 +735,44 @@ export class SupervisorProcess {
       .from(supervisorStateTable)
       .where(eq(supervisorStateTable.id, 1));
     this.isPaused = stateRow?.paused ?? false;
-    if (this.isPaused) return;
 
     const nowMs = Date.now();
 
+    // The heartbeat keeps beating while off air: the process is alive and
+    // watching the switch, and the Dashboard must be able to tell "off air"
+    // from "supervisor dead".
     this.tickOperation = 'heartbeat';
     if (nowMs - this.lastHeartbeatWriteMs >= this.HEARTBEAT_WRITE_INTERVAL_MS) {
       await this.updateHeartbeat(nowMs);
       this.lastHeartbeatWriteMs = nowMs;
+    }
+
+    // ── Station off air ──────────────────────────────────────────────────────
+    // offAirApplied is flipped synchronously, before the first await, so an
+    // overlapping tick (they fire every 500ms regardless of how long the
+    // previous one takes) can't run the same transition twice.
+    if (this.isPaused) {
+      if (!this.offAirApplied) {
+        this.offAirApplied = true;
+        this.tickOperation = 'go_off_air';
+        try {
+          await this.goOffAir(nowMs);
+        } catch (err) {
+          // Half-applied bookkeeping could leave a never-aired spot counted
+          // as delivered — every step is idempotent, so retry next tick.
+          this.offAirApplied = false;
+          throw err;
+        }
+      }
+      this.tickOperation = 'off_air_enforce';
+      await this.enforceMixEngineStopped(nowMs);
+      return;
+    }
+    if (this.offAirApplied) {
+      this.offAirApplied = false;
+      this.tickOperation = 'go_on_air';
+      await this.goOnAir(nowMs);
+      return;
     }
 
     // D79: periodic in-memory state dump — no DB queries, just what this
@@ -2048,6 +2104,205 @@ export class SupervisorProcess {
     }
   }
 
+  // ─── Station off air / on air ───────────────────────────────────────────────
+  //
+  // The Dashboard's On Air / Off Air switch writes supervisor_state.paused and
+  // stops/starts the mix engine container; tick() notices the flag change and
+  // calls these. Off air is a STOP, not a pause: nothing resumes mid-track.
+  // Everything in flight is closed out truthfully, every open plan is
+  // retired, and going back on air rebuilds from the wall clock exactly like
+  // a cold start. Because all delivery counts are read fresh from
+  // play_history, anything scheduled during the off-air window simply never
+  // aired — campaign pacing makes it up afterwards without any ledger here.
+
+  private async goOffAir(nowMs: number): Promise<void> {
+    this.logger?.warn({
+      process: 'supervisor', event: 'STATION_OFF_AIR',
+      active_plan_id: this.activePlanId, next_plan_id: this.nextPlanId,
+      current_play_history_id: this.currentPlayHistoryId,
+    }, 'supervisor: station going OFF AIR — closing out in-flight items and retiring all open plans');
+
+    await this.closeInFlightItems(nowMs);
+
+    // A live takeover ends with the station.
+    if (this.liveTakeoverActive || this.liveTakeoverRowId != null) {
+      if (this.liveTakeoverRowId != null) {
+        await this.db.update(liveEventsTable).set({ ended_at: nowMs }).where(eq(liveEventsTable.id, this.liveTakeoverRowId));
+      }
+      this._bus.emit({ type: 'LIVE_STATUS_CHANGED', active: false });
+    }
+
+    await this.retireAllOpenPlans();
+    this.resetRuntimeState();
+  }
+
+  // Items already handed to the mix engine: at most the one airing and the
+  // one pre-queued behind it. See offAir.ts for why they're treated
+  // differently.
+  private async closeInFlightItems(nowMs: number): Promise<void> {
+    const inFlight = await this.db
+      .select({
+        id: planItemsTable.id,
+        content_type: planItemsTable.content_type,
+        planned_duration_seconds: planItemsTable.planned_duration_seconds,
+        play_history_id: planItemsTable.play_history_id,
+        ph_confirmed: playHistoryTable.confirmed,
+        ph_started_at: playHistoryTable.started_at,
+        ph_ended_at: playHistoryTable.ended_at,
+      })
+      .from(planItemsTable)
+      .leftJoin(playHistoryTable, eq(playHistoryTable.id, planItemsTable.play_history_id))
+      .where(eq(planItemsTable.status, 'playing'));
+
+    for (const row of inFlight) {
+      const item = {
+        confirmed: row.ph_confirmed,
+        startedAtMs: row.ph_started_at ? new Date(row.ph_started_at).getTime() : null,
+        endedAtMs: row.ph_ended_at ? new Date(row.ph_ended_at).getTime() : null,
+        plannedDurationSeconds: row.planned_duration_seconds ?? 0,
+      };
+      const disposition = classifyInFlightItem(item, nowMs);
+      if (disposition === 'never_aired') {
+        await this.db.update(planItemsTable)
+          .set({ status: 'dropped', play_history_id: null })
+          .where(eq(planItemsTable.id, row.id));
+        if (row.play_history_id != null) await deleteFailedPushAttempt(this.db, row.play_history_id);
+      } else if (disposition === 'finished') {
+        await this.db.update(planItemsTable).set({ status: 'played' }).where(eq(planItemsTable.id, row.id));
+        const endMs = plannedEndMs(item);
+        if (row.play_history_id != null && item.endedAtMs == null && endMs != null) {
+          await closeRow(this.db, row.play_history_id, endMs);
+        }
+      } else {
+        await this.db.update(planItemsTable).set({ status: 'operator_skipped' }).where(eq(planItemsTable.id, row.id));
+        if (row.play_history_id != null) await abortRow(this.db, row.play_history_id, nowMs);
+      }
+      this.logger?.info({
+        process: 'supervisor', event: 'OFF_AIR_ITEM_CLOSED',
+        plan_item_id: row.id, play_history_id: row.play_history_id,
+        content_type: row.content_type, disposition,
+      }, `supervisor: off air — in-flight item closed as ${disposition}`);
+    }
+  }
+
+  private async goOnAir(nowMs: number): Promise<void> {
+    this.logger?.warn({
+      process: 'supervisor', event: 'STATION_ON_AIR',
+    }, 'supervisor: station going ON AIR — rebuilding from the wall clock');
+
+    // A push or a planner answer that was already in flight when the station
+    // went off air can have left an item, a plan or a pointer behind after
+    // goOffAir's sweep — sweep again so the rebuild below starts from a
+    // provably clean slate. The mix engine was stopped in between, so any
+    // item still marked in flight is stale by definition.
+    await this.closeInFlightItems(nowMs);
+    await this.retireAllOpenPlans();
+    this.resetRuntimeState();
+    // The silence alert measures from here, not from before the stop.
+    this.lastAudioConfirmedMs = nowMs;
+
+    // Same path as a process start with nothing trustworthy on air. The mix
+    // engine may still be booting: pushes fail and retry until it answers
+    // (items stay pending), the same way they do when the API starts first.
+    await this.reconcile(nowMs, 'station_on_air');
+  }
+
+  // Retires every plan that hasn't reached a terminal status and clears every
+  // pointer to one. 'completed' matches what Align to Clock and
+  // retirePlanWithoutActivating already use for a plan that stops short.
+  private async retireAllOpenPlans(): Promise<void> {
+    await this.db.update(plansTable)
+      .set({ status: 'completed' })
+      .where(inArray(plansTable.status, ['draft', 'finalized', 'Transitioning', 'active']));
+    await this.db.update(supervisorStateTable)
+      .set({
+        active_plan_id: null,
+        next_plan_id: null,
+        next_plan_draft_drift_seconds: null,
+        next_plan_drift_delta_seconds: null,
+        current_play_history_id: null,
+        current_segment_id: null,
+        current_drift_seconds: 0,
+        boundary_drift_seconds: 0,
+        intentional_offset_seconds: 0,
+        planned_overshoot_seconds: 0,
+        // The mix engine comes back as a new process; forgetting the old pid
+        // makes that a fresh baseline instead of a "restart detected".
+        ls_pid: null,
+      })
+      .where(eq(supervisorStateTable.id, 1));
+  }
+
+  // Returns every piece of per-run state to what a freshly constructed
+  // process holds. Anything added to this class that describes "what is
+  // airing / being planned right now" belongs in here too.
+  private resetRuntimeState(): void {
+    this.activePlanId = null;
+    this.nextPlanId = null;
+    this.nextPlanSegmentId = null;
+    this.nextPlanDraftDriftSeconds = 0;
+    this.plannedOvershootSeconds = 0;
+    this.nextPlanIntentionalOffsetSeconds = 0;
+    this.intentionalOffsetSeconds = 0;
+    this.boundaryDriftSeconds = 0;
+    this.currentSegmentId = null;
+    this.currentSegmentEndMs = null;
+    this.currentClockInstanceMs = null;
+    this.currentDriftSeconds = 0;
+    this.planActivatedAtMs = 0;
+    this.finalizationRequestedForPlanId = null;
+    this.finalizeInFlightForPlanId = null;
+    this.finalizeInFlightSinceMs = null;
+    this.pendingReplanForPlanId = null;
+    this.pendingReplanSinceMs = null;
+    this.activePlanHardBoundary = null;
+    this.coldStartFinalizeSent = false;
+    this.exhaustedPlanReconciledFor = null;
+    this.reconcileFollowUps.clear();
+    this.nextPlanTransitioningSinceMs = null;
+    this.lastSeenLsPid = null;
+    this.currentPlayHistoryId = null;
+    this.liveTakeoverActive = false;
+    this.liveTakeoverRowId = null;
+    this.segmentEntryDriftSeconds = 0;
+    this.lastSilenceAlertMs = null;
+    this.stillOpenWaitSince = null;
+    this.lastStillOpenLogMs = 0;
+    this.lastRealityCheckMs = 0;
+    this.cachedSegment = null;
+    this.cachedSegmentValidUntilMs = 0;
+  }
+
+  // Off air must stay off air. The mix engine container can come back on its
+  // own — a deploy's `docker compose up`, a manual `docker start`, the
+  // Dashboard's own restart button — and would put a silent carrier (or a
+  // live input) on the stream. While off air, check periodically and stop it
+  // again. Also what finishes the job if the switch's own stop call failed.
+  private async enforceMixEngineStopped(nowMs: number): Promise<void> {
+    if (nowMs - this.lastOffAirEnforceMs < OFF_AIR_ENFORCE_INTERVAL_MS) return;
+    this.lastOffAirEnforceMs = nowMs;
+
+    try {
+      await HarborClient.getLiveStatus();
+    } catch {
+      return; // unreachable — the mix engine is down, as it should be
+    }
+
+    try {
+      await stopContainer(LIQUIDSOAP_CONTAINER);
+      this.logger?.warn({
+        process: 'supervisor', event: 'OFF_AIR_MIX_ENGINE_STOPPED',
+      }, 'supervisor: mix engine was running while the station is off air — stopped it');
+    } catch (err) {
+      if (nowMs - this.lastOffAirEnforceErrorLogMs >= OFF_AIR_ENFORCE_ERROR_LOG_MS) {
+        this.lastOffAirEnforceErrorLogMs = nowMs;
+        this.logger?.error({
+          err, process: 'supervisor', event: 'OFF_AIR_MIX_ENGINE_STOP_FAILED',
+        }, 'supervisor: station is off air but the mix engine is still running and could not be stopped');
+      }
+    }
+  }
+
   // ─── Reconcile ──────────────────────────────────────────────────────────────
   //
   // Unlike tick(), which only reacts to bus events and assumes each one fires
@@ -2059,6 +2314,15 @@ export class SupervisorProcess {
   // (align-to-wall-clock). Ordinary segment-to-segment handoffs keep using
   // the existing tick()/isNewSegment/D44 machinery untouched.
   private async reconcile(nowMs: number, trigger: string, hops = 0): Promise<void> {
+    // Off air: schedule edits still land in the DB, but nothing is planned
+    // until the station goes back on air — which rebuilds from the schedule
+    // as it stands at that moment anyway.
+    if (this.isPaused) {
+      this.logger?.info({
+        process: 'supervisor', event: 'RECONCILE_SKIPPED_OFF_AIR', trigger,
+      }, 'reconcile: skipped — station is off air');
+      return;
+    }
     const followUp = { trigger, hops };
     const resolved = await resolveCurrentSegment(nowMs, this.db);
     if (!resolved) {
@@ -2091,7 +2355,7 @@ export class SupervisorProcess {
     // triggers keep full authority: startup (nothing airing is trusted yet —
     // establishing IS its job), operator/align_to_clock (explicit intent),
     // operator_skip (live action needing immediate re-evaluation).
-    const AUTHORITATIVE_TRIGGERS = new Set(['startup', 'operator', 'align_to_clock', 'operator_skip']);
+    const AUTHORITATIVE_TRIGGERS = new Set(['startup', 'station_on_air', 'operator', 'align_to_clock', 'operator_skip']);
     if (!AUTHORITATIVE_TRIGGERS.has(trigger) && this.activePlanId != null) {
       const [airing] = await this.db
         .select({ status: plansTable.status })

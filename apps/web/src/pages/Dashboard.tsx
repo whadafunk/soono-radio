@@ -13,6 +13,8 @@ import {
   fetchSimulate,
   postSupervisorAlignToWallClock,
   postSupervisorAlignToClock,
+  postStationOffAir,
+  postStationOnAir,
 } from '../api';
 import type { SupervisorV2Status, LiquidsoapConfig } from '@soono/shared';
 import { LUFS_PRESETS, FADE_SHAPES, matchMasterBusPreset } from '@soono/shared';
@@ -90,6 +92,34 @@ export function Dashboard() {
     },
   });
 
+  const stationOffM = useMutation({
+    mutationFn: postStationOffAir,
+    onSuccess: (data) => {
+      setRestartToast(data.warning ? `⚠ Station is off air. ${data.warning}` : '✓ Station is off air.');
+      setTimeout(() => setRestartToast(null), data.warning ? 12000 : 5000);
+      qc.invalidateQueries({ queryKey: ['supervisor-v2-status'] });
+      qc.invalidateQueries({ queryKey: ['liquidsoap-status'] });
+    },
+    onError: (err) => {
+      setRestartToast(`✗ Error: ${(err as Error).message}`);
+      setTimeout(() => setRestartToast(null), 8000);
+    },
+  });
+
+  const stationOnM = useMutation({
+    mutationFn: postStationOnAir,
+    onSuccess: () => {
+      setRestartToast('✓ Station is going on air — the Mix Engine is starting and the schedule is being rebuilt from the clock.');
+      setTimeout(() => setRestartToast(null), 6000);
+      qc.invalidateQueries({ queryKey: ['supervisor-v2-status'] });
+      qc.invalidateQueries({ queryKey: ['liquidsoap-status'] });
+    },
+    onError: (err) => {
+      setRestartToast(`✗ Error: ${(err as Error).message}`);
+      setTimeout(() => setRestartToast(null), 8000);
+    },
+  });
+
   const resetPeakM = useMutation({
     mutationFn: resetPeakListeners,
     onSuccess: () => {
@@ -144,6 +174,7 @@ export function Dashboard() {
   const isOnline = !statsError && stats && stats.listener >= 0;
   const icecastBaseUrl = config ? getIcecastBaseUrl(config) : 'https://localhost:8000';
   const supervisorHb = heartbeatStatus(v2Status?.last_heartbeat_at ?? null);
+  const offAir = v2Status?.paused ?? false;
 
   return (
     <div className="space-y-6">
@@ -163,6 +194,19 @@ export function Dashboard() {
         <p className="text-red-400 text-sm">✗ Streaming Engine is not responding</p>
       )}
 
+      {v2Status && (
+        <StationSwitch
+          offAir={offAir}
+          pending={stationOffM.isPending || stationOnM.isPending}
+          onGoOffAir={() => {
+            if (confirm('Take the station OFF AIR?\n\nWhatever is playing is cut immediately, the Mix Engine is stopped and nothing is scheduled or logged until you go back on air. Spots that do not air while off air are not counted as delivered.')) {
+              stationOffM.mutate();
+            }
+          }}
+          onGoOnAir={() => stationOnM.mutate()}
+        />
+      )}
+
       <section>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           <HealthPill
@@ -176,22 +220,28 @@ export function Dashboard() {
           <HealthPill
             label="Mix Engine"
             detail="LiquidSoap"
-            ok={lsStatus?.reachable ?? null}
-            state={lsStatus?.reachable ? (lsStatus.on_air === 'live' ? 'LIVE' : 'AUTOMATION') : 'OFFLINE'}
+            ok={offAir ? null : (lsStatus?.reachable ?? null)}
+            state={
+              offAir
+                ? (lsStatus?.reachable ? 'STOPPING' : 'STOPPED')
+                : lsStatus?.reachable ? (lsStatus.on_air === 'live' ? 'LIVE' : 'AUTOMATION') : 'OFFLINE'
+            }
             onRestart={() => restartLiquidsoapM.mutate()}
             restarting={restartLiquidsoapM.isPending}
+            restartDisabledReason={offAir ? 'Station is off air — go back on air to start the Mix Engine' : undefined}
           />
           <HealthPill
             label="Supervisor"
             detail={fmtRelativeTime(v2Status?.last_heartbeat_at ?? null)}
-            ok={supervisorHb.label === 'ok' ? true : supervisorHb.label === 'offline' ? false : null}
-            state={supervisorHb.label.toUpperCase()}
+            ok={supervisorHb.label === 'offline' ? false : offAir ? null : supervisorHb.label === 'ok' ? true : null}
+            state={offAir && supervisorHb.label !== 'offline' ? 'OFF AIR' : supervisorHb.label.toUpperCase()}
             onRestart={() => {
               if (confirm('Align to Clock discards the active plan and rebuilds it from the wall clock. Content already queued but not yet aired will be dropped. Continue?')) {
                 restartSupervisorM.mutate();
               }
             }}
             restarting={restartSupervisorM.isPending}
+            restartDisabledReason={offAir ? 'Station is off air — nothing to realign' : undefined}
           />
         </div>
       </section>
@@ -402,6 +452,60 @@ export function Dashboard() {
 
 import type { IcecastConfig, SupervisorV2RecentPlay } from '@soono/shared';
 
+// The station-level switch. Off air stops the whole station — scheduling,
+// play logging and the Mix Engine together — so nothing is recorded as aired
+// while nobody can hear it.
+function StationSwitch({
+  offAir,
+  pending,
+  onGoOffAir,
+  onGoOnAir,
+}: {
+  offAir: boolean;
+  pending: boolean;
+  onGoOffAir: () => void;
+  onGoOnAir: () => void;
+}) {
+  return (
+    <section
+      className={`rounded-lg border p-5 flex flex-col sm:flex-row sm:items-center gap-4 ${
+        offAir ? 'bg-red-950/30 border-red-900' : 'bg-zinc-900 border-zinc-800'
+      }`}
+    >
+      <div className="flex items-center gap-4 min-w-0 flex-1">
+        <span className="relative flex h-4 w-4 flex-shrink-0">
+          {!offAir && <span className="absolute inline-flex h-full w-full rounded-full bg-green-500 opacity-60 animate-ping" />}
+          <span className={`relative inline-flex h-4 w-4 rounded-full ${offAir ? 'bg-red-500' : 'bg-green-500'}`} />
+        </span>
+        <div className="min-w-0">
+          <p className="text-zinc-400 text-xs font-medium">Station</p>
+          <p className={`text-2xl font-black tracking-wide ${offAir ? 'text-red-400' : 'text-green-400'}`}>
+            {offAir ? 'OFF AIR' : 'ON AIR'}
+          </p>
+          <p className="text-xs text-zinc-400 mt-0.5">
+            {offAir
+              ? 'Nothing is being scheduled, played or logged. Spots missed while off air are not counted as delivered — campaign pacing makes them up once the station is back.'
+              : 'Scheduling and the Mix Engine are running.'}
+          </p>
+        </div>
+      </div>
+      <button
+        type="button"
+        onClick={offAir ? onGoOnAir : onGoOffAir}
+        disabled={pending}
+        className={`flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 flex-shrink-0 ${
+          offAir
+            ? 'bg-green-600 hover:bg-green-500 text-white'
+            : 'bg-red-950/40 hover:bg-red-600 border border-red-800 hover:border-red-600 text-red-300 hover:text-white'
+        }`}
+      >
+        {pending ? <Loader className="w-4 h-4 animate-spin" /> : offAir ? <Power className="w-4 h-4" /> : <Square className="w-4 h-4" />}
+        {pending ? (offAir ? 'Going on air…' : 'Going off air…') : offAir ? 'Go On Air' : 'Go Off Air'}
+      </button>
+    </section>
+  );
+}
+
 function HealthPill({
   label,
   detail,
@@ -409,6 +513,7 @@ function HealthPill({
   state,
   onRestart,
   restarting,
+  restartDisabledReason,
 }: {
   label: string;
   detail: string;
@@ -416,6 +521,8 @@ function HealthPill({
   state: string;
   onRestart?: () => void;
   restarting?: boolean;
+  // When set, the restart button is disabled and this is shown as its tooltip.
+  restartDisabledReason?: string;
 }) {
   const dotCls = ok === null ? 'bg-zinc-600' : ok ? 'bg-green-500' : 'bg-red-500';
   const textCls = ok === null ? 'text-zinc-400' : ok ? 'text-green-400' : 'text-red-400';
@@ -431,8 +538,8 @@ function HealthPill({
         <button
           type="button"
           onClick={onRestart}
-          disabled={restarting}
-          title={`Restart ${label}`}
+          disabled={restarting || restartDisabledReason != null}
+          title={restartDisabledReason ?? `Restart ${label}`}
           className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-800 rounded transition-colors disabled:opacity-40 flex-shrink-0"
         >
           {restarting ? <Loader className="w-3.5 h-3.5 animate-spin" /> : <Power className="w-3.5 h-3.5" />}
@@ -452,10 +559,14 @@ function NowPlayingCard({ status, icecastConfig }: { status: SupervisorV2Status 
           <Mic className="w-10 h-10 text-zinc-700" />
           <div className="flex-1">
             <p className="text-zinc-400 text-sm font-medium">Now Playing</p>
-            <p className="text-xl font-bold text-zinc-500 mt-1">● SILENCE</p>
-            <p className="text-xs text-zinc-600 mt-1">
-              No active plan — the Supervisor is idle or between segments.
-            </p>
+            <p className="text-xl font-bold text-zinc-500 mt-1">{status?.paused ? '● OFF AIR' : '● SILENCE'}</p>
+            {status?.paused ? (
+              <p className="text-xs text-zinc-400 mt-1">The station is off air.</p>
+            ) : (
+              <p className="text-xs text-zinc-600 mt-1">
+                No active plan — the Supervisor is idle or between segments.
+              </p>
+            )}
           </div>
         </div>
         {monitor}

@@ -31,6 +31,8 @@ import {
   SupervisorV2StatusSchema,
   SupervisorV2ControlResponse,
   SupervisorV2ControlResponseSchema,
+  StationSwitchResponse,
+  StationSwitchResponseSchema,
   SupervisorV2DriftLedger,
   SupervisorV2DriftLedgerSchema,
   LogSourceId,
@@ -1407,6 +1409,24 @@ export async function postSupervisorAlignToClock(): Promise<SupervisorV2ControlR
   const res = await fetch(`${API_BASE}/supervisor/v2/align-to-clock`, { method: 'POST' });
   if (!res.ok) throw new Error(`Align to Clock failed: ${res.statusText}`);
   return SupervisorV2ControlResponseSchema.parse(await res.json());
+}
+
+export async function postStationOffAir(): Promise<StationSwitchResponse> {
+  const res = await fetch(`${API_BASE}/station/off-air`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Going off air failed: ${res.statusText}`);
+  }
+  return StationSwitchResponseSchema.parse(await res.json());
+}
+
+export async function postStationOnAir(): Promise<StationSwitchResponse> {
+  const res = await fetch(`${API_BASE}/station/on-air`, { method: 'POST' });
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}));
+    throw new Error(body.error || `Going on air failed: ${res.statusText}`);
+  }
+  return StationSwitchResponseSchema.parse(await res.json());
 }
 
 // D108 — after a schedule-affecting save, asks whether the running

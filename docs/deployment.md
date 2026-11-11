@@ -145,8 +145,9 @@ additive-only — no manual SQL needed for routine upgrades.
 
 ### Restarting individual services
 
-The **Restart Icecast** and **Restart LiquidSoap** buttons in the UI go through the
-`socket-proxy` service, which exposes only `POST /containers/*/restart` on the internal
+The **Restart Icecast** and **Restart LiquidSoap** buttons in the UI, and the Dashboard's
+**On Air / Off Air** switch (which stops and starts the LiquidSoap container), go through the
+`socket-proxy` service, which exposes only the `/containers/*` endpoints on the internal
 network. The Docker socket is never mounted directly into application containers.
 
 You can also restart from the host:

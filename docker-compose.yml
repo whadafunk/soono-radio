@@ -12,14 +12,15 @@ name: soono
 #                   mix-engine.liq exists before LS tries to load it
 #
 # Container restarts (Restart Icecast / Restart LiquidSoap buttons) go through
-# the socket-proxy service which exposes only POST /containers/*/restart on the
+# the socket-proxy service which exposes only the /containers/* endpoints (used
+# for POST restart/stop/start — the station On Air / Off Air switch) on the
 # internal network. The Docker socket is never mounted into app containers.
 
 services:
 
   # ── Docker socket proxy ──────────────────────────────────────────────────────
   # Exposes a narrow slice of the Docker Engine API on the internal network.
-  # Only POST /containers/*/restart is permitted — no socket mount in app containers.
+  # Only /containers/* is permitted (restart/stop/start) — no socket mount in app containers.
   socket-proxy:
     image: tecnativa/docker-socket-proxy:0.1.1
     container_name: soono-socket-proxy
@@ -28,7 +29,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock:ro
     environment:
       CONTAINERS: 1   # allow /containers/* endpoints
-      POST: 1         # allow POST (needed for restart)
+      POST: 1         # allow POST (needed for restart/stop/start)
       # All other resource types (images, networks, volumes, etc.) default to 0.
 
   # ── Icecast ─────────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ import { spotBudgetRoutes } from './routes/spotBudget.js';
 import { stationSettingsRoutes } from './routes/stationSettings.js';
 import { supervisorStatusRoutes } from './routes/supervisorStatus.js';
 import { supervisorControlRoutes } from './routes/supervisorControl.js';
+import { stationRoutes } from './routes/station.js';
 import { logsRoutes } from './routes/logs.js';
 import { maintenanceRoutes } from './routes/maintenance.js';
 import { startDbRetentionSweep } from './services/maintenance/dbRetention.js';
@@ -120,6 +121,7 @@ fastify.register(spotBudgetRoutes);
 fastify.register(stationSettingsRoutes);
 fastify.register(supervisorStatusRoutes);
 fastify.register(supervisorControlRoutes);
+fastify.register(stationRoutes);
 fastify.register(logsRoutes);
 fastify.register(maintenanceRoutes);
 

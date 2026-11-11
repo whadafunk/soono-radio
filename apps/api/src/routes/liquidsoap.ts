@@ -1,4 +1,7 @@
 import { FastifyInstance } from 'fastify';
+import { eq } from 'drizzle-orm';
+import { db } from '../db/index.js';
+import { supervisorState } from '../db/schema.js';
 import { LiquidsoapConfigSchema } from '@soono/shared';
 import {
   readLiquidsoapConfig,
@@ -63,6 +66,12 @@ export async function liquidsoapRoutes(fastify: FastifyInstance) {
   });
 
   fastify.post('/liquidsoap/restart', async (_request, reply) => {
+    // Off air, the mix engine is deliberately stopped and the supervisor
+    // stops it again if it reappears — a restart here would only flap it.
+    const [state] = await db.select({ paused: supervisorState.paused }).from(supervisorState).where(eq(supervisorState.id, 1));
+    if (state?.paused) {
+      return reply.status(409).send({ error: 'The station is off air — put it back on air to start the Mix Engine.' });
+    }
     try {
       await restartContainer('soono-liquidsoap');
       return reply.status(200).send({ success: true, message: 'Liquidsoap restarting...' });
