@@ -198,11 +198,7 @@ export function Dashboard() {
         <StationSwitch
           offAir={offAir}
           pending={stationOffM.isPending || stationOnM.isPending}
-          onGoOffAir={() => {
-            if (confirm('Take the station OFF AIR?\n\nWhatever is playing is cut immediately, the Mix Engine is stopped and nothing is scheduled or logged until you go back on air. Spots that do not air while off air are not counted as delivered.')) {
-              stationOffM.mutate();
-            }
-          }}
+          onGoOffAir={() => stationOffM.mutate()}
           onGoOnAir={() => stationOnM.mutate()}
         />
       )}
@@ -466,6 +462,15 @@ function StationSwitch({
   onGoOffAir: () => void;
   onGoOnAir: () => void;
 }) {
+  // Going off air is confirmed inline, in this panel — the button swaps for
+  // the consequence text plus Confirm / Cancel. Disarms itself once the
+  // station actually is off air.
+  const [confirming, setConfirming] = useState(false);
+  useEffect(() => {
+    if (offAir) setConfirming(false);
+  }, [offAir]);
+  const showConfirm = confirming && !offAir && !pending;
+
   return (
     <section
       className={`rounded-lg border p-5 flex flex-col sm:flex-row sm:items-center gap-4 ${
@@ -485,23 +490,47 @@ function StationSwitch({
           <p className="text-xs text-zinc-400 mt-0.5">
             {offAir
               ? 'Nothing is being scheduled, played or logged. Spots missed while off air are not counted as delivered — campaign pacing makes them up once the station is back.'
-              : 'Scheduling and the Mix Engine are running.'}
+              : showConfirm
+                ? 'Take the station off air? Whatever is playing is cut immediately, the Mix Engine is stopped, and nothing is scheduled or logged until you go back on air. Spots that do not air while off air are not counted as delivered.'
+                : 'Scheduling and the Mix Engine are running.'}
           </p>
         </div>
       </div>
-      <button
-        type="button"
-        onClick={offAir ? onGoOnAir : onGoOffAir}
-        disabled={pending}
-        className={`flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 flex-shrink-0 ${
-          offAir
-            ? 'bg-green-600 hover:bg-green-500 text-white'
-            : 'bg-red-950/40 hover:bg-red-600 border border-red-800 hover:border-red-600 text-red-300 hover:text-white'
-        }`}
-      >
-        {pending ? <Loader className="w-4 h-4 animate-spin" /> : offAir ? <Power className="w-4 h-4" /> : <Square className="w-4 h-4" />}
-        {pending ? (offAir ? 'Going on air…' : 'Going off air…') : offAir ? 'Go On Air' : 'Go Off Air'}
-      </button>
+      {showConfirm ? (
+        <div className="flex items-center gap-2 flex-shrink-0">
+          <button
+            type="button"
+            onClick={() => setConfirming(false)}
+            className="px-5 py-3 rounded-lg text-sm font-bold text-zinc-300 hover:text-white border border-zinc-700 hover:bg-zinc-800 transition-colors"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setConfirming(false);
+              onGoOffAir();
+            }}
+            className="px-5 py-3 rounded-lg text-sm font-bold bg-red-600 hover:bg-red-500 text-white transition-colors"
+          >
+            Yes, go off air
+          </button>
+        </div>
+      ) : (
+        <button
+          type="button"
+          onClick={offAir ? onGoOnAir : () => setConfirming(true)}
+          disabled={pending}
+          className={`flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-sm font-bold transition-colors disabled:opacity-50 flex-shrink-0 ${
+            offAir
+              ? 'bg-green-600 hover:bg-green-500 text-white'
+              : 'bg-red-950/40 hover:bg-red-600 border border-red-800 hover:border-red-600 text-red-300 hover:text-white'
+          }`}
+        >
+          {pending && <Loader className="w-4 h-4 animate-spin" />}
+          {pending ? (offAir ? 'Going on air…' : 'Going off air…') : offAir ? 'Go On Air' : 'Go Off Air'}
+        </button>
+      )}
     </section>
   );
 }
