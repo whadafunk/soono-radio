@@ -33,7 +33,11 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/shared/package.json apps/shared/
 
-RUN npm install -g pnpm --quiet && pnpm install --frozen-lockfile
+# pnpm is pinned (same version as package.json's "packageManager"). Unpinned,
+# this line installed whatever was newest on build day, and a newer pnpm
+# refused the install outright (ERR_PNPM_IGNORED_BUILDS) — invisible on the
+# server only while Docker kept reusing an old cached copy of this step.
+RUN npm install -g pnpm@10.33.2 --quiet && pnpm install --frozen-lockfile
 
 # ── Build ─────────────────────────────────────────────────────────────────────
 COPY apps/shared apps/shared

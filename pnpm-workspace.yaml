@@ -1,2 +1,10 @@
 packages:
   - 'apps/*'
+
+# Dependencies allowed to run their own install scripts. pnpm blocks these by
+# default; anything not listed here is skipped (pnpm 10) or fails the install
+# (newer pnpm). esbuild fetches its platform binary; better-sqlite3 compiles
+# its native module.
+onlyBuiltDependencies:
+  - better-sqlite3
+  - esbuild

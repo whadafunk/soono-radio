@@ -2,7 +2,7 @@
   "name": "soono",
   "version": "0.0.1",
   "private": true,
-  "packageManager": "pnpm@latest",
+  "packageManager": "pnpm@10.33.2",
   "workspaces": [
     "apps/*",
     "packages/*"
