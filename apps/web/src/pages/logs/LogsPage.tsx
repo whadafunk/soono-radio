@@ -274,6 +274,11 @@ export function LogsPage() {
             <option value="icecast-access">access.log</option>
           </select>
         )}
+        {/* The mix engine and Icecast write their own log lines in their
+            containers' time, which stays UTC whatever the station timezone is. */}
+        {!view.structured && (
+          <span className="text-xs text-zinc-400">Timestamps in this log are in UTC.</span>
+        )}
         {view.structured && (
           <>
             <select

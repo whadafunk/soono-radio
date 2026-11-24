@@ -1142,6 +1142,10 @@ export type RundownPlaybackCursor = typeof rundownPlaybackCursors.$inferSelect;
 export const stationSettings = sqliteTable('station_settings', {
   id:                integer('id').primaryKey().default(1),
   promo_margin:      real('promo_margin').notNull().default(0.10),
+  // The timezone every clock time ("08:00") and calendar day is read in — a
+  // zone NAME, never an offset. Applied to the API process at startup and on
+  // save (services/stationTimeZone.ts). See docs/station-timezone-design.md.
+  timezone: text('timezone').notNull().default('Europe/Bucharest'),
   // Station-wide fallback clock, resolved as the 4th (last) tier in
   // resolveCurrentSegment when no calendar/template_clock/template entry
   // covers the current moment. Configuring it is a startup precondition —

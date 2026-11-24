@@ -38,6 +38,8 @@ import {
   Show,
   CampaignValidationDraft,
   CampaignValidationDraftSchema,
+  addDaysYmd,
+  localYmd,
 } from '@soono/shared';
 import { HelpTooltip } from '../../components/HelpTooltip';
 import { CampaignMediaSection } from './CampaignMediaSection';
@@ -84,13 +86,11 @@ import {
 // ─── Spot budget helpers ──────────────────────────────────────────────────────
 
 function isoToday(): string {
-  return new Date().toISOString().slice(0, 10);
+  return localYmd();
 }
 
 function isoOffsetDays(base: string, days: number): string {
-  const d = new Date(base);
-  d.setDate(d.getDate() + days);
-  return d.toISOString().slice(0, 10);
+  return addDaysYmd(base, days);
 }
 
 function fmtMinutes(mins: number): string {
@@ -450,10 +450,8 @@ function BudgetImpactRow({
     && durationBracket != null;
 
   // Always use the 30-day rolling reference window, not the campaign's own dates.
-  const today = new Date().toISOString().slice(0, 10);
-  const windowEnd = new Date();
-  windowEnd.setDate(windowEnd.getDate() + 30);
-  const windowEndStr = windowEnd.toISOString().slice(0, 10);
+  const today = localYmd();
+  const windowEndStr = addDaysYmd(today, 30);
 
   const { data, isLoading } = useQuery({
     queryKey: ['spot-budget-30d'],
@@ -1823,7 +1821,7 @@ function CreateCampaignForm({
               Start Date *
               <HelpTooltip text="The first date this campaign is eligible to air." />
             </label>
-            <input type="date" {...register('starts_on')} min={new Date().toISOString().slice(0, 10)} disabled={isLoading} className={INPUT} />
+            <input type="date" {...register('starts_on')} min={localYmd()} disabled={isLoading} className={INPUT} />
             {formState.errors.starts_on && <p className="text-red-400 text-xs mt-1">{formState.errors.starts_on.message}</p>}
           </div>
           <div>
@@ -2226,7 +2224,7 @@ function CampaignTableRow({
       </td>
       <td className="px-6 py-3 border-r border-zinc-800/60">
         {campaign.active && (() => {
-          const today = new Date().toISOString().slice(0, 10);
+          const today = localYmd();
           if (campaign.starts_on > today) return null;
           if (campaign.starts_on === today) return <span className="text-xs text-zinc-600">Not enough data</span>;
           return <SpotPacingCell campaignId={campaign.id} />;
@@ -2948,7 +2946,7 @@ function CampaignEditForm({
             End Date *
             <HelpTooltip text="The last date this campaign is eligible to air. No plays are scheduled after this date." />
           </label>
-          <input type="date" {...register('ends_on')} min={new Date().toISOString().slice(0, 10)} disabled={isLoading} className={INPUT} />
+          <input type="date" {...register('ends_on')} min={localYmd()} disabled={isLoading} className={INPUT} />
         </div>
       </div>
 

@@ -22,7 +22,7 @@ import {
 } from '../db/schema.js';
 import { invalidateInventory, invalidateDemand } from '../services/spotBudget.js';
 import { validateCampaignDraft, validationSummary } from '../services/campaignValidator.js';
-import { computeDailyQuota } from '@soono/shared';
+import { buildCampaignForecast } from '../services/campaignForecast.js';
 import { campaignCompletedPlayFilter } from '../services/supervisor2/playHistoryViews.js';
 import { playHistory, stationSettings } from '../db/schema.js';
 import { and as andOp, isNotNull as isNotNullOp } from 'drizzle-orm';
@@ -397,27 +397,16 @@ export async function customerRoutes(fastify: FastifyInstance) {
     const remainingDays = Math.max(0, Math.round((endMs - fromMs) / dayMs) + 1);
 
     const remaining = Math.max(0, c.total_plays - delivered);
-    const forecast: Array<{ date: string; planned: number }> = [];
-    let rem = remaining;
-    let quotaToday = 0;
-    for (let d = 0; d < remainingDays; d++) {
-      const q = computeDailyQuota({
-        totalPlays: c.total_plays,
-        delivered: c.total_plays - rem,
-        totalDays,
-        remainingDays: remainingDays - d,
-        catchUpFactor: catchUp,
-        maxPlaysPerDay: c.max_plays_per_day,
-        pacingMode: c.pacing_mode,
-      });
-      const planned = Math.min(q, rem);
-      const date = new Date(fromMs + d * dayMs);
-      const dateStr = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
-      if (d === 0) quotaToday = q;
-      if (forecast.length < 120) forecast.push({ date: dateStr, planned });
-      rem -= planned;
-    }
-    void todayStr;
+    const { forecast, quotaToday, shortfall } = buildCampaignForecast({
+      totalPlays: c.total_plays,
+      delivered,
+      totalDays,
+      fromYmd: c.starts_on > todayStr ? c.starts_on : todayStr,
+      remainingDays,
+      catchUpFactor: catchUp,
+      maxPlaysPerDay: c.max_plays_per_day,
+      pacingMode: c.pacing_mode,
+    });
 
     return reply.send({
       campaign_id: id,
@@ -428,7 +417,7 @@ export async function customerRoutes(fastify: FastifyInstance) {
       remaining_days: remainingDays,
       quota_today: quotaToday,
       delivered_today: deliveredToday,
-      shortfall: Math.max(0, rem),
+      shortfall,
       per_spot: spots.map((sp) => ({
         media_id: sp.media_id,
         title: sp.title ?? sp.original_filename ?? null,

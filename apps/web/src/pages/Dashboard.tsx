@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Activity, AlertTriangle, Users, Gauge, Radio, Power, Loader, Zap, Mic, Music2, Clock, Headphones, Square, Volume2, TrendingUp, Wifi, RotateCcw } from 'lucide-react';
+import { StationClock } from '../components/StationClock';
 import {
   fetchIcecastStats,
   fetchIcecastConfig,
@@ -181,6 +182,10 @@ export function Dashboard() {
       <div className="flex items-start justify-between">
         <div>
           <h1 className="text-3xl font-bold text-white">Dashboard</h1>
+        </div>
+        <div className="flex items-center gap-2 pt-2">
+          <span className="text-sm text-zinc-400">Station time</span>
+          <StationClock />
         </div>
       </div>
 

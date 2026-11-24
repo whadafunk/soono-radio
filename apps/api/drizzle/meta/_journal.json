@@ -477,6 +477,13 @@
       "when": 1784464171270,
       "tag": "0067_vengeful_scarlet_spider",
       "breakpoints": true
+    },
+    {
+      "idx": 68,
+      "version": "6",
+      "when": 1795560216697,
+      "tag": "0068_bent_absorbing_man",
+      "breakpoints": true
     }
   ]
 }

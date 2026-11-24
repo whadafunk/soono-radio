@@ -26,6 +26,7 @@ import {
   broadcastIntervalSlots as broadcastIntervalSlotsTable,
 } from '../db/schema.js';
 import { campaignCompletedPlayFilter } from './supervisor2/playHistoryViews.js';
+import { parseLocalYmd, startedDaysBetween } from './supervisor2/localDay.js';
 import type {
   Budget,
   BudgetCuts,
@@ -86,10 +87,9 @@ function addDays(d: Date, n: number): Date {
   return out;
 }
 
-/** Days between two dates (inclusive start, exclusive end). */
+/** Days between two dates (inclusive start, exclusive end); a started day counts. */
 function daysBetween(start: Date, end: Date): number {
-  const ms = end.getTime() - start.getTime();
-  return Math.max(0, Math.ceil(ms / 86400000));
+  return startedDaysBetween(start, end);
 }
 
 /** ISO day of week: 1=Mon … 7=Sun. */
@@ -607,13 +607,13 @@ async function computeDemand(
     const campStart = c.starts_on > periodStartStr ? c.starts_on : periodStartStr;
     const campEnd = c.ends_on < periodEndStr ? c.ends_on : periodEndStr;
 
-    const campStartDate = new Date(campStart);
-    const campEndDate = new Date(campEnd);
+    const campStartDate = parseLocalYmd(campStart);
+    const campEndDate = parseLocalYmd(campEnd);
     campEndDate.setDate(campEndDate.getDate() + 1); // make exclusive
 
     // Total days in the campaign (full range, not clamped).
-    const fullStart = new Date(c.starts_on);
-    const fullEnd = new Date(c.ends_on);
+    const fullStart = parseLocalYmd(c.starts_on);
+    const fullEnd = parseLocalYmd(c.ends_on);
     fullEnd.setDate(fullEnd.getDate() + 1);
     const totalDays = daysBetween(fullStart, fullEnd);
     const daysInPeriod = daysBetween(campStartDate, campEndDate);
@@ -854,8 +854,8 @@ export async function getCampaignAvailable(
 
   const campStart = campaign.starts_on > periodStartStr ? campaign.starts_on : periodStartStr;
   const campEnd = campaign.ends_on < periodEndStr ? campaign.ends_on : periodEndStr;
-  const campStartDate = new Date(campStart);
-  const campEndDate = new Date(campEnd);
+  const campStartDate = parseLocalYmd(campStart);
+  const campEndDate = parseLocalYmd(campEnd);
   campEndDate.setDate(campEndDate.getDate() + 1);
   const daysInPeriod = daysBetween(campStartDate, campEndDate);
 
@@ -908,15 +908,15 @@ export async function getCampaignAvailable(
       let partnerP: number;
       if (mode === 'remaining') {
         const actual = partnerActuals.get(partner.id) ?? 0;
-        const fullStart2 = new Date(partner.starts_on);
-        const fullEnd2 = new Date(partner.ends_on);
+        const fullStart2 = parseLocalYmd(partner.starts_on);
+        const fullEnd2 = parseLocalYmd(partner.ends_on);
         fullEnd2.setDate(fullEnd2.getDate() + 1);
         const totalDays2 = Math.max(1, daysBetween(fullStart2, fullEnd2));
         partnerP = Math.max(0, partner.total_plays - actual);
         void totalDays2;
       } else {
-        const fullStart3 = new Date(partner.starts_on);
-        const fullEnd3 = new Date(partner.ends_on);
+        const fullStart3 = parseLocalYmd(partner.starts_on);
+        const fullEnd3 = parseLocalYmd(partner.ends_on);
         fullEnd3.setDate(fullEnd3.getDate() + 1);
         const partnerTotalDays = Math.max(1, daysBetween(fullStart3, fullEnd3));
         partnerP = (partner.total_plays / partnerTotalDays) * daysInPeriod;
@@ -985,8 +985,8 @@ export async function getPacing(campaignId: number): Promise<CampaignPacingDetai
   }
 
   const now = new Date();
-  const fullStart = new Date(campaign.starts_on);
-  const fullEnd = new Date(campaign.ends_on);
+  const fullStart = parseLocalYmd(campaign.starts_on);
+  const fullEnd = parseLocalYmd(campaign.ends_on);
   fullEnd.setDate(fullEnd.getDate() + 1); // exclusive
 
   const totalDays = Math.max(1, daysBetween(fullStart, fullEnd));

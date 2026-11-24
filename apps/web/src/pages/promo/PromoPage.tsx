@@ -4,7 +4,7 @@ import {
   Plus, Megaphone, Trash2, CheckCircle2, Search, X, Music,
   Loader, Check, ChevronUp, ChevronDown, AlertTriangle, PauseCircle, ChevronsUpDown,
 } from 'lucide-react';
-import { PromoWithShow, PromoCreate, PromoPatch, PromoMediaWithMedia, Show } from '@soono/shared';
+import { PromoWithShow, PromoCreate, PromoPatch, PromoMediaWithMedia, Show, localYmd } from '@soono/shared';
 import {
   fetchPromos, createPromo, updatePromo, deletePromo,
   fetchPromoMedia, addPromoMedia, removePromoMedia,
@@ -19,7 +19,7 @@ type SortDir = 'asc' | 'desc';
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 
-const TODAY = new Date().toISOString().slice(0, 10);
+const TODAY = localYmd();
 
 function getStatus(p: PromoWithShow): PromoStatus {
   if (!p.active) return 'inactive';

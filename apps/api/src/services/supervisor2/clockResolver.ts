@@ -37,6 +37,14 @@
 import { and, eq } from 'drizzle-orm';
 import { db as defaultDb } from '../../db/index.js';
 import {
+  addLocalDaysMs,
+  isoDateString,
+  isoDayOfWeek,
+  localMidnightMs,
+  localTimeOnDayMs,
+  windowOnDay,
+} from './localDay.js';
+import {
   calendarEntries as calendarEntriesTable,
   clockSegments as clockSegmentsTable,
   plans as plansTable,
@@ -79,41 +87,6 @@ export interface ResolvedSegment {
 // in-progress plan has since been edited or replaced.
 export function computeResolutionIdentity(resolved: ResolvedSegment): string {
   return `${resolved.source_type}:${resolved.source_id}:${resolved.segment.id}:${resolved.clockInstanceStartedAt}`;
-}
-
-// ISO weekday in our schema: 1 = Mon … 7 = Sun. JS Date.getDay() returns
-// 0 = Sun … 6 = Sat, so we translate.
-function isoDayOfWeek(d: Date): number {
-  const js = d.getDay();
-  return js === 0 ? 7 : js;
-}
-
-function isoDateString(d: Date): string {
-  const y = d.getFullYear();
-  const m = String(d.getMonth() + 1).padStart(2, '0');
-  const day = String(d.getDate()).padStart(2, '0');
-  return `${y}-${m}-${day}`;
-}
-
-// "HH:MM" → minutes since local midnight.
-function timeToMinutes(hm: string): number {
-  const [h, m] = hm.split(':').map((x) => parseInt(x, 10));
-  return (Number.isFinite(h) ? h : 0) * 60 + (Number.isFinite(m) ? m : 0);
-}
-
-function localMidnightMs(atMs: number): number {
-  const d = new Date(atMs);
-  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0).getTime();
-}
-
-// A window's [startMs, endMs) on a given local day. time_end at-or-before
-// time_start means "to end of day" (the editor stores midnight-reaching
-// entries that way — see SchedulePage's toSibling).
-function windowOnDay(dayMidnightMs: number, timeStart: string, timeEnd: string): { startMs: number; endMs: number } {
-  const startMin = timeToMinutes(timeStart);
-  const rawEndMin = timeToMinutes(timeEnd);
-  const endMin = rawEndMin > startMin ? rawEndMin : 24 * 60;
-  return { startMs: dayMidnightMs + startMin * 60_000, endMs: dayMidnightMs + endMin * 60_000 };
 }
 
 // ─── Coverage windows (Decision 95) ──────────────────────────────────────────
@@ -176,9 +149,8 @@ async function resolveCoveringWindow(
       ),
     );
   if (tce) {
-    const hourStartMs = new Date(now.getFullYear(), now.getMonth(), now.getDate(), hour, 0, 0, 0).getTime();
     return {
-      startMs: hourStartMs, endMs: hourStartMs + 3_600_000, clockId: tce.clock_id,
+      startMs: localTimeOnDayMs(dayMs, hour * 60), endMs: localTimeOnDayMs(dayMs, (hour + 1) * 60), clockId: tce.clock_id,
       showId: null, showName: null, sourceType: 'template_clock', sourceId: tce.id,
     };
   }
@@ -243,8 +215,10 @@ async function scheduleWindowsOnDay(dayMidnightMs: number, db: typeof defaultDb)
   for (const row of calendarRows) windows.push(windowOnDay(dayMidnightMs, row.time_start, row.time_end));
   for (const row of templateRows) windows.push(windowOnDay(dayMidnightMs, row.time_start, row.time_end));
   for (const row of templateClockRows) {
-    const startMs = dayMidnightMs + row.hour * 3_600_000;
-    windows.push({ startMs, endMs: startMs + 3_600_000 });
+    windows.push({
+      startMs: localTimeOnDayMs(dayMidnightMs, row.hour * 60),
+      endMs: localTimeOnDayMs(dayMidnightMs, (row.hour + 1) * 60),
+    });
   }
   return windows;
 }
@@ -254,7 +228,7 @@ async function scheduleWindowsOnDay(dayMidnightMs: number, db: typeof defaultDb)
 // either ends at/before tMs or starts after it.
 async function latestCoverageEndAtOrBefore(tMs: number, db: typeof defaultDb): Promise<number | null> {
   for (let dayOffset = 0; dayOffset <= GAP_SCAN_HORIZON_DAYS; dayOffset++) {
-    const dayMs = localMidnightMs(tMs) - dayOffset * 86_400_000;
+    const dayMs = addLocalDaysMs(localMidnightMs(tMs), -dayOffset);
     const windows = await scheduleWindowsOnDay(dayMs, db);
     let best: number | null = null;
     for (const w of windows) {
@@ -268,7 +242,7 @@ async function latestCoverageEndAtOrBefore(tMs: number, db: typeof defaultDb): P
 // Earliest coverage-window start after `tMs` — where the gap window ends.
 async function earliestCoverageStartAfter(tMs: number, db: typeof defaultDb): Promise<number | null> {
   for (let dayOffset = 0; dayOffset <= GAP_SCAN_HORIZON_DAYS; dayOffset++) {
-    const dayMs = localMidnightMs(tMs) + dayOffset * 86_400_000;
+    const dayMs = addLocalDaysMs(localMidnightMs(tMs), dayOffset);
     const windows = await scheduleWindowsOnDay(dayMs, db);
     let best: number | null = null;
     for (const w of windows) {

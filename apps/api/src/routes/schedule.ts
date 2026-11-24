@@ -9,6 +9,7 @@ import {
   ApplyTemplateSchema,
   TemplateEntryBatchRequestSchema,
   CalendarEntryBatchRequestSchema,
+  addDaysYmd,
 } from '@soono/shared';
 import { db } from '../db/index.js';
 import { templateEntries, calendarEntries, templateClockEntries, rundownAssignments, rundownDurationOverrides, rundownShowContent, shows, clockSegments, clocks } from '../db/schema.js';
@@ -310,9 +311,7 @@ export async function scheduleRoutes(fastify: FastifyInstance) {
     }
     // Return the 7-day window starting from week_start
     const start = week_start; // "2026-05-04"
-    const endDate = new Date(week_start);
-    endDate.setDate(endDate.getDate() + 7);
-    const end = endDate.toISOString().slice(0, 10);
+    const end = addDaysYmd(week_start, 7);
     const rows = await db.select().from(calendarEntries)
       .where(and(gte(calendarEntries.date, start), lte(calendarEntries.date, end)));
     return reply.send(rows);

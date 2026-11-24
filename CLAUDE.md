@@ -203,6 +203,15 @@ Three failure modes that produce a form which "does nothing" on submit, with the
 
 Every form must surface validation failures visibly: pass a second argument to `handleSubmit` that collects error paths into a summary rendered next to the submit button (see `collectErrorPaths` in `CustomersList.tsx` / `LiquidSoapSettings.tsx`). A submit button that can fail with no on-screen feedback is a bug.
 
+**Time and timezone**
+
+Clock times in the schedule (`08:00`), campaign time windows and calendar days are read in the **station timezone** (`station_settings.timezone`, default `Europe/Bucharest`). The API applies it to its own process at startup and on save (`services/stationTimeZone.ts`), so plain local `Date` getters already answer in station time — do not add a `TZ` to compose, `.env` or a Dockerfile. Moments that happened are stored as absolute timestamps and need no conversion. Design: `docs/station-timezone-design.md`.
+
+- **Never take a calendar date from `toISOString()`** — that is the UTC date, the previous day for the first hours after local midnight. Use `localYmd()` / `addDaysYmd()` from `@soono/shared`.
+- **Never parse `YYYY-MM-DD` with `new Date(str)`** — that is UTC midnight, 02:00 or 03:00 station time. Use `parseLocalYmd()` from `supervisor2/localDay.ts`.
+- **Never step days by adding 24 hours, or place a time as "midnight + N minutes"** — a local day is 23 or 25 hours on the two clock-change days. Use `addLocalDaysMs()`, `localTimeOnDayMs()`, `windowOnDay()`, `startedDaysBetween()` from `supervisor2/localDay.ts`.
+- Tests that depend on the zone set `process.env.TZ = 'Europe/Bucharest'` on the first line of the test file.
+
 **Modularity**
 - API routes in `apps/api/src/routes/`; services in `apps/api/src/services/`
 - React pages in `apps/web/src/pages/`; reusable components in `src/components/`

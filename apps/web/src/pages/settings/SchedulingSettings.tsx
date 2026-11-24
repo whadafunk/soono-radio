@@ -1,8 +1,12 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { Check, AlertCircle, Loader } from 'lucide-react';
 import { fetchStationSettings, updateStationSettings, fetchClocks, fetchIntervals } from '../../api';
 import { HelpTooltip } from '../../components/HelpTooltip';
+import { StationClock } from '../../components/StationClock';
+import { isValidTimeZoneName } from '@soono/shared';
+
+const TIME_ZONE_NAMES = Intl.supportedValuesOf('timeZone');
 
 export function SchedulingSettings() {
   const queryClient = useQueryClient();
@@ -13,6 +17,11 @@ export function SchedulingSettings() {
   const [localFullAuthority, setLocalFullAuthority] = useState(100);
   const [localRunway, setLocalRunway] = useState(300);
   const [localCatchUp, setLocalCatchUp] = useState(2);
+  const [localTimeZone, setLocalTimeZone] = useState('');
+  const [timeZoneError, setTimeZoneError] = useState<string | null>(null);
+  // Picking from the list saves on change and the field then blurs — without
+  // this the same value would be sent twice before the saved one comes back.
+  const submittedTimeZone = useRef<string | null>(null);
 
   const { data, isLoading, error } = useQuery({
     queryKey: ['station-settings'],
@@ -45,6 +54,27 @@ export function SchedulingSettings() {
     if (data) setLocalCatchUp(data.default_catch_up_factor);
   }, [data]);
 
+  useEffect(() => {
+    if (data) {
+      setLocalTimeZone(data.timezone);
+      submittedTimeZone.current = null;
+    }
+  }, [data]);
+
+  // Saves the timezone only when it is a real zone name; anything else is
+  // reported under the field instead of being silently ignored.
+  const commitTimeZone = (value: string) => {
+    const zone = value.trim();
+    if (!data || zone === data.timezone || zone === submittedTimeZone.current) { setTimeZoneError(null); return; }
+    if (!isValidTimeZoneName(zone)) {
+      setTimeZoneError('Unknown timezone — pick a zone name from the list, such as Europe/Bucharest.');
+      return;
+    }
+    setTimeZoneError(null);
+    submittedTimeZone.current = zone;
+    mutation.mutate({ timezone: zone });
+  };
+
   const mutation = useMutation({
     mutationFn: updateStationSettings,
     onSuccess: () => {
@@ -57,6 +87,14 @@ export function SchedulingSettings() {
       setTimeout(() => setToast(null), 5000);
     },
   });
+
+  // A failed save must not block retrying the same value, and must not leave
+  // the field showing a timezone the station is not actually running on.
+  useEffect(() => {
+    if (!mutation.isError) return;
+    submittedTimeZone.current = null;
+    if (data) setLocalTimeZone(data.timezone);
+  }, [mutation.isError, data]);
 
   if (isLoading) {
     return (
@@ -95,6 +133,47 @@ export function SchedulingSettings() {
           <p>{toast.message}</p>
         </div>
       )}
+
+      <div className="space-y-4">
+        <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Station time</p>
+
+        <div>
+          <label htmlFor="station-timezone" className="block text-sm font-medium text-zinc-300 mb-2">
+            Station timezone
+          </label>
+          <div className="flex items-center gap-4">
+            <input
+              id="station-timezone"
+              type="text"
+              list="station-timezone-names"
+              value={localTimeZone}
+              onChange={(e) => {
+                setLocalTimeZone(e.target.value);
+                // Picking from the list replaces the whole value in one step — save
+                // it at once. Typing never saves on its own: some zone names are the
+                // start of others ("America/Bahia" / "America/Bahia_Banderas"), and a
+                // keystroke must not change the live station timezone. Typed values
+                // are saved on Enter or when the field loses focus.
+                const inputType = (e.nativeEvent as InputEvent).inputType;
+                const pickedFromList = inputType === 'insertReplacementText' || inputType === undefined;
+                if (pickedFromList && TIME_ZONE_NAMES.includes(e.target.value)) commitTimeZone(e.target.value);
+              }}
+              onBlur={(e) => commitTimeZone(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Enter') commitTimeZone(e.currentTarget.value); }}
+              spellCheck={false}
+              className="w-72 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:outline-none focus:border-brand-500"
+            />
+            <datalist id="station-timezone-names">
+              {TIME_ZONE_NAMES.map((name) => <option key={name} value={name} />)}
+            </datalist>
+            <StationClock />
+          </div>
+          {timeZoneError && <p className="text-red-400 text-xs mt-1">{timeZoneError}</p>}
+          <p className="text-zinc-400 text-xs mt-1 max-w-2xl">
+            Every scheduled time — shows, calendar and template slots, campaign time windows and campaign dates — is read in this timezone. Changing it moves when things air; do it while the station is Off Air.
+          </p>
+        </div>
+      </div>
 
       <div className="space-y-4">
         <p className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">Spot Budget</p>

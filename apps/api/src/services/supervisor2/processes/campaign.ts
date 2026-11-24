@@ -35,6 +35,7 @@ import {
 } from '../../../db/schema.js';
 import { bus, type BusMessage, type ContentProcessName } from '../bus.js';
 import { campaignCompletedPlayFilter } from '../playHistoryViews.js';
+import { daysInclusive, localTimeOnDayMs, startOfIsoWeekMs } from '../localDay.js';
 import { computeDailyQuota } from '@soono/shared';
 import type {
   BreakSpaceEstimate,
@@ -227,8 +228,8 @@ export class CampaignProcess {
       if (campaign.interval_id != null && campaign.interval_plays_per_day != null) {
         const w = windowsByIntervalId.get(campaign.interval_id);
         if (w != null && breakMinOfDay >= w.startMin && breakMinOfDay < w.endMin) {
-          const winStartMs = midnightMsToday + w.startMin * 60_000;
-          const winEndMs = midnightMsToday + w.endMin * 60_000;
+          const winStartMs = localTimeOnDayMs(midnightMsToday, w.startMin);
+          const winEndMs = localTimeOnDayMs(midnightMsToday, w.endMin);
           const inWindowPlays = await this.countPlaysInWindow(campaign.id, winStartMs, winEndMs);
           if (inWindowPlays < campaign.interval_plays_per_day) {
             guaranteeBehind = Math.max(
@@ -758,13 +759,6 @@ function minutesOfDay(ms: number): number {
   return d.getHours() * 60 + d.getMinutes();
 }
 
-// Inclusive day count between two YYYY-MM-DD dates (same day = 1).
-function daysInclusive(fromYmd: string, toYmd: string): number {
-  const from = new Date(fromYmd + 'T00:00:00');
-  const to = new Date(toYmd + 'T00:00:00');
-  return Math.round((to.getTime() - from.getTime()) / 86400000) + 1;
-}
-
 // How far through the campaign's allowed airtime today the break sits, in
 // [0, 1] — drives the in-day spread of the daily quota. Unrestricted
 // campaigns spread over the whole day.
@@ -824,11 +818,3 @@ function dateStringToMs(yyyymmdd: string): number {
   return dt.getTime();
 }
 
-function startOfIsoWeekMs(nowMs: number): number {
-  const d = new Date(nowMs);
-  d.setHours(0, 0, 0, 0);
-  // Move to Monday of this week.
-  const dow = isoDayOfWeek(nowMs);
-  d.setDate(d.getDate() - (dow - 1));
-  return d.getTime();
-}

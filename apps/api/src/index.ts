@@ -43,7 +43,9 @@ import {
   newestLogIn,
 } from './services/logging/logPaths.js';
 import { db, runMigrations } from './db/index.js';
-import { supervisorState as supervisorStateTable } from './db/schema.js';
+import { eq } from 'drizzle-orm';
+import { stationSettings as stationSettingsTable, supervisorState as supervisorStateTable } from './db/schema.js';
+import { applyStationTimeZone } from './services/stationTimeZone.js';
 import { ingestQueue, recoverInterruptedJobs, recoverLookupJobs } from './services/ingest/queue.js';
 import { recoverInterruptedAnalysis } from './services/audioAnalysis.js';
 import { ensureDirs } from './services/ingest/paths.js';
@@ -153,6 +155,20 @@ const start = async () => {
   try {
     await runMigrations();
     fastify.log.info('Database migrations applied');
+
+    // Station timezone — must be in force before anything reads a clock time
+    // or a calendar day (the supervisor, the sweeps, the routes). The stored
+    // setting is the only source: a TZ inherited from the environment is
+    // overridden, and a missing row or value means the default.
+    {
+      const environmentTz = process.env.TZ ?? null;
+      const [row] = await db
+        .select({ timezone: stationSettingsTable.timezone })
+        .from(stationSettingsTable)
+        .where(eq(stationSettingsTable.id, 1));
+      const timezone = applyStationTimeZone(row?.timezone);
+      fastify.log.info({ timezone, environment_tz_was: environmentTz }, 'Station timezone applied');
+    }
     await ensureIcecastConfig();
     await loadIntegrationsConfig();
 

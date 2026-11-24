@@ -1,0 +1,1 @@
+ALTER TABLE `station_settings` ADD `timezone` text DEFAULT 'Europe/Bucharest' NOT NULL;

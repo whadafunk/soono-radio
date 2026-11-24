@@ -1,4 +1,6 @@
 import { z } from 'zod';
+import { localYmd } from '../localDate.js';
+import { isValidTimeZoneName } from '../timeZone.js';
 
 // ============ TIMING POLICY ============
 
@@ -405,7 +407,7 @@ export const CampaignCreateSchema = z.object({
   customer_id: z.number().int().positive(),
   name: z.string().min(1, 'Campaign name is required'),
   starts_on: z.string().min(1, 'Start date required').refine(
-    (v) => v >= new Date().toISOString().slice(0, 10),
+    (v) => v >= localYmd(),
     'Start date cannot be in the past',
   ),
   ends_on: z.string().min(1, 'End date required'),
@@ -1147,6 +1149,8 @@ export type CampaignPacingDetail = z.infer<typeof CampaignPacingDetailSchema>;
 
 export const StationSettingsSchema = z.object({
   promo_margin: z.number().min(0).max(0.5),
+  // A timezone name such as "Europe/Bucharest" — never a numeric offset.
+  timezone: z.string().refine(isValidTimeZoneName, 'Unknown timezone — use a zone name such as Europe/Bucharest'),
   // Station-wide fallback clock, resolved when no calendar/template entry
   // covers the current moment. Nullable only until configured — the
   // supervisor treats an unset default clock as a startup misconfiguration.
