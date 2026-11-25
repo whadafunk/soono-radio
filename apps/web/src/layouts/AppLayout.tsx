@@ -6,6 +6,7 @@ import {
   LayoutDashboard, Music2, Users, Calendar,
   Settings, ListMusic, ShieldCheck, Timer, Mic2, UserCog, Repeat, Loader, Megaphone, Activity,
   ScrollText,
+  FileBarChart,
 } from 'lucide-react';
 import { fetchActivityStats } from '../api';
 
@@ -21,6 +22,7 @@ const navItems = [
   { label: 'Promos',       path: '/promo',        icon: Megaphone       },
   { label: 'Supervisor',   path: '/supervisor',   icon: Activity        },
   { label: 'Logs',         path: '/logs',         icon: ScrollText      },
+  { label: 'Reports',      path: '/reports',      icon: FileBarChart    },
   { label: 'Settings',     path: '/settings',     icon: Settings        },
   { label: 'Users',        path: '/users',        icon: UserCog         },
   { label: 'Certificates', path: '/certificates', icon: ShieldCheck     },

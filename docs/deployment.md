@@ -96,10 +96,20 @@ These host directories are created automatically on first run and persist across
 |-----------|---------------|---------|
 | `./data` | `/data` | SQLite database (`radio.db`), ingest queue, config JSON files |
 | `./media` | `/media` | Audio library (transcoded MP3s, indexed by SHA-256) |
+| `./recordings` | `/recordings` (ls, api) | Broadcast recordings written by the mix engine — see below |
 | `./logs` | `/app/logs` | Structured API and supervisor log files |
 | `./liquidsoap` | `/liquidsoap` (api), `/etc/liquidsoap` (ls) | Generated `mix-engine.liq` and `supervisor.json` |
 | `./icecast` | `/icecast` (api), `/etc/icecast2` (icecast) | `icecast.xml` config |
 | `./data/certs` | `/etc/icecast2/certs`, `/etc/liquidsoap/certs` | TLS certificates |
+
+### Broadcast recordings
+
+The mix engine records the station's output to `./recordings/<UTC date>/<UTC start>Z.mp3` (bind-mounted into the mix engine and the API). Docker creates the folder on first start; it is owned by root.
+
+- **Disk:** the default quality (64 kbps, 22.05 kHz, mono) uses about 29 MB an hour — 0.7 GB a day, about 42 GB for the default 60-day retention. Retention, the free-disk floor and the protected age are set on Reports → Recordings; quality and file length under Settings → Mix Engine → Recording.
+- **Not backed up anywhere else.** The recordings exist only on this server's disk. If they are the station's legal proof, copy the folder off the machine on your own schedule.
+- **File names are UTC**, the pages show station time. The mix engine container is pinned to `TZ=UTC` for this; do not change it.
+- Recording starts with the first mix-engine start after deploying this version. Nothing earlier can be recovered.
 
 ### First start
 

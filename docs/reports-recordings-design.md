@@ -1,6 +1,6 @@
 # Reports — Recordings (design)
 
-**Status: design agreed in conversation 2026-11-24/25, awaiting approval. Nothing built.**
+**Status: design approved 2026-11-25; built per `plans/04-recordings.md` (Recordings tab, mix-engine recording, retention sweep, holds). Broadcast Log and Campaigns tabs are placeholders.**
 **Depends on the station timezone setting (`station-timezone-design.md`), built first.**
 
 ## Intent

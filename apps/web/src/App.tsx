@@ -2,6 +2,7 @@ import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { QueryClientProvider, QueryClient } from '@tanstack/react-query';
 import { AppLayout } from './layouts/AppLayout';
 import { Dashboard } from './pages/Dashboard';
+import { ReportsPage } from './pages/reports/ReportsPage';
 import { SettingsLayout } from './pages/settings/SettingsLayout';
 import { IcecastSettings } from './pages/settings/IcecastSettings';
 import { CertificatesSettings } from './pages/settings/CertificatesSettings';
@@ -68,6 +69,7 @@ export function App() {
             <Route path="/rotations" element={<RotationsPage />} />
             <Route path="/supervisor" element={<SupervisorPage />} />
             <Route path="/logs" element={<LogsPage />} />
+            <Route path="/reports" element={<ReportsPage />} />
           </Route>
         </Routes>
       </BrowserRouter>

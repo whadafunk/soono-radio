@@ -68,6 +68,34 @@ export function matchMasterBusPreset(
   );
 }
 
+// ─── Recording (docs/reports-recordings-design.md) ───────────────────────────
+// The mix engine records its own output to MP3 files. Quality is independent
+// of the stream's. Only values MP3 can actually encode are offered.
+export const RECORDING_BITRATES = [32, 48, 64, 96, 128, 192] as const;
+export const RECORDING_SAMPLE_RATES = [22050, 32000, 44100] as const;
+export const RECORDING_SEGMENT_MINUTES = [15, 30, 60] as const;
+
+// MP3 limits: at 22.05 kHz (MPEG-2) the bitrate tops out at 160 kbps; at 32
+// and 44.1 kHz (MPEG-1) it starts at 32 kbps.
+export function isValidRecordingQuality(bitrateKbps: number, samplerateHz: number): boolean {
+  if (!(RECORDING_BITRATES as readonly number[]).includes(bitrateKbps)) return false;
+  if (!(RECORDING_SAMPLE_RATES as readonly number[]).includes(samplerateHz)) return false;
+  return samplerateHz === 22050 ? bitrateKbps <= 160 : bitrateKbps >= 32;
+}
+
+const RecordingConfigSchema = z.object({
+  enabled: z.boolean().default(true),
+  bitrate_kbps: z.number().int().default(64),
+  samplerate_hz: z.number().int().default(22050),
+  channels: z.enum(['mono', 'stereo']).default('mono'),
+  // File length; values divide an hour so files start on clock boundaries.
+  segment_minutes: z.union([z.literal(15), z.literal(30), z.literal(60)]).default(60),
+}).refine((r) => isValidRecordingQuality(r.bitrate_kbps, r.samplerate_hz), {
+  message: 'MP3 cannot encode this bitrate at this sample rate',
+  path: ['bitrate_kbps'],
+});
+export type RecordingConfig = z.infer<typeof RecordingConfigSchema>;
+
 export const LiquidsoapConfigSchema = z.object({
   output: z.object({
     icecast_port: z.number().int().min(1).max(65535).default(8001),
@@ -122,6 +150,7 @@ export const LiquidsoapConfigSchema = z.object({
     level: z.number().int().min(1).max(5).default(3),
     file_enabled: z.boolean().default(true),
   }).default({}),
+  recording: RecordingConfigSchema.default({}),
 });
 
 export type LiquidsoapConfig = z.infer<typeof LiquidsoapConfigSchema>;

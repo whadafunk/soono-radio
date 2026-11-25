@@ -21,6 +21,7 @@ import { LoudnessNormalizationSection } from './liquidsoap-sections/LoudnessNorm
 import { DuckingSection } from './liquidsoap-sections/DuckingSection';
 import { SilenceDetectionSection } from './liquidsoap-sections/SilenceDetectionSection';
 import { LoggingSection } from './liquidsoap-sections/LoggingSection';
+import { RecordingSection } from './liquidsoap-sections/RecordingSection';
 
 function collectErrorPaths(obj: Record<string, unknown>, prefix = ''): string[] {
   const paths: string[] = [];
@@ -159,6 +160,7 @@ export function LiquidSoapSettings() {
         <LoudnessNormalizationSection register={register} control={control} setValue={setValue} />
         <MasterBusSection register={register} control={control} setValue={setValue} />
         <SilenceDetectionSection register={register} control={control} />
+        <RecordingSection register={register} control={control} setValue={setValue} />
         <LoggingSection register={register} />
 
         <div className="flex gap-4">

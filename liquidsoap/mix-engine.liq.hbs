@@ -249,3 +249,40 @@ output.icecast(
   mount="{{output.icecast_mount}}",
   radio
 )
+{{#if recording_enabled}}
+
+# ── Recording (docs/reports-recordings-design.md) ───────────────────────────
+# A second output: the same final signal that goes to Icecast, written to
+# MP3 files named by the UTC moment each file was opened (the container runs
+# with TZ=UTC). Files are cut on clock boundaries by reopen_when.
+#
+# GUARDED ON PURPOSE. A plain output.file here stops the WHOLE mix engine if
+# /recordings is not writable when the script starts ("Source output_file
+# failed while starting") — fallible/reopen_on_error do not cover a failure
+# at start. So the folder is tested first and the output is only created when
+# it can be written; write failures later (disk full) are retried and never
+# reach the Icecast output. Verified in a throwaway container for: folder
+# read-only at start, disk filling mid-recording, and normal rotation — see
+# plans/04-recordings.md. Do not simplify this block without re-running that.
+def recordings_writable() =
+  try
+    file.write(data="", "/recordings/.write-test")
+    true
+  catch _ do
+    false
+  end
+end
+
+if recordings_writable() then
+  output.file(
+    {{recording_encoder}},
+    {time.string("/recordings/%Y-%m-%d/%Y-%m-%dT%H-%M-%SZ.mp3")},
+    reopen_when={{recording_reopen_when}},
+    fallible=true,
+    reopen_on_error=fun (_) -> begin log.important(label="recording", "recording write failed; retrying in 10s"); 10. end,
+    {{recording_source}}
+  )
+else
+  log.severe(label="recording", "recordings folder is not writable; recording is OFF, the stream is unaffected")
+end
+{{/if}}

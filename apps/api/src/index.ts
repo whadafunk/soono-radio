@@ -30,9 +30,12 @@ import { stationSettingsRoutes } from './routes/stationSettings.js';
 import { supervisorStatusRoutes } from './routes/supervisorStatus.js';
 import { supervisorControlRoutes } from './routes/supervisorControl.js';
 import { stationRoutes } from './routes/station.js';
+import { recordingsRoutes } from './routes/recordings.js';
+import { syncAirEventsWithState } from './services/recordings/airEvents.js';
 import { logsRoutes } from './routes/logs.js';
 import { maintenanceRoutes } from './routes/maintenance.js';
 import { startDbRetentionSweep } from './services/maintenance/dbRetention.js';
+import { startRecordingSweep } from './services/recordings/recordingSweep.js';
 import { createRotatingLogStream } from './services/logging/rotatingLog.js';
 import { startExternalLogSweep } from './services/logging/externalLogSweep.js';
 import {
@@ -121,6 +124,7 @@ fastify.register(musicCampaignRoutes);
 fastify.register(rundownRoutes);
 fastify.register(spotBudgetRoutes);
 fastify.register(stationSettingsRoutes);
+fastify.register(recordingsRoutes);
 fastify.register(supervisorStatusRoutes);
 fastify.register(supervisorControlRoutes);
 fastify.register(stationRoutes);
@@ -205,6 +209,15 @@ const start = async () => {
       .values({ id: 1, current_drift_seconds: 0, paused: false })
       .onConflictDoNothing();
 
+    // Bring the On Air / Off Air history in line with the current flag.
+    {
+      const [state] = await db
+        .select({ paused: supervisorStateTable.paused })
+        .from(supervisorStateTable)
+        .where(eq(supervisorStateTable.id, 1));
+      await syncAirEventsWithState(state?.paused ?? false, Date.now());
+    }
+
     // Create a dedicated supervisor logger — writes to logs/supervisor.log so
     // supervisor events are separated from HTTP noise in logs/api.log.
     const supervisorLog = createSupervisorLogger(LOG_DIR);
@@ -254,6 +267,7 @@ const start = async () => {
     // past retention; hard floor at the previous month's start — see
     // services/maintenance/dbRetention.ts for what it never touches).
     startDbRetentionSweep(supervisorLog);
+    startRecordingSweep(supervisorLog);
 
     await fastify.listen({ port: 3000, host: '0.0.0.0' });
 

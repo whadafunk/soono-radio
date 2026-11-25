@@ -1595,3 +1595,47 @@ export async function runMediaIntegritySweep(): Promise<MediaIntegrityState> {
   }
   return MediaIntegrityStateSchema.parse(await res.json());
 }
+
+// ─── Reports → Recordings ────────────────────────────────────────────────────
+
+import type {
+  BroadcastRecordingStatus,
+  RecordingDayResponse,
+  RecordingDeleteResult,
+  RecordingHold,
+  RecordingHoldCreate,
+  RecordingRangePreview,
+  RecordingSettings,
+} from '@soono/shared';
+
+// The message the API sent with a failed request, or a fallback.
+export function apiErrorMessage(err: unknown, fallback = 'Something went wrong.'): string {
+  if (err instanceof ApiError && err.body && typeof err.body === 'object' && 'error' in err.body) {
+    const message = (err.body as { error: unknown }).error;
+    if (typeof message === 'string') return message;
+  }
+  return err instanceof Error ? err.message : fallback;
+}
+
+export const fetchRecordingDay = (date: string) =>
+  apiFetch<RecordingDayResponse>(`/recordings?date=${encodeURIComponent(date)}`);
+export const fetchRecordingStatus = () => apiFetch<BroadcastRecordingStatus>('/recordings/status');
+export const fetchRecordingSettings = () => apiFetch<RecordingSettings>('/recordings/settings');
+export const updateRecordingSettings = (settings: RecordingSettings) =>
+  post<RecordingSettings>('/recordings/settings', settings);
+export const createRecordingHold = (hold: RecordingHoldCreate) => post<RecordingHold>('/recordings/holds', hold);
+export const removeRecordingHold = (id: number) => del(`/recordings/holds/${id}`);
+export const previewRecordingRange = (fromMs: number, toMs: number) =>
+  apiFetch<RecordingRangePreview>(`/recordings/range/preview?from=${fromMs}&to=${toMs}`);
+export const deleteRecordingFile = (day: string, name: string) =>
+  apiFetch<RecordingDeleteResult>(`/recordings/file/${day}/${name}`, { method: 'DELETE' });
+export const deleteRecordingDay = (date: string) =>
+  apiFetch<RecordingDeleteResult>(`/recordings/day/${date}`, { method: 'DELETE' });
+export const purgeRecordingsBefore = (before: string) =>
+  post<RecordingDeleteResult>('/recordings/purge', { before });
+
+// Plain URLs: the <audio> player and browser downloads fetch these directly.
+export const recordingFileUrl = (day: string, name: string, download = false) =>
+  `${API_BASE}/recordings/file/${day}/${name}${download ? '?download=1' : ''}`;
+export const recordingRangeUrl = (fromMs: number, toMs: number) =>
+  `${API_BASE}/recordings/range?from=${fromMs}&to=${toMs}`;

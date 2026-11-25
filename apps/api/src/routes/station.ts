@@ -3,6 +3,7 @@ import { eq } from 'drizzle-orm';
 import { db } from '../db/index.js';
 import { supervisorState } from '../db/schema.js';
 import { LIQUIDSOAP_CONTAINER, startContainer, stopContainer } from '../services/dockerControl.js';
+import { recordAirEvent } from '../services/recordings/airEvents.js';
 
 // The station-level On Air / Off Air switch.
 //
@@ -18,6 +19,7 @@ export async function stationRoutes(fastify: FastifyInstance) {
     // Flag first: from this write on nothing new is pushed, so nothing can
     // start airing (and be logged) while the container is shutting down.
     await db.update(supervisorState).set({ paused: true }).where(eq(supervisorState.id, 1));
+    await recordAirEvent('off_air', Date.now());
     fastify.log.warn('Station switched OFF AIR by operator');
 
     try {
@@ -49,6 +51,7 @@ export async function stationRoutes(fastify: FastifyInstance) {
     }
 
     await db.update(supervisorState).set({ paused: false }).where(eq(supervisorState.id, 1));
+    await recordAirEvent('on_air', Date.now());
     fastify.log.warn('Station switched ON AIR by operator');
     return reply.send({ ok: true, off_air: false });
   });

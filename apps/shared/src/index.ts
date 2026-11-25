@@ -10,3 +10,4 @@ export * from './schemas/logs.js';
 export * from './schemas/maintenance.js';
 export * from './localDate.js';
 export * from './timeZone.js';
+export * from './schemas/recordings.js';

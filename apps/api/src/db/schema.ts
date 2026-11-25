@@ -1425,3 +1425,34 @@ export const supervisorConfig = sqliteTable('supervisor_config', {
 
 export type SupervisorConfig = typeof supervisorConfig.$inferSelect;
 export type SupervisorConfigInsert = typeof supervisorConfig.$inferInsert;
+
+// ─── Station air events (docs/reports-recordings-design.md) ──────────────────
+// One row per flip of the On Air / Off Air switch. supervisor_state.paused is
+// only the current flag; this is the history, so a gap in the recordings can
+// be labelled "off air" instead of looking like a recording that went missing.
+// The Broadcast Log will read it too.
+export const STATION_AIR_STATES = ['off_air', 'on_air'] as const;
+
+export const stationAirEvents = sqliteTable(
+  'station_air_events',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    at_ms: integer('at_ms').notNull(),
+    state: text('state', { enum: STATION_AIR_STATES }).notNull(),
+  },
+  (t) => ({
+    atIdx: index('station_air_events_at_idx').on(t.at_ms),
+  }),
+);
+
+// ─── Recording holds ─────────────────────────────────────────────────────────
+// A time range the operator marked "keep" (e.g. a complaint under review).
+// Any recording overlapping a held range is exempt from every automatic
+// deletion and from manual purge until the hold is removed.
+export const recordingHolds = sqliteTable('recording_holds', {
+  id: integer('id').primaryKey({ autoIncrement: true }),
+  from_ms: integer('from_ms').notNull(),
+  to_ms: integer('to_ms').notNull(),
+  note: text('note').notNull(),
+  created_at_ms: integer('created_at_ms').notNull(),
+});

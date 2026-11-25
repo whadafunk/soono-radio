@@ -1,5 +1,6 @@
 import { readFile, writeFile } from 'fs/promises';
 import { join } from 'path';
+import { recordingEncoder, recordingReopenPredicate, recordingSource } from './recordingScript.js';
 import { parseStringPromise } from 'xml2js';
 import Handlebars from 'handlebars';
 import { LiquidsoapConfig, LiquidsoapConfigSchema } from '@soono/shared';
@@ -101,6 +102,10 @@ function renderScript(templateSource: string, config: LiquidsoapConfig, icecastS
     // Linear amplitude fraction smooth_add's `p` expects, derived from depth_db.
     ducking_p: Math.pow(10, config.ducking.depth_db / 20),
     harbor_tls_transport,
+    recording_enabled: config.recording.enabled,
+    recording_encoder: recordingEncoder(config.recording),
+    recording_reopen_when: recordingReopenPredicate(config.recording.segment_minutes),
+    recording_source: recordingSource(config.recording),
   };
 
   // noEscape: we're generating a script file, not HTML.

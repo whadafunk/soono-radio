@@ -76,6 +76,8 @@ services:
       - ./liquidsoap:/liquidsoap
       # Icecast config — API reads source-password and rewrites icecast.xml on settings save.
       - ./icecast:/icecast
+      # Broadcast recordings written by the mix engine (read-write: the API deletes).
+      - ./recordings:/recordings
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:3000/"]
       interval: 5s
@@ -116,6 +118,13 @@ services:
       - ./media:/media:ro
       - ./data/certs:/etc/certs:ro
       - ./logs/liquidsoap:/var/log/liquidsoap
+      # Broadcast recordings — the mix engine writes them, the API lists,
+      # serves and deletes them.
+      - ./recordings:/recordings
+    environment:
+      # Recording file names are the UTC moment each file was opened; pinned
+      # so they never depend on host settings. Not the station timezone.
+      TZ: UTC
     depends_on:
       soono-api:
         condition: service_healthy   # ensures mix-engine.liq is generated

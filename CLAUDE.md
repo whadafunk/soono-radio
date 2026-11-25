@@ -291,6 +291,12 @@ Clock times in the schedule (`08:00`), campaign time windows and calendar days a
 - Volume mount ensures XML config persists and API can read/write it from localhost
 - Run `docker stop radio-icecast` to shut it down
 
+**LiquidSoap outputs must not be able to stop the stream**
+
+Any output added to `liquidsoap/mix-engine.liq.hbs` besides the Icecast one has to be proven harmless before it ships. A plain `output.file` kills the **whole mix engine** if its folder is not writable when the script starts (`Source output_file failed while starting`) — `fallible=true` and `reopen_on_error` do not cover a failure at start. The recording output is therefore guarded: the folder is tested first (`recordings_writable()`), the output is only created when it can be written, and later write errors are retried. Other LiquidSoap 2.2.5 facts learned the same way: a file name with `%Y…` must be a getter (`{time.string("…")}`), not a plain string; `reopen_delay` (default 120 s) only limits how often `reopen_when` may fire.
+
+Before changing that block or adding an output, re-run the gate in a throwaway `savonet/liquidsoap:v2.2.5` container — never on the live station: `liquidsoap --check` on the generated script, then run it with the output's folder writable, read-only, and too small to hold the data, and confirm the main output keeps running in all three. The procedure and the results are in `plans/04-recordings.md`.
+
 ### Database Migrations
 
 The API uses Drizzle ORM with libsql. Migrations live in `apps/api/drizzle/` and run automatically on server start via `migrate()`.

@@ -16,7 +16,9 @@ import {
   postSupervisorAlignToClock,
   postStationOffAir,
   postStationOnAir,
+  fetchRecordingStatus,
 } from '../api';
+import { Link } from 'react-router-dom';
 import type { SupervisorV2Status, LiquidsoapConfig } from '@soono/shared';
 import { LUFS_PRESETS, FADE_SHAPES, matchMasterBusPreset } from '@soono/shared';
 import { useEffect, useRef, useState } from 'react';
@@ -176,6 +178,7 @@ export function Dashboard() {
   const icecastBaseUrl = config ? getIcecastBaseUrl(config) : 'https://localhost:8000';
   const supervisorHb = heartbeatStatus(v2Status?.last_heartbeat_at ?? null);
   const offAir = v2Status?.paused ?? false;
+  const { data: recordingStatus } = useQuery({ queryKey: ['recording-status'], queryFn: fetchRecordingStatus, refetchInterval: 30_000 });
 
   return (
     <div className="space-y-6">
@@ -192,6 +195,16 @@ export function Dashboard() {
       {restartToast && (
         <div className="bg-amber-900/20 border border-amber-800 rounded-lg p-3 text-amber-300 text-sm">
           {restartToast}
+        </div>
+      )}
+
+      {/* Recording is expected and no file is being written. Shown only for
+          that case — an off-air station or a stopped Mix Engine already has
+          its own card. */}
+      {recordingStatus?.reason === 'not_recording' && (
+        <div className="bg-amber-900/20 border border-amber-800 rounded-lg p-3 text-amber-300 text-sm">
+          <strong>The broadcast is not being recorded.</strong> No recording file has been written for over a minute. Check{' '}
+          <Link to="/reports?tab=recordings" className="underline hover:text-amber-200">Reports → Recordings</Link>.
         </div>
       )}
 
