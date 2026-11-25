@@ -1,6 +1,8 @@
 # Reports — Recordings (design)
 
 **Status: design approved 2026-11-25; built per `plans/04-recordings.md` (Recordings tab, mix-engine recording, retention sweep, holds). Broadcast Log and Campaigns tabs are placeholders.**
+
+**Superseded in part by `docs/reports-recordings-list-design.md` (built per `plans/05-recordings-list.md`): the day-by-day list became one filterable list over a period with bulk download as an archive, and holds ("Keep a period") were replaced by flags on recordings — Protect does what a hold did. Where this document says hold, held, `?date=` or "Delete this day", read the newer design.**
 **Depends on the station timezone setting (`station-timezone-design.md`), built first.**
 
 ## Intent

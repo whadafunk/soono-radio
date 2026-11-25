@@ -1,11 +1,10 @@
-// Runs the recordings sweep: gathers the folder, the holds, free disk and the
+// Runs the recordings sweep: gathers the folder, the Protect flags, free disk and the
 // settings, asks sweepPlan what to delete, deletes it, and records what
 // happened. At API start and every hour (same pattern as the database and
 // log sweeps).
 import type { RecordingSweepResult } from '@soono/shared';
 import type { SLogger } from '../supervisor2/supervisorLogger.js';
-import { db } from '../../db/index.js';
-import { recordingHolds } from '../../db/schema.js';
+import { protectedNames, removeFlagsFor } from './recordingFlags.js';
 import { buildRecordingFiles } from './recordingIndex.js';
 import { deleteFile, diskUsage, listAllRawFiles } from './recordingStore.js';
 import { loadRecordingConfig, writeLastRecordingSweep } from './recordingSettings.js';
@@ -32,11 +31,10 @@ export async function runRecordingSweep(logger: SLogger | null): Promise<Recordi
   }
   const settings = config.settings;
   const files = buildRecordingFiles(await listAllRawFiles(), nowMs);
-  const holds = (await db.select().from(recordingHolds)).map((h) => ({ fromMs: h.from_ms, toMs: h.to_ms }));
 
   const plan = planSweep({
     files,
-    holds,
+    protectedNames: await protectedNames(),
     nowMs,
     retentionDays: settings.retention_days,
     protectedDays: settings.protected_days,
@@ -48,6 +46,9 @@ export async function runRecordingSweep(logger: SLogger | null): Promise<Recordi
     await deleteFile(d.day, d.name);
     logger?.info({ event: 'RECORDING_DELETED', day: d.day, name: d.name, reason: d.reason }, 'recordings: deleted by sweep');
   }
+  // A deleted recording takes its labels with it (never a Protect one — those
+  // are not in the plan).
+  await removeFlagsFor(plan.deletions.map((d) => d.name));
 
   const result: RecordingSweepResult = {
     at_ms: nowMs,
@@ -59,7 +60,7 @@ export async function runRecordingSweep(logger: SLogger | null): Promise<Recordi
 
   const level = result.floor_unmet || result.deleted_disk_floor > 0 ? 'warn' : 'info';
   logger?.[level]({ event: 'RECORDING_SWEEP', ...result }, result.floor_unmet
-    ? 'recordings: disk is below the floor and nothing more can be deleted (held or younger than the protected age)'
+    ? 'recordings: disk is below the floor and nothing more can be deleted (protected or younger than the protected age)'
     : 'recordings: sweep complete');
   return result;
 }

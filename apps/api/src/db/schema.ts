@@ -1445,14 +1445,24 @@ export const stationAirEvents = sqliteTable(
   }),
 );
 
-// ─── Recording holds ─────────────────────────────────────────────────────────
-// A time range the operator marked "keep" (e.g. a complaint under review).
-// Any recording overlapping a held range is exempt from every automatic
-// deletion and from manual purge until the hold is removed.
-export const recordingHolds = sqliteTable('recording_holds', {
-  id: integer('id').primaryKey({ autoIncrement: true }),
-  from_ms: integer('from_ms').notNull(),
-  to_ms: integer('to_ms').notNull(),
-  note: text('note').notNull(),
-  created_at_ms: integer('created_at_ms').notNull(),
-});
+// ─── Recording flags (docs/reports-recordings-list-design.md) ────────────────
+// Labels the operator puts on recordings, keyed by the recording's file name
+// (unique: it is the UTC start time). There is no table of recordings — the
+// folder is the source of truth — so rows for a deleted recording are removed
+// by whoever deletes it (recordingFlags.removeFlagsFor). Only `protect` has
+// an effect: clean-up and every delete skip the recording.
+const RECORDING_FLAG_VALUES = ['protect', 'review', 'incident', 'sent_to_authority', 'marked_for_deletion'] as const;
+
+export const recordingFlags = sqliteTable(
+  'recording_flags',
+  {
+    id: integer('id').primaryKey({ autoIncrement: true }),
+    name: text('name').notNull(),
+    flag: text('flag', { enum: RECORDING_FLAG_VALUES }).notNull(),
+    note: text('note').notNull().default(''),
+    created_at_ms: integer('created_at_ms').notNull(),
+  },
+  (t) => ({
+    nameFlag: unique('recording_flags_name_flag').on(t.name, t.flag),
+  }),
+);

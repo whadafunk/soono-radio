@@ -8,20 +8,12 @@
 //      When the floor cannot be met without crossing that age, nothing more
 //      is deleted and `floorUnmet` says so (the page warns). The operator
 //      accepted that the disk can then really fill.
-// Never deleted, in either pass: a recording overlapping a hold, and the
-// file being written. See docs/reports-recordings-design.md.
+// Never deleted, in either pass: a recording flagged Protect, and the file
+// being written. See docs/reports-recordings-design.md and
+// docs/reports-recordings-list-design.md.
 import type { RecordingFile } from './recordingIndex.js';
 
 const DAY_MS = 86_400_000;
-
-export interface HoldRange {
-  fromMs: number;
-  toMs: number;
-}
-
-export function isHeld(file: { startMs: number; endMs: number }, holds: HoldRange[]): boolean {
-  return holds.some((h) => h.fromMs < file.endMs && h.toMs > file.startMs);
-}
 
 export interface SweepDeletion {
   day: string;
@@ -31,7 +23,7 @@ export interface SweepDeletion {
 
 export function planSweep(input: {
   files: RecordingFile[];
-  holds: HoldRange[];
+  protectedNames: ReadonlySet<string>; // file names flagged Protect
   nowMs: number;
   retentionDays: number;
   protectedDays: number;
@@ -43,7 +35,7 @@ export function planSweep(input: {
   const ageMs = (f: RecordingFile): number => input.nowMs - f.endMs;
 
   const deletable = input.files
-    .filter((f) => !f.recordingNow && !isHeld(f, input.holds))
+    .filter((f) => !f.recordingNow && !input.protectedNames.has(f.name))
     .sort((a, b) => a.startMs - b.startMs);
 
   const kept: RecordingFile[] = [];

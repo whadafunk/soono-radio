@@ -109,6 +109,8 @@ The mix engine records the station's output to `./recordings/<UTC date>/<UTC sta
 - **Disk:** the default quality (64 kbps, 22.05 kHz, mono) uses about 29 MB an hour — 0.7 GB a day, about 42 GB for the default 60-day retention. Retention, the free-disk floor and the protected age are set on Reports → Recordings; quality and file length under Settings → Mix Engine → Recording.
 - **Not backed up anywhere else.** The recordings exist only on this server's disk. If they are the station's legal proof, copy the folder off the machine on your own schedule.
 - **File names are UTC**, the pages show station time. The mix engine container is pinned to `TZ=UTC` for this; do not change it.
+- **Taking recordings out:** on Reports → Recordings, select recordings across any period and download them as one zip. Files inside are named in station time (`2026-11-25/2026-11-25_10-00-00.mp3`) and the archive carries a `listing.csv` of every recording and every gap in the span. Nothing is written to disk to build it. On the server the files keep their UTC names.
+- **Flags:** recordings can be flagged (Protect, Review, Incident, Sent to authority, Marked for deletion). Only Protect has an effect: the automatic clean-up and every delete skip a protected recording until the flag is removed. Flags live in the database (`recording_flags`), not in the folder.
 - Recording starts with the first mix-engine start after deploying this version. Nothing earlier can be recovered.
 
 ### First start

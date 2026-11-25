@@ -1600,11 +1600,12 @@ export async function runMediaIntegritySweep(): Promise<MediaIntegrityState> {
 
 import type {
   BroadcastRecordingStatus,
-  RecordingDayResponse,
+  RecordingArchivePreview,
   RecordingDeleteResult,
-  RecordingHold,
-  RecordingHoldCreate,
+  RecordingFlagChange,
+  RecordingPeriodResponse,
   RecordingRangePreview,
+  RecordingRef,
   RecordingSettings,
 } from '@soono/shared';
 
@@ -1617,20 +1618,22 @@ export function apiErrorMessage(err: unknown, fallback = 'Something went wrong.'
   return err instanceof Error ? err.message : fallback;
 }
 
-export const fetchRecordingDay = (date: string) =>
-  apiFetch<RecordingDayResponse>(`/recordings?date=${encodeURIComponent(date)}`);
+export const fetchRecordingPeriod = (from: string, to: string) =>
+  apiFetch<RecordingPeriodResponse>(`/recordings?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);
 export const fetchRecordingStatus = () => apiFetch<BroadcastRecordingStatus>('/recordings/status');
 export const fetchRecordingSettings = () => apiFetch<RecordingSettings>('/recordings/settings');
 export const updateRecordingSettings = (settings: RecordingSettings) =>
   post<RecordingSettings>('/recordings/settings', settings);
-export const createRecordingHold = (hold: RecordingHoldCreate) => post<RecordingHold>('/recordings/holds', hold);
-export const removeRecordingHold = (id: number) => del(`/recordings/holds/${id}`);
 export const previewRecordingRange = (fromMs: number, toMs: number) =>
   apiFetch<RecordingRangePreview>(`/recordings/range/preview?from=${fromMs}&to=${toMs}`);
+export const previewRecordingArchive = (files: RecordingRef[]) =>
+  post<RecordingArchivePreview>('/recordings/archive/preview', { files });
+export const setRecordingFlag = (change: RecordingFlagChange) =>
+  post<{ changed: number }>('/recordings/flags', change);
 export const deleteRecordingFile = (day: string, name: string) =>
   apiFetch<RecordingDeleteResult>(`/recordings/file/${day}/${name}`, { method: 'DELETE' });
-export const deleteRecordingDay = (date: string) =>
-  apiFetch<RecordingDeleteResult>(`/recordings/day/${date}`, { method: 'DELETE' });
+export const deleteRecordingSelection = (files: RecordingRef[]) =>
+  post<RecordingDeleteResult>('/recordings/delete', { files });
 export const purgeRecordingsBefore = (before: string) =>
   post<RecordingDeleteResult>('/recordings/purge', { before });
 
@@ -1639,3 +1642,45 @@ export const recordingFileUrl = (day: string, name: string, download = false) =>
   `${API_BASE}/recordings/file/${day}/${name}${download ? '?download=1' : ''}`;
 export const recordingRangeUrl = (fromMs: number, toMs: number) =>
   `${API_BASE}/recordings/range?from=${fromMs}&to=${toMs}`;
+
+// The archive is a real browser download, so it is a form post rather than a
+// fetch: a script cannot hold a multi-gigabyte response. It is posted into a
+// hidden frame: a download leaves the page as it is, and if the API refuses
+// (the recordings were deleted a moment ago) the refusal lands in the frame
+// and is handed to onError instead of replacing the app with raw JSON.
+const ARCHIVE_FRAME = 'recording-archive-download';
+
+export function downloadRecordingArchive(files: RecordingRef[], onError: (message: string) => void): void {
+  document.getElementsByName(ARCHIVE_FRAME).forEach((old) => old.remove());
+  const frame = document.createElement('iframe');
+  frame.name = ARCHIVE_FRAME;
+  frame.style.display = 'none';
+  // Fires only when the response was a page, not a download.
+  frame.addEventListener('load', () => {
+    const text = frame.contentDocument?.body?.textContent ?? '';
+    if (text.trim() === '') return;
+    let message = 'The archive could not be built.';
+    try {
+      const body: unknown = JSON.parse(text);
+      if (body && typeof body === 'object' && 'error' in body && typeof body.error === 'string') message = body.error;
+    } catch {
+      // not JSON: keep the general message
+    }
+    onError(message);
+  });
+  document.body.appendChild(frame);
+
+  const form = document.createElement('form');
+  form.method = 'post';
+  form.action = `${API_BASE}/recordings/archive`;
+  form.target = ARCHIVE_FRAME;
+  form.style.display = 'none';
+  const field = document.createElement('input');
+  field.type = 'hidden';
+  field.name = 'selection';
+  field.value = JSON.stringify({ files });
+  form.appendChild(field);
+  document.body.appendChild(form);
+  form.submit();
+  form.remove();
+}

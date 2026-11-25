@@ -3,38 +3,48 @@ import { createReadStream } from 'fs';
 import { stat } from 'fs/promises';
 import { eq } from 'drizzle-orm';
 import {
-  RecordingHoldCreateSchema,
+  MAX_RECORDING_PERIOD_DAYS,
+  RecordingFlagChangeSchema,
   RecordingPurgeSchema,
+  RecordingSelectionSchema,
   RecordingSettingsSchema,
   type BroadcastRecordingStatus,
-  type RecordingDayItem,
-  type RecordingDayResponse,
+  type RecordingArchivePreview,
   type RecordingDeleteResult,
-  type RecordingHold,
+  type RecordingFlagEntry,
+  type RecordingListItem,
+  type RecordingPeriodDay,
+  type RecordingPeriodResponse,
   type RecordingRangePreview,
+  type RecordingRef,
 } from '@soono/shared';
 import { db } from '../db/index.js';
-import { recordingHolds, stationSettings, supervisorState } from '../db/schema.js';
+import { stationSettings, supervisorState } from '../db/schema.js';
 import { readLiquidsoapConfig } from '../services/liquidsoapConfig.js';
 import { fetchLiquidsoapStatus } from '../services/liquidsoapStatus.js';
-import { addLocalDaysMs, parseLocalYmd } from '../services/supervisor2/localDay.js';
+import { addLocalDaysMs, daysInclusive, isoDateString, parseLocalYmd } from '../services/supervisor2/localDay.js';
 import { offAirPeriods } from '../services/recordings/airEvents.js';
+import { buildListingCsv } from '../services/recordings/archiveListing.js';
+import { archiveEntryPaths, archiveFileName, stationFileName } from '../services/recordings/archiveNames.js';
+import { createArchive } from '../services/recordings/archiveStream.js';
 import { recordingHealth } from '../services/recordings/health.js';
+import { dayItems, summariseDay } from '../services/recordings/periodList.js';
+import { clearFlag, loadFlags, protectedNames, removeFlagsFor, setFlag } from '../services/recordings/recordingFlags.js';
 import {
   buildRecordingFiles,
-  describeWindow,
   isSafeRecordingRef,
   parseRecordingFileName,
   utcFoldersForWindow,
   type RecordingFile,
+  type RecordingItem,
 } from '../services/recordings/recordingIndex.js';
 import { exportRange } from '../services/recordings/rangeExport.js';
 import { planRange } from '../services/recordings/rangePlan.js';
 import { loadRecordingConfig, writeRecordingSettings } from '../services/recordings/recordingSettings.js';
 import { deleteFile, diskUsage, filePath, listAllRawFiles, listRawFiles } from '../services/recordings/recordingStore.js';
-import { isHeld, type HoldRange } from '../services/recordings/sweepPlan.js';
 
-// Reports → Recordings (docs/reports-recordings-design.md).
+// Reports → Recordings (docs/reports-recordings-design.md, and
+// docs/reports-recordings-list-design.md for the list, archive and flags).
 //
 // The folder on disk is the source of truth. Every date the operator sends
 // or sees is a STATION date (the process runs in the station timezone); file
@@ -43,26 +53,21 @@ import { isHeld, type HoldRange } from '../services/recordings/sweepPlan.js';
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/;
 
-// Station-local "YYYY-MM-DD_HH-MM" for download names.
+// Station-local "YYYY-MM-DD_HH-MM" for the name of a cut range.
 function stationStamp(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}_${p(d.getHours())}-${p(d.getMinutes())}`;
 }
 
-// The [start, end) of a station day, or null for something that is not a date.
-function stationDayWindow(date: string): { startMs: number; endMs: number } | null {
+// Local midnight of a station date, or null for something that is not one.
+function stationDayStartMs(date: string): number | null {
   if (!YMD.test(date)) return null;
   const start = parseLocalYmd(date);
-  if (Number.isNaN(start.getTime())) return null;
-  return { startMs: start.getTime(), endMs: addLocalDaysMs(start.getTime(), 1) };
+  // "2026-02-31" parses, but as a different day.
+  if (Number.isNaN(start.getTime()) || isoDateString(start) !== date) return null;
+  return start.getTime();
 }
-
-async function loadHolds(): Promise<RecordingHold[]> {
-  return db.select().from(recordingHolds);
-}
-
-const toRanges = (holds: RecordingHold[]): HoldRange[] => holds.map((h) => ({ fromMs: h.from_ms, toMs: h.to_ms }));
 
 async function filesInWindow(fromMs: number, toMs: number, nowMs: number): Promise<RecordingFile[]> {
   // Built from every listed folder so "the next file's start" is known even
@@ -70,17 +75,49 @@ async function filesInWindow(fromMs: number, toMs: number, nowMs: number): Promi
   return buildRecordingFiles(await listRawFiles(utcFoldersForWindow(fromMs, toMs)), nowMs);
 }
 
-// Deletes what may be deleted: never a held recording, never the file being
-// written. Reports both skips so a purge never looks more complete than it was.
-async function deleteAllowed(files: RecordingFile[], holds: HoldRange[]): Promise<RecordingDeleteResult> {
-  const result: RecordingDeleteResult = { deleted: 0, skipped_held: 0, skipped_active: 0 };
+// The recordings a request names, as they are on disk right now. null when
+// any entry is not a recording inside its own day folder — the whole request
+// is then refused, never partly carried out.
+async function resolveSelection(
+  refs: RecordingRef[],
+  nowMs: number,
+): Promise<{ found: RecordingFile[]; missing: number } | null> {
+  const wanted = new Map<string, string>(); // name → day
+  for (const ref of refs) {
+    if (!isSafeRecordingRef(ref.day, ref.name)) return null;
+    wanted.set(ref.name, ref.day);
+  }
+  const days = [...new Set(wanted.values())].sort();
+  const found = buildRecordingFiles(await listRawFiles(days), nowMs).filter((f) => wanted.has(f.name));
+  return { found, missing: wanted.size - found.length };
+}
+
+// Deletes what may be deleted: never a protected recording, never the file
+// being written. Reports both skips so a delete never looks more complete
+// than it was. A deleted recording takes its flags with it.
+async function deleteAllowed(files: RecordingFile[]): Promise<RecordingDeleteResult> {
+  const protectedSet = await protectedNames();
+  const result: RecordingDeleteResult = { deleted: 0, skipped_protected: 0, skipped_active: 0 };
+  const deleted: string[] = [];
   for (const f of files) {
     if (f.recordingNow) { result.skipped_active++; continue; }
-    if (isHeld(f, holds)) { result.skipped_held++; continue; }
+    if (protectedSet.has(f.name)) { result.skipped_protected++; continue; }
     await deleteFile(f.day, f.name);
+    deleted.push(f.name);
     result.deleted++;
   }
+  await removeFlagsFor(deleted);
   return result;
+}
+
+function toListItem(item: RecordingItem, flags: Map<string, RecordingFlagEntry[]>): RecordingListItem {
+  return item.kind === 'gap'
+    ? { kind: 'gap', start_ms: item.startMs, end_ms: item.endMs, label: item.label }
+    : {
+        kind: 'file', day: item.day, name: item.name,
+        start_ms: item.startMs, end_ms: item.endMs, size_bytes: item.sizeBytes,
+        recording_now: item.recordingNow, flags: flags.get(item.name) ?? [],
+      };
 }
 
 function parseMs(value: unknown): number | null {
@@ -93,6 +130,8 @@ const RANGE_ERRORS: Record<'invalid_range' | 'too_long' | 'nothing_recorded', { 
   too_long: { status: 400, message: 'A range can be at most 24 hours. Download a longer period as several ranges.' },
   nothing_recorded: { status: 404, message: 'Nothing was recorded in that range.' },
 };
+
+const NOT_A_RECORDING = 'The selection contains something that is not a recording.';
 
 async function streamFile(
   reply: FastifyReply,
@@ -135,35 +174,50 @@ async function streamFile(
 }
 
 export async function recordingsRoutes(fastify: FastifyInstance) {
-  // One station day: its recordings and the gaps between them.
-  fastify.get<{ Querystring: { date?: string } }>('/recordings', async (request, reply) => {
-    const window = stationDayWindow(request.query.date ?? '');
-    if (!window) return reply.status(400).send({ error: 'date must look like 2026-11-24' });
+  // A period of station days, newest first: each day's recordings, the gaps
+  // between them, and the day's totals.
+  fastify.get<{ Querystring: { from?: string; to?: string } }>('/recordings', async (request, reply) => {
+    const from = request.query.from ?? '';
+    const to = request.query.to ?? '';
+    const fromStartMs = stationDayStartMs(from);
+    const toStartMs = stationDayStartMs(to);
+    if (fromStartMs == null || toStartMs == null) return reply.status(400).send({ error: 'from and to must look like 2026-11-24' });
+    if (toStartMs < fromStartMs) return reply.status(400).send({ error: 'The end of the period is before its start.' });
+    if (daysInclusive(from, to) > MAX_RECORDING_PERIOD_DAYS) {
+      return reply.status(400).send({ error: `A period can be at most ${MAX_RECORDING_PERIOD_DAYS} days.` });
+    }
 
     const nowMs = Date.now();
     const [settings] = await db.select({ timezone: stationSettings.timezone }).from(stationSettings).where(eq(stationSettings.id, 1));
-    const holds = await loadHolds();
-    const response: RecordingDayResponse = {
-      date: request.query.date!,
+    const response: RecordingPeriodResponse = {
+      from, to,
       timezone: settings?.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone,
-      items: [],
-      holds,
+      days: [],
     };
-    // A day that has not started yet has nothing to show — not even a gap.
-    if (window.startMs >= nowMs) return reply.send(response);
+    // A period that has not started yet has nothing to show — not even a gap.
+    if (fromStartMs >= nowMs) return reply.send(response);
 
-    const windowEndMs = Math.min(window.endMs, nowMs);
-    const files = await filesInWindow(window.startMs, windowEndMs, nowMs);
-    const offAir = await offAirPeriods(window.startMs, windowEndMs);
-    const ranges = toRanges(holds);
-    response.items = describeWindow(files, offAir, window.startMs, windowEndMs).map((item): RecordingDayItem =>
-      item.kind === 'gap'
-        ? { kind: 'gap', start_ms: item.startMs, end_ms: item.endMs, label: item.label }
-        : {
-            kind: 'file', day: item.day, name: item.name,
-            start_ms: item.startMs, end_ms: item.endMs, size_bytes: item.sizeBytes,
-            recording_now: item.recordingNow, held: isHeld(item, ranges),
-          });
+    const periodEndMs = Math.min(addLocalDaysMs(toStartMs, 1), nowMs);
+    const [files, offAir, flags] = await Promise.all([
+      filesInWindow(fromStartMs, periodEndMs, nowMs),
+      offAirPeriods(fromStartMs, periodEndMs),
+      loadFlags(),
+    ]);
+    // Stepped by calendar day: a station day is 23 or 25 hours twice a year.
+    for (let dayStartMs = toStartMs; dayStartMs >= fromStartMs; dayStartMs = addLocalDaysMs(dayStartMs, -1)) {
+      if (dayStartMs >= nowMs) continue; // a day that has not started
+      const dayEndMs = Math.min(addLocalDaysMs(dayStartMs, 1), nowMs);
+      const items = dayItems(files, offAir, dayStartMs, dayEndMs);
+      const totals = summariseDay(items);
+      const day: RecordingPeriodDay = {
+        date: isoDateString(new Date(dayStartMs)),
+        recorded_ms: totals.recordedMs,
+        no_recording_ms: totals.noRecordingMs,
+        size_bytes: totals.sizeBytes,
+        items: items.map((item) => toListItem(item, flags)),
+      };
+      response.days.push(day);
+    }
     return reply.send(response);
   });
 
@@ -176,7 +230,7 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
       const path = filePath(day, name);
       try {
         const startMs = parseRecordingFileName(name)!; // non-null: isSafeRecordingRef passed
-        const downloadName = request.query.download ? `recording_${stationStamp(startMs)}.mp3` : null;
+        const downloadName = request.query.download ? stationFileName(startMs) : null;
         return await streamFile(reply, path, request.headers.range, downloadName);
       } catch (err) {
         if ((err as NodeJS.ErrnoException).code === 'ENOENT') return reply.status(404).send({ error: 'Recording not found' });
@@ -184,6 +238,97 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
       }
     },
   );
+
+  // ── Archive of a selection ─────────────────────────────────────────────────
+
+  // What the archive would hold. Never the recording in progress: it is still
+  // growing, and its size in the archive would be a guess.
+  async function planArchive(body: unknown, nowMs: number): Promise<
+    | { error: { status: number; message: string } }
+    | { files: RecordingFile[]; preview: RecordingArchivePreview }
+  > {
+    const parsed = RecordingSelectionSchema.safeParse(body);
+    if (!parsed.success) return { error: { status: 400, message: parsed.error.issues[0]?.message ?? 'Invalid selection' } };
+    const selection = await resolveSelection(parsed.data.files, nowMs);
+    if (!selection) return { error: { status: 400, message: NOT_A_RECORDING } };
+    const files = selection.found.filter((f) => !f.recordingNow).sort((a, b) => a.startMs - b.startMs);
+    if (files.length === 0) {
+      return { error: { status: 404, message: 'None of the selected recordings can be downloaded: they are no longer there or still being recorded.' } };
+    }
+    return {
+      files,
+      preview: {
+        files: files.length,
+        size_bytes: files.reduce((sum, f) => sum + f.sizeBytes, 0),
+        skipped_active: selection.found.length - files.length,
+        skipped_missing: selection.missing,
+      },
+    };
+  }
+
+  fastify.post('/recordings/archive/preview', async (request, reply) => {
+    const plan = await planArchive(request.body, Date.now());
+    if ('error' in plan) return reply.status(plan.error.status).send({ error: plan.error.message });
+    return reply.send(plan.preview);
+  });
+
+  // The archive download is a plain HTML form post, so the browser handles it
+  // as a download (a script cannot hold gigabytes). The form parser lives in
+  // its own child plugin: every other route here stays JSON-only, so a form
+  // on some other website cannot post to the routes that delete recordings
+  // or change retention. This one only reads.
+  await fastify.register(async (archiveScope) => {
+    archiveScope.addContentTypeParser('application/x-www-form-urlencoded', { parseAs: 'string' }, (_request, body, done) => {
+      done(null, Object.fromEntries(new URLSearchParams(body as string)));
+    });
+
+    // The selection as one zip of the original files, with a listing of what
+    // is in it and what is missing.
+    archiveScope.post('/recordings/archive', async (request, reply) => {
+      let body: unknown = null;
+      try {
+        body = JSON.parse((request.body as { selection?: string } | null)?.selection ?? '');
+      } catch {
+        // falls through to the schema's refusal
+      }
+      const nowMs = Date.now();
+      const plan = await planArchive(body, nowMs);
+      if ('error' in plan) return reply.status(plan.error.status).send({ error: plan.error.message });
+
+      const first = plan.files[0];
+      const last = plan.files[plan.files.length - 1];
+      const [around, offAir, flags] = await Promise.all([
+        filesInWindow(first.startMs, last.endMs, nowMs),
+        offAirPeriods(first.startMs, last.endMs),
+        loadFlags(),
+      ]);
+      const entryPaths = archiveEntryPaths(plan.files);
+      const job = createArchive(
+        {
+          entries: plan.files.map((f) => ({ name: f.name, path: filePath(f.day, f.name), entryPath: entryPaths.get(f.name)!, startMs: f.startMs })),
+          buildListing: (included) => buildListingCsv({ files: around, included, offAir, flags, entryPaths }),
+        },
+        (err) => fastify.log.warn({ err, event: 'RECORDING_ARCHIVE_FILE_SKIPPED' }, 'recordings: a file could not be added to the archive'),
+      );
+
+      job.done.then(
+        () => fastify.log.info({ event: 'RECORDING_ARCHIVE', ...plan.preview }, 'recordings: archive built'),
+        (err) => fastify.log.error({ err, event: 'RECORDING_ARCHIVE_FAILED' }, 'recordings: archive failed'),
+      );
+      // The browser went away before the end: stop reading recordings nobody
+      // will receive.
+      reply.raw.once('close', () => {
+        if (reply.raw.writableFinished) return;
+        job.abort();
+        fastify.log.info({ event: 'RECORDING_ARCHIVE_ABORTED', files: plan.preview.files }, 'recordings: archive download stopped by the browser');
+      });
+
+      return reply
+        .header('Content-Type', 'application/zip')
+        .header('Content-Disposition', `attachment; filename="${archiveFileName(first.startMs, last.startMs)}"`)
+        .send(job.stream);
+    });
+  });
 
   // What a range download would contain — the page shows the gaps before the
   // operator downloads a file that might be handed to an authority.
@@ -225,39 +370,52 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
     return streamFile(reply, exported.outputPath, undefined, name, () => { void exported.cleanup(); });
   });
 
+  // ── Flags ──────────────────────────────────────────────────────────────────
+
+  // Sets or clears one flag on a selection. Only recordings that exist are
+  // flagged, so a label never outlives (or precedes) its recording.
+  fastify.post('/recordings/flags', async (request, reply) => {
+    const parsed = RecordingFlagChangeSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0]?.message ?? 'Invalid request' });
+    const selection = await resolveSelection(parsed.data.files, Date.now());
+    if (!selection) return reply.status(400).send({ error: NOT_A_RECORDING });
+    const names = selection.found.map((f) => f.name);
+    const changed = parsed.data.set
+      ? await setFlag(names, parsed.data.flag, parsed.data.note ?? '')
+      : await clearFlag(names, parsed.data.flag);
+    fastify.log.info({ event: 'RECORDING_FLAG', flag: parsed.data.flag, set: parsed.data.set, changed }, 'recordings: flag changed');
+    return reply.send({ changed });
+  });
+
+  // ── Deleting ───────────────────────────────────────────────────────────────
+
   fastify.delete<{ Params: { day: string; name: string } }>('/recordings/file/:day/:name', async (request, reply) => {
     const { day, name } = request.params;
     if (!isSafeRecordingRef(day, name)) return reply.status(400).send({ error: 'Not a recording' });
-    const nowMs = Date.now();
-    // Listed (not just stat'ed) so "being written" and "held" are judged the
-    // same way as everywhere else.
-    const file = buildRecordingFiles(await listRawFiles([day]), nowMs).find((f) => f.name === name);
-    if (!file) return reply.status(404).send({ error: 'Recording not found' });
-    const result = await deleteAllowed([file], toRanges(await loadHolds()));
+    const selection = await resolveSelection([{ day, name }], Date.now());
+    if (!selection || selection.found.length === 0) return reply.status(404).send({ error: 'Recording not found' });
+    const result = await deleteAllowed(selection.found);
     fastify.log.info({ event: 'RECORDING_DELETE', day, name, ...result }, 'recordings: delete requested');
     return reply.send(result);
   });
 
-  // Every recording that STARTED on that station day.
-  fastify.delete<{ Params: { date: string } }>('/recordings/day/:date', async (request, reply) => {
-    const window = stationDayWindow(request.params.date);
-    if (!window) return reply.status(400).send({ error: 'date must look like 2026-11-24' });
-    const nowMs = Date.now();
-    const files = (await filesInWindow(window.startMs, window.endMs, nowMs))
-      .filter((f) => f.startMs >= window.startMs && f.startMs < window.endMs);
-    const result = await deleteAllowed(files, toRanges(await loadHolds()));
-    fastify.log.warn({ event: 'RECORDING_PURGE_DAY', date: request.params.date, ...result }, 'recordings: day purged by operator');
+  fastify.post('/recordings/delete', async (request, reply) => {
+    const parsed = RecordingSelectionSchema.safeParse(request.body);
+    if (!parsed.success) return reply.status(400).send({ error: parsed.error.issues[0]?.message ?? 'Invalid selection' });
+    const selection = await resolveSelection(parsed.data.files, Date.now());
+    if (!selection) return reply.status(400).send({ error: NOT_A_RECORDING });
+    const result = await deleteAllowed(selection.found);
+    fastify.log.warn({ event: 'RECORDING_DELETE_SELECTION', requested: parsed.data.files.length, ...result }, 'recordings: selection deleted by operator');
     return reply.send(result);
   });
 
   // Everything that ended before the start of that station day.
   fastify.post('/recordings/purge', async (request, reply) => {
     const parsed = RecordingPurgeSchema.safeParse(request.body);
-    const window = parsed.success ? stationDayWindow(parsed.data.before) : null;
-    if (!window) return reply.status(400).send({ error: 'before must look like 2026-11-24' });
-    const nowMs = Date.now();
-    const files = buildRecordingFiles(await listAllRawFiles(), nowMs).filter((f) => f.endMs <= window.startMs);
-    const result = await deleteAllowed(files, toRanges(await loadHolds()));
+    const beforeMs = parsed.success ? stationDayStartMs(parsed.data.before) : null;
+    if (beforeMs == null) return reply.status(400).send({ error: 'before must look like 2026-11-24' });
+    const files = buildRecordingFiles(await listAllRawFiles(), Date.now()).filter((f) => f.endMs <= beforeMs);
+    const result = await deleteAllowed(files);
     fastify.log.warn({ event: 'RECORDING_PURGE_BEFORE', before: parsed.data!.before, ...result }, 'recordings: purged by operator');
     return reply.send(result);
   });
@@ -315,26 +473,5 @@ export async function recordingsRoutes(fastify: FastifyInstance) {
     writeRecordingSettings(parsed.data);
     fastify.log.info({ event: 'RECORDING_SETTINGS_UPDATED', ...parsed.data }, 'recordings: retention settings updated');
     return reply.send(parsed.data);
-  });
-
-  fastify.get('/recordings/holds', async (_request, reply) => reply.send(await loadHolds()));
-
-  fastify.post('/recordings/holds', async (request, reply) => {
-    const parsed = RecordingHoldCreateSchema.safeParse(request.body);
-    if (!parsed.success) {
-      return reply.status(400).send({ error: parsed.error.issues[0]?.message ?? 'invalid hold' });
-    }
-    const [hold] = await db.insert(recordingHolds).values({ ...parsed.data, created_at_ms: Date.now() }).returning();
-    fastify.log.info({ event: 'RECORDING_HOLD_CREATED', ...hold }, 'recordings: hold created');
-    return reply.send(hold);
-  });
-
-  fastify.delete<{ Params: { id: string } }>('/recordings/holds/:id', async (request, reply) => {
-    const id = Number(request.params.id);
-    if (!Number.isInteger(id)) return reply.status(400).send({ error: 'invalid hold id' });
-    const removed = await db.delete(recordingHolds).where(eq(recordingHolds.id, id)).returning();
-    if (removed.length === 0) return reply.status(404).send({ error: 'Hold not found' });
-    fastify.log.warn({ event: 'RECORDING_HOLD_REMOVED', ...removed[0] }, 'recordings: hold removed');
-    return reply.send({ ok: true });
   });
 }

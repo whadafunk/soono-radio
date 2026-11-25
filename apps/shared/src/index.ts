@@ -11,3 +11,4 @@ export * from './schemas/maintenance.js';
 export * from './localDate.js';
 export * from './timeZone.js';
 export * from './schemas/recordings.js';
+export * from './recordingFilters.js';

@@ -18,41 +18,85 @@ export const RecordingSettingsSchema = z.object({
 });
 export type RecordingSettings = z.infer<typeof RecordingSettingsSchema>;
 
-export const RecordingHoldCreateSchema = z.object({
-  from_ms: z.number().int().nonnegative(),
-  to_ms: z.number().int().nonnegative(),
-  note: z.string().trim().min(1, 'Say why this period is kept').max(200),
-}).refine((h) => h.to_ms > h.from_ms, { message: 'The end must be after the start', path: ['to_ms'] });
-export type RecordingHoldCreate = z.infer<typeof RecordingHoldCreateSchema>;
+// Flags on a recording — a fixed set, in display order. Only `protect` changes
+// behaviour (automatic clean-up and every delete skip the recording); the
+// others are labels to filter by. docs/reports-recordings-list-design.md.
+export const RECORDING_FLAGS = ['protect', 'review', 'incident', 'sent_to_authority', 'marked_for_deletion'] as const;
+export type RecordingFlag = (typeof RECORDING_FLAGS)[number];
 
-export interface RecordingHold {
-  id: number;
-  from_ms: number;
-  to_ms: number;
+export const RECORDING_FLAG_LABELS: Record<RecordingFlag, string> = {
+  protect: 'Protect',
+  review: 'Review',
+  incident: 'Incident',
+  sent_to_authority: 'Sent to authority',
+  marked_for_deletion: 'Marked for deletion',
+};
+
+export interface RecordingFlagEntry {
+  flag: RecordingFlag;
   note: string;
-  created_at_ms: number;
 }
+
+// A recording as a request names it: its UTC date folder and file name. The
+// API checks both before anything touches the disk.
+export const RecordingRefSchema = z.object({ day: z.string(), name: z.string() });
+export type RecordingRef = z.infer<typeof RecordingRefSchema>;
+
+export const MAX_RECORDING_SELECTION = 10_000;
+
+export const RecordingSelectionSchema = z.object({
+  files: z.array(RecordingRefSchema).min(1, 'Select at least one recording').max(MAX_RECORDING_SELECTION, 'Too many recordings selected'),
+});
+export type RecordingSelection = z.infer<typeof RecordingSelectionSchema>;
+
+export const RecordingFlagChangeSchema = RecordingSelectionSchema.extend({
+  flag: z.enum(RECORDING_FLAGS),
+  set: z.boolean(),
+  note: z.string().trim().max(200, 'A note can be at most 200 characters').optional(),
+});
+export type RecordingFlagChange = z.infer<typeof RecordingFlagChangeSchema>;
 
 export type RecordingGapLabel = 'off_air' | 'interruption' | 'no_recording';
 
-export type RecordingDayItem =
+export type RecordingListItem =
   | {
       kind: 'file';
-      day: string;
-      name: string;
+      day: string;       // UTC date folder
+      name: string;      // file name inside it
       start_ms: number;
       end_ms: number;
       size_bytes: number;
       recording_now: boolean;
-      held: boolean;
+      flags: RecordingFlagEntry[];
     }
   | { kind: 'gap'; start_ms: number; end_ms: number; label: RecordingGapLabel };
 
-export interface RecordingDayResponse {
-  date: string;      // station-local YYYY-MM-DD
+// One station day. The three totals describe the whole day and are never
+// changed by filtering (recordingFilters.ts) — a filtered list must still
+// say how much of the day is missing.
+export interface RecordingPeriodDay {
+  date: string;            // station-local YYYY-MM-DD
+  recorded_ms: number;
+  no_recording_ms: number;
+  size_bytes: number;
+  items: RecordingListItem[];
+}
+
+export const MAX_RECORDING_PERIOD_DAYS = 366;
+
+export interface RecordingPeriodResponse {
+  from: string;
+  to: string;
   timezone: string;
-  items: RecordingDayItem[];
-  holds: RecordingHold[];
+  days: RecordingPeriodDay[]; // newest first
+}
+
+// What an archive of a selection would contain.
+export interface RecordingArchivePreview {
+  files: number;
+  size_bytes: number;
+  skipped_active: number;   // still being recorded
+  skipped_missing: number;  // no longer on disk
 }
 
 export interface RecordingSweepResult {
@@ -88,7 +132,7 @@ export interface RecordingRangePreview {
 
 export interface RecordingDeleteResult {
   deleted: number;
-  skipped_held: number;
+  skipped_protected: number;
   skipped_active: number;
 }
 
